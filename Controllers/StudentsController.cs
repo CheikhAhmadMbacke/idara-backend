@@ -127,6 +127,17 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(u => u.Id == guardianId && u.Role == UserRoles.Guardian);
             if (guardian == null) return NotFound(ApiResponse<bool>.Fail("Responsable non trouvé."));
 
+            // Anti-energie sauvage : on n'autorise le link que si le guardian est deja connu
+            // dans l'ecole (a au moins un autre eleve lie). Sinon il faut passer par
+            // l'invitation /auth/invite-user (qui cree le guardian + envoie ses identifiants).
+            // Sans ce check, un SchoolStaff malicieux pourrait lier n'importe quel Guardian
+            // global a un eleve de son ecole.
+            var guardianBelongsToSchool = await _context.StudentGuardians
+                .AnyAsync(sg => sg.GuardianId == guardianId && sg.Student.SchoolId == schoolId.Value);
+            if (!guardianBelongsToSchool)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Responsable inconnu dans cette école. Utilisez l'invitation pour créer un nouveau responsable."));
+
             var exists = await _context.StudentGuardians
                 .AnyAsync(sg => sg.StudentId == studentId && sg.GuardianId == guardianId);
             if (exists) return BadRequest(ApiResponse<bool>.Fail("Responsable déjà lié à cet élève."));

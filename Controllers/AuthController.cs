@@ -26,6 +26,7 @@ namespace Idara.API.Controllers
         private readonly IWebHostEnvironment _environment;
         private readonly IEmailService _emailService;
         private readonly UploadSettings _uploads;
+        private readonly ILogger<AuthController> _logger;
 
         public AuthController(
             AppDbContext context,
@@ -34,7 +35,8 @@ namespace Idara.API.Controllers
             IRefreshTokenService refreshTokens,
             IWebHostEnvironment environment,
             IEmailService emailService,
-            IOptions<UploadSettings> uploads)
+            IOptions<UploadSettings> uploads,
+            ILogger<AuthController> logger)
         {
             _context = context;
             _otpService = otpService;
@@ -43,6 +45,7 @@ namespace Idara.API.Controllers
             _environment = environment;
             _emailService = emailService;
             _uploads = uploads.Value;
+            _logger = logger;
         }
 
         /// <summary>
@@ -326,8 +329,20 @@ namespace Idara.API.Controllers
                 .OrderBy(u => u.CreatedAt)
                 .FirstOrDefault();
             if (adminUser != null && school.Name != null)
-                await _emailService.SendSchoolValidationEmailAsync(
-                    adminUser.Email, school.Name, true, language: adminUser.PreferredLanguage);
+            {
+                // Envoi best-effort : la validation est commit en DB, on ne veut pas
+                // retourner 500 si Gmail timeout (l'admin verra le statut dans l'app).
+                try
+                {
+                    await _emailService.SendSchoolValidationEmailAsync(
+                        adminUser.Email, school.Name, true, language: adminUser.PreferredLanguage);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Email de validation school {SchoolId} echoue (continue malgre tout)", schoolId);
+                }
+            }
 
             return Ok(ApiResponse<bool>.Ok(true, "École validée et comptes activés."));
         }
@@ -355,8 +370,19 @@ namespace Idara.API.Controllers
                 .OrderBy(u => u.CreatedAt)
                 .FirstOrDefault();
             if (adminUser != null && school.Name != null)
-                await _emailService.SendSchoolValidationEmailAsync(
-                    adminUser.Email, school.Name, false, request.RejectionReason, adminUser.PreferredLanguage);
+            {
+                // Idem ValidateSchool : envoi best-effort.
+                try
+                {
+                    await _emailService.SendSchoolValidationEmailAsync(
+                        adminUser.Email, school.Name, false, request.RejectionReason, adminUser.PreferredLanguage);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Email de rejet school {SchoolId} echoue (continue malgre tout)", schoolId);
+                }
+            }
 
             return Ok(ApiResponse<bool>.Ok(true, "École rejetée."));
         }

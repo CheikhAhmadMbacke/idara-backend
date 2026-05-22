@@ -35,7 +35,7 @@ namespace Idara.API.Controllers
                 .Include(j => j.Student)
                 .Include(j => j.Teacher)
                 .Include(j => j.Subject)
-                .Where(j => j.SchoolId == schoolId.Value);
+                .Where(j => j.SchoolId == schoolId.Value && !j.IsDeleted);
 
             if (studentId.HasValue) query = query.Where(j => j.StudentId == studentId.Value);
             if (classId.HasValue)   query = query.Where(j => j.Student.ClassId == classId.Value);
@@ -71,6 +71,8 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<bool>.Fail("Référence invalide."));
 
             var date = dto.Date.Date;
+            // On charge meme les soft-deleted pour pouvoir les ressusciter si l'enseignant
+            // re-saisit un rapport apres l'avoir supprime.
             var existing = await _context.DailyJournalEntries.FirstOrDefaultAsync(j =>
                 j.StudentId == dto.StudentId
                 && j.Date == date
@@ -83,6 +85,12 @@ namespace Idara.API.Controllers
                 existing.BehaviorScore = dto.BehaviorScore;
                 existing.EffortScore = dto.EffortScore;
                 existing.UpdatedAt = DateTime.UtcNow;
+                if (existing.IsDeleted)
+                {
+                    existing.IsDeleted = false;
+                    existing.DeletedAt = null;
+                    existing.DeletedById = null;
+                }
             }
             else
             {
@@ -162,6 +170,13 @@ namespace Idara.API.Controllers
                         rec.BehaviorScore = entry.BehaviorScore;
                         rec.EffortScore = entry.EffortScore;
                         rec.UpdatedAt = DateTime.UtcNow;
+                        // Re-saisie explicite : reactiver si etait soft-deleted.
+                        if (rec.IsDeleted)
+                        {
+                            rec.IsDeleted = false;
+                            rec.DeletedAt = null;
+                            rec.DeletedById = null;
+                        }
                         saved++;
                     }
                 }
@@ -203,7 +218,7 @@ namespace Idara.API.Controllers
             if (schoolId == null || userId == null) return Unauthorized();
 
             var entity = await _context.DailyJournalEntries
-                .FirstOrDefaultAsync(j => j.Id == id && j.SchoolId == schoolId.Value);
+                .FirstOrDefaultAsync(j => j.Id == id && j.SchoolId == schoolId.Value && !j.IsDeleted);
             if (entity == null) return NotFound();
 
             // Un enseignant ne peut modifier que ses propres entrées ; admin/staff peuvent tout.
@@ -228,7 +243,7 @@ namespace Idara.API.Controllers
             if (schoolId == null || userId == null) return Unauthorized();
 
             var entity = await _context.DailyJournalEntries
-                .FirstOrDefaultAsync(j => j.Id == id && j.SchoolId == schoolId.Value);
+                .FirstOrDefaultAsync(j => j.Id == id && j.SchoolId == schoolId.Value && !j.IsDeleted);
             if (entity == null) return NotFound();
 
             var isAdminLevel = role == UserRoles.SchoolAdmin || role == UserRoles.SchoolStaff;

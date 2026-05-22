@@ -30,7 +30,7 @@ namespace Idara.API.Controllers
 
             var query = _context.Grades
                 .Include(g => g.Student).Include(g => g.Subject).Include(g => g.AcademicPeriod)
-                .Where(g => g.SchoolId == schoolId.Value);
+                .Where(g => g.SchoolId == schoolId.Value && !g.IsDeleted);
 
             if (studentId.HasValue)        query = query.Where(g => g.StudentId == studentId.Value);
             if (subjectId.HasValue)        query = query.Where(g => g.SubjectId == subjectId.Value);
@@ -86,7 +86,7 @@ namespace Idara.API.Controllers
             if (schoolId == null) return Unauthorized();
 
             var entity = await _context.Grades
-                .FirstOrDefaultAsync(g => g.Id == id && g.SchoolId == schoolId.Value);
+                .FirstOrDefaultAsync(g => g.Id == id && g.SchoolId == schoolId.Value && !g.IsDeleted);
             if (entity == null) return NotFound();
 
             entity.Value = dto.Value;
@@ -134,7 +134,8 @@ namespace Idara.API.Controllers
                 .Include(g => g.Subject)
                 .Where(g => g.SchoolId == schoolId.Value
                             && g.StudentId == studentId
-                            && g.AcademicPeriodId == academicPeriodId)
+                            && g.AcademicPeriodId == academicPeriodId
+                            && !g.IsDeleted)
                 .ToListAsync();
 
             var bySubject = grades

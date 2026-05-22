@@ -26,7 +26,7 @@ namespace Idara.API.Controllers
 
             var query = _context.Attendances
                 .Include(a => a.Student)
-                .Where(a => a.SchoolId == schoolId.Value);
+                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
 
             if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.Date);
             if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.Date);
@@ -65,6 +65,8 @@ namespace Idara.API.Controllers
                 .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)
                 .Select(s => s.Id).ToListAsync();
 
+            // On inclut volontairement les soft-deleted dans le lookup pour pouvoir les "ressusciter"
+            // (le user a re-pointe l'eleve apres une suppression manuelle, on remet IsDeleted=false).
             var existing = await _context.Attendances
                 .Where(a => validStudentIds.Contains(a.StudentId) && a.Date == date)
                 .ToDictionaryAsync(a => a.StudentId);
@@ -78,6 +80,13 @@ namespace Idara.API.Controllers
                     rec.Reason = entry.Reason;
                     rec.RecordedById = userId.Value;
                     rec.RecordedAt = DateTime.UtcNow;
+                    // Re-pointage explicite : reactiver si etait soft-deleted.
+                    if (rec.IsDeleted)
+                    {
+                        rec.IsDeleted = false;
+                        rec.DeletedAt = null;
+                        rec.DeletedById = null;
+                    }
                 }
                 else
                 {
@@ -108,7 +117,7 @@ namespace Idara.API.Controllers
             if (schoolId == null || userId == null) return Unauthorized();
 
             var entity = await _context.Attendances
-                .FirstOrDefaultAsync(a => a.Id == id && a.SchoolId == schoolId.Value);
+                .FirstOrDefaultAsync(a => a.Id == id && a.SchoolId == schoolId.Value && !a.IsDeleted);
             if (entity == null) return NotFound();
 
             // Soft-delete + audit (conformité RGPD).
@@ -127,7 +136,7 @@ namespace Idara.API.Controllers
 
             var query = _context.Attendances
                 .Include(a => a.Student)
-                .Where(a => a.SchoolId == schoolId.Value);
+                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
 
             if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.Date);
             if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.Date);

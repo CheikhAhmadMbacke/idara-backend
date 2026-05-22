@@ -106,7 +106,8 @@ namespace Idara.API.Controllers
                 .Include(g => g.Subject)
                 .Where(g => g.SchoolId == schoolId.Value
                             && g.AcademicPeriodId == dto.AcademicPeriodId
-                            && classmateIds.Contains(g.StudentId))
+                            && classmateIds.Contains(g.StudentId)
+                            && !g.IsDeleted)
                 .ToListAsync();
 
             // Moyenne d'un élève pour une matière (pondérée par coef de la note, ramenée /20).
@@ -299,8 +300,20 @@ namespace Idara.API.Controllers
             // Régénère si manquant.
             string? relativePath = card.FilePath;
             var fullPath = relativePath != null
-                ? Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'))
+                ? Path.GetFullPath(Path.Combine(_env.WebRootPath, relativePath.TrimStart('/')))
                 : null;
+
+            // Defense en profondeur contre un eventuel path traversal :
+            // refuse tout chemin qui sortirait du wwwroot, meme si _pdfService
+            // genere normalement un chemin sain.
+            var webRootFull = Path.GetFullPath(_env.WebRootPath);
+            if (fullPath != null && !fullPath.StartsWith(webRootFull, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Tentative de lecture hors wwwroot bloquee : carte {Id}, chemin {Path}",
+                    card.Id, fullPath);
+                return NotFound();
+            }
 
             if (fullPath == null || !System.IO.File.Exists(fullPath))
             {
@@ -309,7 +322,14 @@ namespace Idara.API.Controllers
                 relativePath = await _pdfService.GenerateAsync(card, school);
                 card.FilePath = relativePath;
                 await _context.SaveChangesAsync();
-                fullPath = Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'));
+                fullPath = Path.GetFullPath(Path.Combine(_env.WebRootPath, relativePath.TrimStart('/')));
+                if (!fullPath.StartsWith(webRootFull, StringComparison.Ordinal))
+                {
+                    _logger.LogError(
+                        "PDF genere hors wwwroot : carte {Id}, chemin {Path}",
+                        card.Id, fullPath);
+                    return StatusCode(500);
+                }
             }
 
             var bytes = await System.IO.File.ReadAllBytesAsync(fullPath);
