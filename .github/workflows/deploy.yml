@@ -1,0 +1,69 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Permet de declencher manuellement depuis l'UI GitHub
+
+jobs:
+  deploy:
+    name: Build and deploy to Hetzner VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore NuGet packages
+        run: dotnet restore
+
+      - name: Publish for linux-arm64
+        run: dotnet publish -c Release -r linux-arm64 --self-contained false -o publish
+
+      - name: Setup SSH key for deploy
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Copy published files to server
+        run: |
+          scp -i ~/.ssh/deploy_key -r publish/* \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/idara/api/
+
+      - name: Recreate uploads symlink and restart service
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            'rm -rf /var/www/idara/api/wwwroot/uploads && \
+             ln -s /var/www/idara/uploads /var/www/idara/api/wwwroot/uploads && \
+             sudo systemctl restart idara-api'
+
+      - name: Verify service is active
+        run: |
+          sleep 5
+          STATUS=$(ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            'sudo systemctl is-active idara-api')
+          if [ "$STATUS" != "active" ]; then
+            echo "Service is not active (status: $STATUS)"
+            exit 1
+          fi
+          echo "Service is active. Deploy successful."
+
+      - name: Smoke test HTTPS endpoint
+        run: |
+          # Attendre que l'API soit prete a repondre
+          sleep 3
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://api.idara.sn/ || echo "000")
+          if [ "$HTTP_CODE" = "000" ]; then
+            echo "API non joignable apres deploy"
+            exit 1
+          fi
+          echo "API repond avec HTTP $HTTP_CODE (404 ou autre code != 5xx = OK)"

@@ -1,6 +1,10 @@
 # ===== .NET build output =====
 bin/
 obj/
+publish/
+
+# ===== Visual Studio language cache (genere) =====
+*.lscache
 
 # ===== Visual Studio / Rider / VS Code =====
 .vs/
