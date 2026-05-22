@@ -1,0 +1,6 @@
+@Idara.API_HostAddress = http://localhost:5074
+
+GET {{Idara.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

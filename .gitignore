@@ -1,0 +1,45 @@
+# ===== .NET build output =====
+bin/
+obj/
+
+# ===== Visual Studio / Rider / VS Code =====
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ===== Anciens fichiers SQLite (n'a plus lieu d'etre apres la migration PostgreSQL) =====
+*.db
+*.db-shm
+*.db-wal
+
+# ===== Secrets / configs sensibles =====
+# Les user-secrets sont stockes dans %APPDATA%\Microsoft\UserSecrets (hors projet) donc OK.
+# Mais on bloque les overrides locaux et toute appsettings.Production.json qui contiendrait des secrets.
+appsettings.Production.json
+appsettings.Local.json
+appsettings.*.Local.json
+.env
+.env.*
+*.env.local
+
+# ===== Fichiers uploades par les utilisateurs =====
+# Le code de production cree ces dossiers a la volee, on ne versionne pas le contenu.
+wwwroot/uploads/
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== OS junk =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Editor swap files =====
+*.swp
+*.swo
+*~
