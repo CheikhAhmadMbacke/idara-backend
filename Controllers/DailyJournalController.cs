@@ -44,13 +44,13 @@ namespace Idara.API.Controllers
 
             if (date.HasValue)
             {
-                var d = date.Value.Date;
+                var d = date.Value.ToUtcDay();
                 query = query.Where(j => j.Date == d);
             }
             else
             {
-                if (from.HasValue) query = query.Where(j => j.Date >= from.Value.Date);
-                if (to.HasValue) query = query.Where(j => j.Date <= to.Value.Date);
+                if (from.HasValue) query = query.Where(j => j.Date >= from.Value.ToUtcDay());
+                if (to.HasValue) query = query.Where(j => j.Date <= to.Value.ToUtcDay());
             }
 
             var items = await query
@@ -70,7 +70,7 @@ namespace Idara.API.Controllers
             if (!await ValidateRefs(dto.StudentId, dto.SubjectId, schoolId.Value))
                 return BadRequest(ApiResponse<bool>.Fail("Référence invalide."));
 
-            var date = dto.Date.Date;
+            var date = dto.Date.ToUtcDay();
             // On charge meme les soft-deleted pour pouvoir les ressusciter si l'enseignant
             // re-saisit un rapport apres l'avoir supprime.
             var existing = await _context.DailyJournalEntries.FirstOrDefaultAsync(j =>
@@ -126,7 +126,7 @@ namespace Idara.API.Controllers
                 if (!subOk) return BadRequest(ApiResponse<bool>.Fail("Matière introuvable."));
             }
 
-            var date = dto.Date.Date;
+            var date = dto.Date.ToUtcDay();
             var studentIds = dto.Entries.Select(e => e.StudentId).ToList();
             var validIds = await _context.Students
                 .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)

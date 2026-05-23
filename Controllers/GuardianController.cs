@@ -110,9 +110,9 @@ namespace Idara.API.Controllers
         {
             if (!await IsLinked(studentId)) return Forbid();
 
-            var query = _context.Attendances.Where(a => a.StudentId == studentId);
-            if (from.HasValue) query = query.Where(a => a.Date >= from.Value.Date);
-            if (to.HasValue) query = query.Where(a => a.Date <= to.Value.Date);
+            var query = _context.Attendances.Where(a => a.StudentId == studentId && !a.IsDeleted);
+            if (from.HasValue) query = query.Where(a => a.Date >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(a => a.Date <= to.Value.ToUtcDay());
 
             var items = await query.OrderByDescending(a => a.Date).ToListAsync();
             return Ok(items.Select(a => new AttendanceDto
@@ -183,9 +183,9 @@ namespace Idara.API.Controllers
 
             var query = _context.DailyJournalEntries
                 .Include(j => j.Teacher).Include(j => j.Subject)
-                .Where(j => j.StudentId == studentId);
-            if (from.HasValue) query = query.Where(j => j.Date >= from.Value.Date);
-            if (to.HasValue) query = query.Where(j => j.Date <= to.Value.Date);
+                .Where(j => j.StudentId == studentId && !j.IsDeleted);
+            if (from.HasValue) query = query.Where(j => j.Date >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(j => j.Date <= to.Value.ToUtcDay());
 
             var items = await query
                 .OrderByDescending(j => j.Date).ThenByDescending(j => j.CreatedAt)

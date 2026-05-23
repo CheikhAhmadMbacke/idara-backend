@@ -71,8 +71,8 @@ namespace Idara.API.Controllers
             {
                 SchoolId = schoolId.Value,
                 Name = dto.Name.Trim(),
-                StartDate = dto.StartDate,
-                EndDate = dto.EndDate,
+                StartDate = dto.StartDate.ToUtcSafe(),
+                EndDate = dto.EndDate.ToUtcSafe(),
                 IsCurrent = dto.IsCurrent,
                 CreatedAt = DateTime.UtcNow
             };
@@ -107,8 +107,8 @@ namespace Idara.API.Controllers
             }
 
             entity.Name = dto.Name.Trim();
-            entity.StartDate = dto.StartDate;
-            entity.EndDate = dto.EndDate;
+            entity.StartDate = dto.StartDate.ToUtcSafe();
+            entity.EndDate = dto.EndDate.ToUtcSafe();
             entity.IsCurrent = dto.IsCurrent;
             await _context.SaveChangesAsync();
 
@@ -161,8 +161,8 @@ namespace Idara.API.Controllers
                 SchoolId = schoolId.Value,
                 AcademicYearId = yearId,
                 Name = dto.Name.Trim(),
-                StartDate = dto.StartDate,
-                EndDate = dto.EndDate,
+                StartDate = dto.StartDate.ToUtcSafe(),
+                EndDate = dto.EndDate.ToUtcSafe(),
                 OrderIndex = dto.OrderIndex,
                 IsCurrent = dto.IsCurrent
             };
@@ -197,8 +197,8 @@ namespace Idara.API.Controllers
             }
 
             entity.Name = dto.Name.Trim();
-            entity.StartDate = dto.StartDate;
-            entity.EndDate = dto.EndDate;
+            entity.StartDate = dto.StartDate.ToUtcSafe();
+            entity.EndDate = dto.EndDate.ToUtcSafe();
             entity.OrderIndex = dto.OrderIndex;
             entity.IsCurrent = dto.IsCurrent;
             await _context.SaveChangesAsync();

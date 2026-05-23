@@ -1,3 +1,4 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -116,7 +117,7 @@ namespace Idara.API.Services
                 LastName = dto.LastName,
                 MiddleName = NullIfEmpty(dto.MiddleName),
                 Gender = dto.Gender,
-                DateOfBirth = dto.DateOfBirth,
+                DateOfBirth = dto.DateOfBirth.ToUtcSafe(),
                 PlaceOfBirth = NullIfEmpty(dto.PlaceOfBirth),
                 Nationality = NullIfEmpty(dto.Nationality),
                 PhotoUrl = photoUrl,
@@ -126,7 +127,7 @@ namespace Idara.API.Services
                 Region = NullIfEmpty(dto.Region),
                 Country = NullIfEmpty(dto.Country),
 
-                EnrollmentDate = dto.EnrollmentDate ?? DateTime.UtcNow,
+                EnrollmentDate = (dto.EnrollmentDate ?? DateTime.UtcNow).ToUtcSafe(),
                 ClassId = dto.ClassId,
                 StudentNumber = NullIfEmpty(dto.StudentNumber),
                 PreviousSchool = NullIfEmpty(dto.PreviousSchool),
@@ -235,7 +236,7 @@ namespace Idara.API.Services
             if (dto.LastName != null)         student.LastName = dto.LastName;
             if (dto.MiddleName != null)       student.MiddleName = NullIfEmpty(dto.MiddleName);
             if (dto.Gender.HasValue)          student.Gender = dto.Gender.Value;
-            if (dto.DateOfBirth.HasValue)     student.DateOfBirth = dto.DateOfBirth.Value;
+            if (dto.DateOfBirth.HasValue)     student.DateOfBirth = dto.DateOfBirth.Value.ToUtcSafe();
             if (dto.PlaceOfBirth != null)     student.PlaceOfBirth = NullIfEmpty(dto.PlaceOfBirth);
             if (dto.Nationality != null)      student.Nationality = NullIfEmpty(dto.Nationality);
 
@@ -244,7 +245,7 @@ namespace Idara.API.Services
             if (dto.Region != null)           student.Region = NullIfEmpty(dto.Region);
             if (dto.Country != null)          student.Country = NullIfEmpty(dto.Country);
 
-            if (dto.EnrollmentDate.HasValue)  student.EnrollmentDate = dto.EnrollmentDate.Value;
+            if (dto.EnrollmentDate.HasValue)  student.EnrollmentDate = dto.EnrollmentDate.Value.ToUtcSafe();
             if (dto.StudentNumber != null)    student.StudentNumber = NullIfEmpty(dto.StudentNumber);
             if (dto.PreviousSchool != null)   student.PreviousSchool = NullIfEmpty(dto.PreviousSchool);
             if (dto.PreviousClass != null)    student.PreviousClass = NullIfEmpty(dto.PreviousClass);

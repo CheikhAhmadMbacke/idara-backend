@@ -111,7 +111,7 @@ namespace Idara.API.Controllers
             {
                 SchoolId = schoolId.Value,
                 StudentId = dto.StudentId,
-                Date = dto.Date,
+                Date = dto.Date.ToUtcSafe(),
                 Kind = dto.Kind,
                 FromSurah = dto.FromSurah,
                 FromVerse = dto.FromVerse,

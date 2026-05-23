@@ -63,7 +63,7 @@ namespace Idara.API.Controllers
                 MaxValue = dto.MaxValue,
                 Coefficient = dto.Coefficient,
                 EvaluationType = dto.EvaluationType,
-                Date = dto.Date,
+                Date = dto.Date.ToUtcSafe(),
                 Comment = dto.Comment,
                 RecordedById = userId.Value,
                 RecordedAt = DateTime.UtcNow
@@ -93,7 +93,7 @@ namespace Idara.API.Controllers
             entity.MaxValue = dto.MaxValue;
             entity.Coefficient = dto.Coefficient;
             entity.EvaluationType = dto.EvaluationType;
-            entity.Date = dto.Date;
+            entity.Date = dto.Date.ToUtcSafe();
             entity.Comment = dto.Comment;
             await _context.SaveChangesAsync();
 

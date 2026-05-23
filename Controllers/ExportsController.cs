@@ -130,10 +130,10 @@ namespace Idara.API.Controllers
 
             var query = _context.Attendances
                 .Include(a => a.Student).ThenInclude(s => s.Class)
-                .Where(a => a.SchoolId == schoolId.Value);
+                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
 
-            if (from.HasValue) query = query.Where(a => a.Date >= from.Value.Date);
-            if (to.HasValue) query = query.Where(a => a.Date <= to.Value.Date);
+            if (from.HasValue) query = query.Where(a => a.Date >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(a => a.Date <= to.Value.ToUtcDay());
             if (classId.HasValue) query = query.Where(a => a.Student.ClassId == classId.Value);
 
             var items = await query

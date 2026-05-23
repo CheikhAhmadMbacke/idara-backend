@@ -28,8 +28,8 @@ namespace Idara.API.Controllers
                 .Include(a => a.Student)
                 .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
 
-            if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.Date);
-            if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.Date);
+            if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.ToUtcDay());
+            if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.ToUtcDay());
             if (q.StudentId.HasValue) query = query.Where(a => a.StudentId == q.StudentId.Value);
             if (q.ClassId.HasValue) query = query.Where(a => a.Student.ClassId == q.ClassId.Value);
 
@@ -57,7 +57,7 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
-            var date = dto.Date.Date;
+            var date = dto.Date.ToUtcDay();
             var studentIds = dto.Entries.Select(e => e.StudentId).ToList();
 
             // Sécurité multi-tenant : tous les élèves doivent appartenir à l'école
@@ -138,8 +138,8 @@ namespace Idara.API.Controllers
                 .Include(a => a.Student)
                 .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
 
-            if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.Date);
-            if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.Date);
+            if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.ToUtcDay());
+            if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.ToUtcDay());
             if (q.ClassId.HasValue) query = query.Where(a => a.Student.ClassId == q.ClassId.Value);
             if (q.StudentId.HasValue) query = query.Where(a => a.StudentId == q.StudentId.Value);
 
