@@ -30,7 +30,12 @@ namespace Idara.API.Controllers
                 return NotFound();
 
             var p = await _context.CoranProgresses.FirstOrDefaultAsync(x => x.StudentId == studentId);
-            if (p == null) return Ok((CoranProgressDto?)null);
+            // 204 explicite : "ressource trouvée mais aucune représentation".
+            // Évite l'ambiguïté d'`Ok((CoranProgressDto?)null)` qui suivant le
+            // pipeline ASP.NET pouvait sortir soit 204 vide, soit 200 + body
+            // `null` (literal), soit un body que Dio interprétait comme String
+            // → crash `String is not a subtype of Map<String, dynamic>`.
+            if (p == null) return NoContent();
             return Ok(MapProgress(p));
         }
 
