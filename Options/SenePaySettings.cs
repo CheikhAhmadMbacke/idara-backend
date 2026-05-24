@@ -18,5 +18,19 @@ namespace Idara.API.Options
         /// X-SenePay-Signature sur le corps BRUT du webhook reçu.
         /// </summary>
         public string WebhookSecret { get; set; } = string.Empty;
+
+        /// <summary>
+        /// URL absolue de notre endpoint webhook payin, envoyée à SenePay dans
+        /// le champ `webhookUrl` de chaque `POST /payments/initiate`. Côté
+        /// SenePay, il n'y a PAS de webhook dashboard-global ; chaque init le
+        /// reçoit (cf. feedback_senepay_webhook_per_request en mémoire).
+        /// </summary>
+        public string WebhookPayinUrl { get; set; } = "https://api.idara.sn/api/webhooks/senepay/payin";
+
+        /// <summary>
+        /// URL absolue de notre endpoint webhook payout (utilisée Phase 3).
+        /// Envoyée à SenePay dans le champ `callback_url` de chaque payout.
+        /// </summary>
+        public string WebhookPayoutUrl { get; set; } = "https://api.idara.sn/api/webhooks/senepay/payout";
     }
 }

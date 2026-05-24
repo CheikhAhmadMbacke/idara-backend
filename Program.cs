@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using QuestPDF.Infrastructure;
@@ -99,6 +100,22 @@ builder.Services.AddScoped<IStudentService, StudentService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<DbInitializer>();
+
+// ---------- SenePay (HttpClient typé) ----------
+builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
+{
+    var senepay = sp.GetRequiredService<IOptions<SenePaySettings>>().Value;
+    if (string.IsNullOrWhiteSpace(senepay.BaseUrl))
+        throw new InvalidOperationException("SenePay:BaseUrl manquant dans la config.");
+    if (string.IsNullOrWhiteSpace(senepay.ApiKey) || string.IsNullOrWhiteSpace(senepay.ApiSecret))
+        throw new InvalidOperationException("SenePay:ApiKey / SenePay:ApiSecret manquants (configurer via /etc/idara/idara.env en prod).");
+
+    client.BaseAddress = new Uri(senepay.BaseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.Add("X-Api-Key", senepay.ApiKey);
+    client.DefaultRequestHeaders.Add("X-Api-Secret", senepay.ApiSecret);
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 // ---------- Authentification JWT ----------
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
