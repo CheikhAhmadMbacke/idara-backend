@@ -198,11 +198,16 @@ namespace Idara.API.Controllers
             await _context.SaveChangesAsync(ct);
 
             // Appel SenePay.
+            // L'OTP est forward AU PREMIER appel si le client l'envoie (Orange
+            // demande OTP-direct en pratique, malgré ce que la doc SenePay dit
+            // sur un 2-step flow). Si le client a envoyé otpCode ici, on le
+            // passe ; sinon SenePay retournera nextAction=OTP_REQUIRED pour
+            // Orange, et un 2e appel via ResubmitWithOtpAsync prendra le relais.
             SenePayInitiatePaymentResponse senepayResponse;
             try
             {
                 senepayResponse = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(
-                    payment, dto.Operator, dto.CustomerPhone, otpCode: null, customerName: GuardianName()), ct);
+                    payment, dto.Operator, dto.CustomerPhone, otpCode: dto.OtpCode, customerName: GuardianName()), ct);
             }
             catch (SenePayApiException ex)
             {
