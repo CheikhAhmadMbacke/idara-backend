@@ -245,12 +245,13 @@ namespace Idara.API.Controllers
             WebhookEvent ev,
             SenePayPayinWebhookPayload payload)
         {
-            // OrderReference = Payment.Id sérialisé (cf. 1.4 — on enverra
-            // notre Payment.Id comme orderId dans /payments/initiate).
-            if (!int.TryParse(payload.OrderReference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var paymentId))
+            // OrderId = Payment.Id sérialisé (cf. 1.4 — on l'envoie comme
+            // `orderId` à SenePay dans /payments/initiate, et SenePay nous le
+            // renvoie dans `order_id` du webhook).
+            if (!int.TryParse(payload.OrderId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var paymentId))
             {
                 throw new InvalidOperationException(
-                    $"OrderReference '{payload.OrderReference}' non parsable en Payment.Id");
+                    $"OrderId '{payload.OrderId}' non parsable en Payment.Id");
             }
 
             var payment = await _context.Payments
@@ -280,11 +281,11 @@ namespace Idara.API.Controllers
             // Map du statut SenePay → notre enum.
             var newStatus = MapSenePayStatus(payload.Status);
 
-            // Toujours snapshoter les montants tels que SenePay les confirme,
-            // même si payment.AmountFcfa était déjà set à l'init (1.4) — fees
-            // et netAmount n'étaient pas connus à l'init.
-            payment.FeesFcfa = payload.Fees;
-            payment.NetCreditedFcfa = payload.NetAmount;
+            // SenePay envoie les montants en decimal (200.0 / 196.0 / 4.0). En
+            // XOF (FCFA), pas de centimes — on tronque vers long sans perte.
+            // Math.Round par sécurité au cas où SenePay enverrait 195.9999.
+            payment.FeesFcfa = (long)Math.Round(payload.Fees, MidpointRounding.AwayFromZero);
+            payment.NetCreditedFcfa = (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero);
             payment.SenePayTransactionId = payload.TransactionId;
             payment.Status = newStatus;
 
@@ -292,14 +293,14 @@ namespace Idara.API.Controllers
             {
                 case PaymentStatus.Completed:
                     payment.PaidAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                    await CreditSchoolWalletAsync(payment, payload.NetAmount);
+                    await CreditSchoolWalletAsync(payment, payment.NetCreditedFcfa);
                     break;
 
                 case PaymentStatus.Failed:
                 case PaymentStatus.Cancelled:
                 case PaymentStatus.Expired:
                     payment.FailedAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                    payment.FailureReason = payload.Status;
+                    payment.FailureReason = payload.FailedReason ?? payload.ErrorCode ?? payload.Status;
                     // Rien à débiter — le wallet n'a jamais été crédité.
                     break;
 

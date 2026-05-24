@@ -3,51 +3,76 @@ using System.Text.Json.Serialization;
 namespace Idara.API.DTOs.Senepay
 {
     /// <summary>
-    /// Payload reçu de SenePay sur le webhook payin (Checkout ET API Direct partagent
-    /// le même format — cf. doc SenePay §4 et note ligne 764).
+    /// Payload réel envoyé par SenePay sur le webhook payin (API Direct).
     ///
-    /// Les noms de propriétés sont en camelCase côté SenePay (différent du payout
-    /// qui est en snake_case — attention à ne pas confondre). Le statut "Complete"
-    /// est SANS le 'd' final, voir doc §4 note ligne 304.
+    /// IMPORTANT : la doc SenePay publique décrit le format Checkout (camelCase,
+    /// "Complete" sans 'd'). L'API Direct utilise un format DIFFÉRENT —
+    /// snake_case partout + montants en `decimal` + statut "Completed" avec 'd'.
+    /// Découvert empiriquement le 2026-05-24 via un vrai webhook reçu.
+    ///
+    /// Si SenePay aligne un jour les deux formats, on adaptera ce DTO. En
+    /// attendant, ce DTO matche EXACTEMENT le format API Direct observé.
     /// </summary>
     public class SenePayPayinWebhookPayload
     {
-        /// <summary>Type d'événement, ex: "checkout.session.completed" / "checkout.session.failed".</summary>
+        /// <summary>"payin.completed" / "payin.failed" — API Direct.
+        /// (Doc Checkout dit "checkout.session.completed" — formats différents.)</summary>
         [JsonPropertyName("event")]
         public string? Event { get; set; }
 
-        /// <summary>Token de session SenePay (ex: "chk_abc123" pour Checkout, ou "afp_tx_..." pour Direct).</summary>
-        [JsonPropertyName("sessionToken")]
-        public string? SessionToken { get; set; }
+        /// <summary>ID stable côté SenePay (ex: "SENEPAY_PAYIN_xxx"). Notre clé d'idempotence.</summary>
+        [JsonPropertyName("transaction_id")]
+        public string? TransactionId { get; set; }
 
-        /// <summary>Notre référence côté Idara — on y mettra le Payment.Id sérialisé en string.</summary>
-        [JsonPropertyName("orderReference")]
-        public string? OrderReference { get; set; }
+        /// <summary>Notre Payment.Id sérialisé en string (passé via `orderId` à l'init).</summary>
+        [JsonPropertyName("order_id")]
+        public string? OrderId { get; set; }
 
-        /// <summary>"Complete" (sans 'd') sur succès, "Failed" sur échec. Pas "Completed".</summary>
+        /// <summary>"Completed" / "Failed" / "Cancelled" / "Expired". Attention 'd' final (≠ doc Checkout).</summary>
         [JsonPropertyName("status")]
         public string? Status { get; set; }
 
+        /// <summary>Montant brut payé par le parent. SenePay envoie en decimal (200.0), pas long.</summary>
         [JsonPropertyName("amount")]
-        public long Amount { get; set; }
+        public decimal Amount { get; set; }
 
         [JsonPropertyName("currency")]
         public string? Currency { get; set; }
 
+        /// <summary>Total frais SenePay+opérateur prélevés au payin (decimal).</summary>
         [JsonPropertyName("fees")]
-        public long Fees { get; set; }
+        public decimal Fees { get; set; }
 
-        [JsonPropertyName("netAmount")]
-        public long NetAmount { get; set; }
+        /// <summary>Montant net crédité au wallet marchand SenePay (decimal).</summary>
+        [JsonPropertyName("net_amount")]
+        public decimal NetAmount { get; set; }
 
-        /// <summary>ID stable du payin côté SenePay (ex: "SENEPAY_PAYIN_a1b2c3d4..."). Notre clé d'idempotence.</summary>
-        [JsonPropertyName("transactionId")]
-        public string? TransactionId { get; set; }
+        /// <summary>ID Wave/AfribaPay/Orange... (le PSP en aval de SenePay). Ex: "PIM260524...".</summary>
+        [JsonPropertyName("provider_transaction_id")]
+        public string? ProviderTransactionId { get; set; }
 
-        [JsonPropertyName("metadata")]
-        public Dictionary<string, string>? Metadata { get; set; }
+        [JsonPropertyName("operator")]
+        public string? Operator { get; set; }
+
+        [JsonPropertyName("country")]
+        public string? Country { get; set; }
+
+        [JsonPropertyName("customer_phone")]
+        public string? CustomerPhone { get; set; }
+
+        [JsonPropertyName("failed_reason")]
+        public string? FailedReason { get; set; }
+
+        [JsonPropertyName("error_code")]
+        public string? ErrorCode { get; set; }
+
+        [JsonPropertyName("is_sandbox")]
+        public bool IsSandbox { get; set; }
 
         [JsonPropertyName("timestamp")]
         public DateTime? Timestamp { get; set; }
+
+        [JsonPropertyName("metadata")]
+        public Dictionary<string, string>? Metadata { get; set; }
     }
 }
