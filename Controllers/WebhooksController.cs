@@ -425,7 +425,9 @@ namespace Idara.API.Controllers
                     Provider = ProviderName,
                     ExternalEventId = fakeId,
                     EventType = eventHeader ?? "unknown",
-                    Payload = rawBody,
+                    // SafePayload : un attaquant peut envoyer n'importe quel
+                    // octet — on enveloppe pour respecter la contrainte jsonb.
+                    Payload = SafePayload(rawBody, "invalid_signature"),
                     SignatureHash = signatureHash,
                     ReceivedAt = DateTime.UtcNow,
                     Status = WebhookEventStatus.InvalidSignature,
@@ -450,7 +452,9 @@ namespace Idara.API.Controllers
                     Provider = ProviderName,
                     ExternalEventId = fakeId,
                     EventType = eventHeader ?? "unknown",
-                    Payload = rawBody,
+                    // SafePayload : par définition, rawBody n'est pas du JSON
+                    // valide sur ce chemin — on enveloppe pour le jsonb.
+                    Payload = SafePayload(rawBody, reason),
                     SignatureHash = signatureHash,
                     ReceivedAt = DateTime.UtcNow,
                     Status = WebhookEventStatus.ProcessingFailed,
@@ -462,6 +466,23 @@ namespace Idara.API.Controllers
             {
                 _logger.LogError(ex, "[webhook/payin] Échec audit malformed");
             }
+        }
+
+        /// <summary>
+        /// Enveloppe un corps brut potentiellement non-JSON dans un objet JSON
+        /// valide, pour qu'il passe la contrainte du type PG `jsonb`. Utilisé
+        /// uniquement sur les chemins défensifs (signature invalide, JSON
+        /// malformé) — le happy path stocke le rawBody tel quel puisqu'il
+        /// vient d'être parsé avec succès.
+        /// </summary>
+        private static string SafePayload(string rawBody, string reason)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                rawBody,
+                reason,
+                envelopedAt = DateTime.UtcNow
+            });
         }
     }
 }
