@@ -8,6 +8,7 @@ using Idara.API.DTOs.Senepay;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
+using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,7 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly SenePaySettings _senepay;
+        private readonly IReceiptPdfService _receiptPdf;
         private readonly ILogger<WebhooksController> _logger;
 
         // Constantes du provider — figées dans le code pour empêcher une typo
@@ -45,10 +47,12 @@ namespace Idara.API.Controllers
         public WebhooksController(
             AppDbContext context,
             IOptions<SenePaySettings> senepay,
+            IReceiptPdfService receiptPdf,
             ILogger<WebhooksController> logger)
         {
             _context = context;
             _senepay = senepay.Value;
+            _receiptPdf = receiptPdf;
             _logger = logger;
         }
 
@@ -185,10 +189,11 @@ namespace Idara.API.Controllers
 
             // -------- 6) Traitement métier dans une transaction PG --------
             string? processingError = null;
+            Payment? completedPayment = null;
             try
             {
                 await using var tx = await _context.Database.BeginTransactionAsync();
-                await ProcessPayinPayloadAsync(ev, payload);
+                completedPayment = await ProcessPayinPayloadAsync(ev, payload);
                 ev.ProcessedAt = DateTime.UtcNow;
                 ev.Status = WebhookEventStatus.Processed;
                 await _context.SaveChangesAsync();
@@ -222,6 +227,41 @@ namespace Idara.API.Controllers
                 }
             }
 
+            // -------- 7) Génération du reçu PDF (best-effort, post-commit) --------
+            // Volontairement HORS de la transaction métier : un échec de
+            // génération PDF (disque plein, font manquante, exception
+            // QuestPDF...) ne doit PAS rollback le crédit wallet ni faire
+            // remonter en erreur le webhook. Le PDF peut toujours être
+            // regénéré à la demande via GET /api/payments/{id}/receipt.
+            if (completedPayment != null && completedPayment.Status == PaymentStatus.Completed)
+            {
+                try
+                {
+                    var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == completedPayment.SchoolId);
+                    var student = completedPayment.StudentId.HasValue
+                        ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
+                        : null;
+                    var invoice = completedPayment.InvoiceId.HasValue
+                        ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == completedPayment.InvoiceId.Value)
+                        : null;
+                    if (school != null)
+                    {
+                        var pdfPath = await _receiptPdf.GenerateAsync(completedPayment, school, student, invoice);
+                        // ExecuteUpdate pour bypass change tracker (la tx précédente est déjà commitée
+                        // mais on veut juste poser le chemin sans repasser par les autres champs).
+                        await _context.Payments
+                            .Where(p => p.Id == completedPayment.Id)
+                            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, pdfPath));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[webhook/payin] Échec génération reçu PDF Payment.Id={Id} — pas bloquant",
+                        completedPayment.Id);
+                }
+            }
+
             var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "[webhook/payin] OK transactionId={Tx} event={Event} status={Status} processed={Processed} elapsedMs={Elapsed:0}",
@@ -241,7 +281,12 @@ namespace Idara.API.Controllers
         // ===== Traitement métier =====
         // ====================================================================
 
-        private async Task ProcessPayinPayloadAsync(
+        /// <summary>
+        /// Retourne le Payment complété (ou null si le webhook n'a rien
+        /// changé : statut non-success, déjà traité, etc.). Utilisé par
+        /// l'appelant pour décider s'il doit générer le reçu PDF post-commit.
+        /// </summary>
+        private async Task<Payment?> ProcessPayinPayloadAsync(
             WebhookEvent ev,
             SenePayPayinWebhookPayload payload)
         {
@@ -275,7 +320,7 @@ namespace Idara.API.Controllers
                 _logger.LogInformation(
                     "[webhook/payin] Payment.Id={Id} déjà en statut {Status}, webhook ignoré",
                     payment.Id, payment.Status);
-                return;
+                return null;
             }
 
             // Map du statut SenePay → notre enum.
@@ -308,6 +353,8 @@ namespace Idara.API.Controllers
                     throw new InvalidOperationException(
                         $"Statut SenePay inattendu '{payload.Status}'");
             }
+
+            return payment;
         }
 
         private async Task CreditSchoolWalletAsync(Payment payment, long netAmount)

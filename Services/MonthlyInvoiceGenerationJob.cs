@@ -1,0 +1,305 @@
+using Idara.API.Data;
+using Idara.API.Enums;
+using Idara.API.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace Idara.API.Services
+{
+    /// <summary>
+    /// Cron quotidien (02:00 UTC) qui génère les Invoices mensuelles pour
+    /// chaque école configurée en <see cref="BillingMode.FixedAmount"/>, le
+    /// jour où <c>today.Day == settings.MonthlyDueDay</c>.
+    ///
+    /// Idempotent : UNIQUE filtré <c>(StudentId, PeriodStart) WHERE Status &lt;&gt; Cancelled</c>
+    /// en DB. Un crash du job en plein milieu, ou un redémarrage du conteneur
+    /// le même jour, ne génère pas de doublons (l'INSERT du 2e passage tombe
+    /// sur la violation d'unicité, on l'ignore silencieusement).
+    ///
+    /// Montant snapshoté à la génération :
+    ///   StudentFeeOverride.AmountFcfa  >  ClassFee courant pour la classe.
+    /// Si ni l'un ni l'autre n'est défini, l'élève est skippé avec un warning
+    /// (l'admin doit configurer un tarif avant la prochaine échéance).
+    ///
+    /// 02:00 UTC = 02:00 GMT = 02:00 Dakar (Sénégal n'a pas de DST). Choix
+    /// délibéré pour rester loin du créneau backup 03:00 UTC.
+    /// </summary>
+    public class MonthlyInvoiceGenerationJob : BackgroundService
+    {
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ILogger<MonthlyInvoiceGenerationJob> _logger;
+
+        // 02:00 UTC quotidien.
+        private static readonly TimeSpan RunAtUtc = new(hours: 2, minutes: 0, seconds: 0);
+
+        public MonthlyInvoiceGenerationJob(
+            IServiceScopeFactory scopeFactory,
+            ILogger<MonthlyInvoiceGenerationJob> logger)
+        {
+            _scopeFactory = scopeFactory;
+            _logger = logger;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            _logger.LogInformation(
+                "[invoice-cron] Démarré. Prochain tick prévu à {Next:yyyy-MM-dd HH:mm} UTC",
+                NextFireUtc(DateTime.UtcNow));
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                var nextFire = NextFireUtc(DateTime.UtcNow);
+                var delay = nextFire - DateTime.UtcNow;
+
+                if (delay > TimeSpan.Zero)
+                {
+                    try
+                    {
+                        await Task.Delay(delay, stoppingToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Shutdown propre, on sort.
+                        return;
+                    }
+                }
+
+                try
+                {
+                    await RunOnceAsync(DateTime.UtcNow, stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    // Catch global obligatoire : un throw remonté ici tuerait
+                    // le BackgroundService pour de bon (plus de tick demain).
+                    _logger.LogError(ex, "[invoice-cron] Échec exécution du tick");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Logique métier extraite (pas <see langword="private"/>) pour pouvoir
+        /// être déclenchée manuellement depuis un endpoint admin (à venir en
+        /// Phase 1.5 si besoin de rejouer un jour raté).
+        /// </summary>
+        public async Task<InvoiceGenerationReport> RunOnceAsync(DateTime nowUtc, CancellationToken ct)
+        {
+            var today = nowUtc.Date;
+            var dayOfMonth = today.Day;
+            var report = new InvoiceGenerationReport { RunAtUtc = nowUtc, DayOfMonth = dayOfMonth };
+
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // 1) Écoles éligibles : FixedAmount + Monthly + MonthlyDueDay == today.Day.
+            //    On filtre côté SQL pour ne charger que ce qu'on traite.
+            var eligibleSettings = await db.SchoolPaymentSettings
+                .Where(s =>
+                    s.BillingMode == BillingMode.FixedAmount &&
+                    s.BillingPeriod == BillingPeriod.Monthly &&
+                    s.MonthlyDueDay == dayOfMonth)
+                .ToListAsync(ct);
+
+            if (eligibleSettings.Count == 0)
+            {
+                _logger.LogInformation(
+                    "[invoice-cron] Tick {Date:yyyy-MM-dd}, aucune école avec MonthlyDueDay={Day}",
+                    today, dayOfMonth);
+                return report;
+            }
+
+            _logger.LogInformation(
+                "[invoice-cron] Tick {Date:yyyy-MM-dd}, {Count} école(s) éligible(s) (MonthlyDueDay={Day})",
+                today, eligibleSettings.Count, dayOfMonth);
+
+            // Période = mois civil courant. Si on génère le 5 mai, PeriodStart
+            // = 1er mai 00:00 UTC. C'est cette valeur qui joue l'idempotence
+            // via l'UNIQUE (StudentId, PeriodStart).
+            var periodStart = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            var periodEnd = periodStart.AddMonths(1).AddDays(-1);
+            var dueDate = new DateTime(today.Year, today.Month, today.Day, 0, 0, 0, DateTimeKind.Utc);
+
+            foreach (var settings in eligibleSettings)
+            {
+                try
+                {
+                    var perSchool = await GenerateForSchoolAsync(
+                        db, settings.SchoolId, periodStart, periodEnd, dueDate, today, ct);
+                    report.SchoolsProcessed++;
+                    report.InvoicesCreated += perSchool.Created;
+                    report.InvoicesSkipped += perSchool.Skipped;
+                    report.InvoicesAlreadyExisting += perSchool.AlreadyExisting;
+                    report.StudentsWithoutFee += perSchool.WithoutFee;
+                }
+                catch (Exception ex)
+                {
+                    // On isole les écoles pour qu'une seule en erreur ne casse
+                    // pas la génération des autres.
+                    report.SchoolsFailed++;
+                    _logger.LogError(ex,
+                        "[invoice-cron] Échec génération pour SchoolId={SchoolId}",
+                        settings.SchoolId);
+                }
+            }
+
+            _logger.LogInformation(
+                "[invoice-cron] Terminé. Écoles OK={Ok} ÉchecsÉcoles={Fail} Factures créées={Created} déjà existantes={Existing} skipped={Skipped} sansTarif={NoFee}",
+                report.SchoolsProcessed, report.SchoolsFailed,
+                report.InvoicesCreated, report.InvoicesAlreadyExisting,
+                report.InvoicesSkipped, report.StudentsWithoutFee);
+
+            return report;
+        }
+
+        private async Task<PerSchoolStats> GenerateForSchoolAsync(
+            AppDbContext db,
+            int schoolId,
+            DateTime periodStart,
+            DateTime periodEnd,
+            DateTime dueDate,
+            DateTime today,
+            CancellationToken ct)
+        {
+            var stats = new PerSchoolStats();
+
+            // 2) Tous les élèves actifs avec leur ClassId (pour résoudre le tarif).
+            var students = await db.Students
+                .Where(s => s.SchoolId == schoolId && !s.IsDeleted)
+                .Select(s => new { s.Id, s.ClassId, s.FirstName, s.LastName })
+                .ToListAsync(ct);
+
+            if (students.Count == 0) return stats;
+
+            // 3) Tous les overrides étudiants de cette école en une requête.
+            var studentIds = students.Select(s => s.Id).ToList();
+            var overrides = await db.StudentFeeOverrides
+                .Where(o => studentIds.Contains(o.StudentId))
+                .ToDictionaryAsync(o => o.StudentId, o => o.AmountFcfa, ct);
+
+            // 4) ClassFee courant par classe (max EffectiveFrom <= today).
+            //    Un GROUP BY ClassId / MAX EffectiveFrom suffit puisque la
+            //    table est append-only et SchoolId est dénormalisé.
+            var classIds = students
+                .Where(s => s.ClassId.HasValue)
+                .Select(s => s.ClassId!.Value)
+                .Distinct()
+                .ToList();
+
+            Dictionary<int, long> classFeeByClassId = new();
+            if (classIds.Count > 0)
+            {
+                var feesQuery = await db.ClassFees
+                    .Where(f =>
+                        f.SchoolId == schoolId &&
+                        classIds.Contains(f.ClassId) &&
+                        f.EffectiveFrom <= today)
+                    .GroupBy(f => f.ClassId)
+                    .Select(g => new
+                    {
+                        ClassId = g.Key,
+                        // ORDER BY EffectiveFrom DESC LIMIT 1 équivalent
+                        Amount = g.OrderByDescending(f => f.EffectiveFrom).First().AmountFcfa
+                    })
+                    .ToListAsync(ct);
+                classFeeByClassId = feesQuery.ToDictionary(x => x.ClassId, x => x.Amount);
+            }
+
+            // 5) Pour chaque élève, résout son montant et insère l'Invoice.
+            //    INSERT individuel (pas AddRange + un seul SaveChanges) : on
+            //    veut catch l'unique violation par élève sans casser le batch.
+            foreach (var s in students)
+            {
+                long? amount = null;
+                if (overrides.TryGetValue(s.Id, out var ov))
+                {
+                    amount = ov;
+                }
+                else if (s.ClassId.HasValue && classFeeByClassId.TryGetValue(s.ClassId.Value, out var cf))
+                {
+                    amount = cf;
+                }
+
+                if (amount is null or <= 0)
+                {
+                    stats.WithoutFee++;
+                    _logger.LogWarning(
+                        "[invoice-cron] SchoolId={SchoolId} StudentId={StudentId} ({Name}) sans tarif (override ni ClassFee) — skip",
+                        schoolId, s.Id, $"{s.FirstName} {s.LastName}");
+                    continue;
+                }
+
+                var invoice = new Invoice
+                {
+                    SchoolId = schoolId,
+                    StudentId = s.Id,
+                    PeriodStart = periodStart,
+                    PeriodEnd = periodEnd,
+                    DueDate = dueDate,
+                    AmountDueFcfa = amount.Value,
+                    AmountPaidFcfa = 0,
+                    Status = InvoiceStatus.Pending,
+                    CreatedAt = DateTime.UtcNow
+                };
+                db.Invoices.Add(invoice);
+
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                    stats.Created++;
+                }
+                catch (DbUpdateException dbex) when (IsUniqueViolation(dbex))
+                {
+                    // Déjà généré (par un tick précédent ou un retry). On
+                    // détache l'entité pour ne pas polluer le change tracker
+                    // et on continue avec le prochain élève.
+                    db.Entry(invoice).State = EntityState.Detached;
+                    stats.AlreadyExisting++;
+                }
+                catch (Exception ex)
+                {
+                    db.Entry(invoice).State = EntityState.Detached;
+                    stats.Skipped++;
+                    _logger.LogError(ex,
+                        "[invoice-cron] Échec INSERT Invoice SchoolId={SchoolId} StudentId={StudentId}",
+                        schoolId, s.Id);
+                }
+            }
+
+            return stats;
+        }
+
+        // ---- Helpers ----
+
+        private static DateTime NextFireUtc(DateTime nowUtc)
+        {
+            var todayRun = nowUtc.Date + RunAtUtc;
+            return nowUtc < todayRun ? todayRun : todayRun.AddDays(1);
+        }
+
+        private static bool IsUniqueViolation(DbUpdateException ex)
+        {
+            return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
+        }
+
+        private record struct PerSchoolStats(
+            int Created,
+            int AlreadyExisting,
+            int Skipped,
+            int WithoutFee);
+    }
+
+    /// <summary>
+    /// Résumé d'un run du job — exposé pour pouvoir le retourner depuis un
+    /// endpoint admin de rejeu manuel si besoin.
+    /// </summary>
+    public class InvoiceGenerationReport
+    {
+        public DateTime RunAtUtc { get; set; }
+        public int DayOfMonth { get; set; }
+        public int SchoolsProcessed { get; set; }
+        public int SchoolsFailed { get; set; }
+        public int InvoicesCreated { get; set; }
+        public int InvoicesAlreadyExisting { get; set; }
+        public int InvoicesSkipped { get; set; }
+        public int StudentsWithoutFee { get; set; }
+    }
+}

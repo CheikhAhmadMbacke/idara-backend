@@ -3,7 +3,9 @@ using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Operations;
+using Idara.API.DTOs.Payment;
 using Idara.API.DTOs.Student;
+using Idara.API.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -245,6 +247,103 @@ namespace Idara.API.Controllers
                     RankInClass = l.RankInClass,
                     Appreciation = l.Appreciation
                 }).ToList()
+            }));
+        }
+
+        // ===== Phase 1.7 : Paiements parent =====
+
+        /// <summary>
+        /// Liste des Invoices d'un de ses enfants. Inclut les non-Cancelled
+        /// par défaut. Tri : DueDate desc (les plus récentes/échues en haut).
+        /// Filtre status optionnel.
+        /// </summary>
+        [HttpGet("students/{studentId}/invoices")]
+        public async Task<ActionResult<IEnumerable<InvoiceDto>>> GetChildInvoices(
+            int studentId,
+            [FromQuery] InvoiceStatus? status,
+            CancellationToken ct)
+        {
+            if (!await IsLinked(studentId)) return Forbid();
+
+            var query = _context.Invoices
+                .Include(i => i.Student).ThenInclude(s => s.Class)
+                .Include(i => i.Student).ThenInclude(s => s.School)
+                .Where(i => i.StudentId == studentId);
+
+            if (status.HasValue)
+                query = query.Where(i => i.Status == status.Value);
+            else
+                query = query.Where(i => i.Status != InvoiceStatus.Cancelled);
+
+            var items = await query
+                .OrderByDescending(i => i.DueDate)
+                .Take(60)
+                .ToListAsync(ct);
+
+            return Ok(items.Select(i => new InvoiceDto
+            {
+                Id = i.Id,
+                SchoolId = i.SchoolId,
+                SchoolName = i.Student.School.Name,
+                StudentId = i.StudentId,
+                StudentFirstName = i.Student.FirstName,
+                StudentLastName = i.Student.LastName,
+                StudentNumber = i.Student.StudentNumber,
+                ClassName = i.Student.Class?.Name,
+                PeriodStart = i.PeriodStart,
+                PeriodEnd = i.PeriodEnd,
+                DueDate = i.DueDate,
+                AmountDueFcfa = i.AmountDueFcfa,
+                AmountPaidFcfa = i.AmountPaidFcfa,
+                Status = i.Status,
+                CreatedAt = i.CreatedAt,
+                UpdatedAt = i.UpdatedAt
+            }));
+        }
+
+        /// <summary>
+        /// Historique paiements du Guardian (tous enfants confondus).
+        /// </summary>
+        [HttpGet("payments")]
+        public async Task<ActionResult<IEnumerable<PaymentDto>>> GetMyPayments(
+            [FromQuery] PaymentStatus? status,
+            CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var query = _context.Payments
+                .Include(p => p.Student)
+                .Where(p => p.GuardianId == userId.Value);
+            if (status.HasValue) query = query.Where(p => p.Status == status.Value);
+
+            var items = await query
+                .OrderByDescending(p => p.InitiatedAt)
+                .Take(100)
+                .ToListAsync(ct);
+
+            return Ok(items.Select(p => new PaymentDto
+            {
+                Id = p.Id,
+                SchoolId = p.SchoolId,
+                StudentId = p.StudentId,
+                StudentFirstName = p.Student?.FirstName,
+                StudentLastName = p.Student?.LastName,
+                StudentNumber = p.Student?.StudentNumber,
+                GuardianId = p.GuardianId,
+                InvoiceId = p.InvoiceId,
+                AmountFcfa = p.AmountFcfa,
+                FeesFcfa = p.FeesFcfa,
+                NetCreditedFcfa = p.NetCreditedFcfa,
+                Operator = p.Operator,
+                FeesPayer = p.FeesPayer,
+                Status = p.Status,
+                SenePayTransactionId = p.SenePayTransactionId,
+                FailureReason = p.FailureReason,
+                InitiatedAt = p.InitiatedAt,
+                PaidAt = p.PaidAt,
+                FailedAt = p.FailedAt,
+                ReceiptPdfUrl = p.ReceiptPdfPath
             }));
         }
 

@@ -27,6 +27,8 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly ISenePayClient _senepay;
         private readonly SenePaySettings _senepaySettings;
+        private readonly IReceiptPdfService _receiptPdf;
+        private readonly IWebHostEnvironment _env;
         private readonly ILogger<PaymentsController> _logger;
 
         // Majoration parent fixée à +8 % (cf. spec §3.6 — couvre 5,37 % payin
@@ -40,12 +42,122 @@ namespace Idara.API.Controllers
             AppDbContext context,
             ISenePayClient senepay,
             IOptions<SenePaySettings> senepaySettings,
+            IReceiptPdfService receiptPdf,
+            IWebHostEnvironment env,
             ILogger<PaymentsController> logger)
         {
             _context = context;
             _senepay = senepay;
             _senepaySettings = senepaySettings.Value;
+            _receiptPdf = receiptPdf;
+            _env = env;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// `GET /api/payments/{id}/receipt` — télécharge le reçu PDF (parent
+        /// uniquement, sur ses propres paiements complétés). Génération à la
+        /// volée si le fichier n'existe pas encore (recovery si le webhook a
+        /// échoué la génération automatique).
+        /// </summary>
+        [HttpGet("{id:int}/receipt")]
+        public async Task<IActionResult> DownloadReceipt(int id, CancellationToken ct)
+        {
+            var guardianId = User.GetUserId()
+                ?? throw new UnauthorizedAccessException("UserId missing from JWT");
+
+            var p = await _context.Payments
+                .Include(x => x.Student)
+                .FirstOrDefaultAsync(x => x.Id == id && x.GuardianId == guardianId, ct);
+            if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
+            if (p.Status != PaymentStatus.Completed)
+            {
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Reçu disponible uniquement pour les paiements complétés."));
+            }
+
+            // Chemin attendu — déterministe par PaymentId.
+            var relativePath = p.ReceiptPdfPath ?? $"/uploads/receipts/receipt-{p.Id}.pdf";
+            var fullPath = Path.GetFullPath(Path.Combine(
+                _env.WebRootPath, relativePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+
+            // Path traversal défense en profondeur (cf. gotcha §43) — au cas
+            // où ReceiptPdfPath aurait été altéré en base.
+            var webRootFull = Path.GetFullPath(_env.WebRootPath);
+            if (!fullPath.StartsWith(webRootFull, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "[payment/receipt] Path traversal bloqué pour Payment.Id={Id} (path={Path})",
+                    p.Id, relativePath);
+                return BadRequest(ApiResponse<bool>.Fail("Chemin de reçu invalide."));
+            }
+
+            if (!System.IO.File.Exists(fullPath))
+            {
+                // Recovery : régénérer à la volée.
+                var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == p.SchoolId, ct);
+                var invoice = p.InvoiceId.HasValue
+                    ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == p.InvoiceId.Value, ct)
+                    : null;
+                if (school == null) return NotFound();
+
+                var regenerated = await _receiptPdf.GenerateAsync(p, school, p.Student, invoice);
+                if (string.IsNullOrEmpty(p.ReceiptPdfPath))
+                {
+                    await _context.Payments
+                        .Where(x => x.Id == p.Id)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.ReceiptPdfPath, regenerated), ct);
+                }
+                fullPath = Path.GetFullPath(Path.Combine(
+                    _env.WebRootPath, regenerated.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            }
+
+            var bytes = await System.IO.File.ReadAllBytesAsync(fullPath, ct);
+            return File(bytes, "application/pdf", $"recu-idara-{p.Id:D6}.pdf");
+        }
+
+        /// <summary>
+        /// `GET /api/payments/{id}` — détails / statut d'un paiement (poll
+        /// côté Flutter en attendant le webhook SenePay). Le Guardian ne peut
+        /// voir que ses propres paiements.
+        /// </summary>
+        [HttpGet("{id:int}")]
+        public async Task<ActionResult<ApiResponse<PaymentDto>>> Get(int id, CancellationToken ct)
+        {
+            var guardianId = User.GetUserId()
+                ?? throw new UnauthorizedAccessException("UserId missing from JWT");
+
+            var p = await _context.Payments
+                .Include(x => x.Student)
+                .FirstOrDefaultAsync(x => x.Id == id && x.GuardianId == guardianId, ct);
+            if (p == null)
+            {
+                return NotFound(ApiResponse<PaymentDto>.Fail("Paiement introuvable."));
+            }
+
+            return Ok(ApiResponse<PaymentDto>.Ok(new PaymentDto
+            {
+                Id = p.Id,
+                SchoolId = p.SchoolId,
+                StudentId = p.StudentId,
+                StudentFirstName = p.Student?.FirstName,
+                StudentLastName = p.Student?.LastName,
+                StudentNumber = p.Student?.StudentNumber,
+                GuardianId = p.GuardianId,
+                InvoiceId = p.InvoiceId,
+                AmountFcfa = p.AmountFcfa,
+                FeesFcfa = p.FeesFcfa,
+                NetCreditedFcfa = p.NetCreditedFcfa,
+                Operator = p.Operator,
+                FeesPayer = p.FeesPayer,
+                Status = p.Status,
+                SenePayTransactionId = p.SenePayTransactionId,
+                FailureReason = p.FailureReason,
+                InitiatedAt = p.InitiatedAt,
+                PaidAt = p.PaidAt,
+                FailedAt = p.FailedAt,
+                ReceiptPdfUrl = p.ReceiptPdfPath
+            }));
         }
 
         /// <summary>

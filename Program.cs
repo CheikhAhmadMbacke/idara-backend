@@ -99,7 +99,16 @@ builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
+builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
 builder.Services.AddScoped<DbInitializer>();
+
+// ---------- Cron / background jobs ----------
+// Génère les Invoices mensuelles à 02:00 UTC chaque jour pour les écoles
+// dont MonthlyDueDay tombe aujourd'hui. Idempotent en DB.
+// Singleton + HostedService pointant sur la même instance : permet à un
+// endpoint admin de déclencher RunOnceAsync manuellement pour rejouer un jour.
+builder.Services.AddSingleton<MonthlyInvoiceGenerationJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MonthlyInvoiceGenerationJob>());
 
 // ---------- SenePay (HttpClient typé) ----------
 builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
