@@ -31,6 +31,7 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
+            // 1) Liste des enfants liés au guardian.
             var students = await _context.StudentGuardians
                 .Include(sg => sg.Student).ThenInclude(s => s.Class)
                 .Include(sg => sg.Student).ThenInclude(s => s.School)
@@ -43,10 +44,30 @@ namespace Idara.API.Controllers
                     PhotoUrl = sg.Student.PhotoUrl,
                     ClassName = sg.Student.Class != null ? sg.Student.Class.Name : null,
                     SchoolName = sg.Student.School.Name,
+                    SchoolId = sg.Student.SchoolId,
                     StudentNumber = sg.Student.StudentNumber,
-                    IsPrimaryGuardian = sg.IsPrimaryGuardian
+                    IsPrimaryGuardian = sg.IsPrimaryGuardian,
                 })
                 .ToListAsync();
+
+            // 2) Hydrate avec le BillingMode de l'école (utile au front pour
+            //    décider si on affiche le bouton "paiement libre" — sans ça
+            //    le parent ne sait pas si l'école est en FixedAmount).
+            //    Une requête en lot, mappée par schoolId.
+            var schoolIds = students.Select(s => s.SchoolId).Distinct().ToList();
+            if (schoolIds.Count > 0)
+            {
+                var modes = await _context.SchoolPaymentSettings
+                    .Where(sps => schoolIds.Contains(sps.SchoolId))
+                    .ToDictionaryAsync(sps => sps.SchoolId, sps => sps.BillingMode);
+                foreach (var s in students)
+                {
+                    if (modes.TryGetValue(s.SchoolId, out var mode))
+                    {
+                        s.SchoolBillingMode = mode;
+                    }
+                }
+            }
 
             return Ok(students);
         }
@@ -364,7 +385,14 @@ namespace Idara.API.Controllers
         public string? PhotoUrl { get; set; }
         public string? ClassName { get; set; }
         public string? SchoolName { get; set; }
+        public int SchoolId { get; set; }
         public string? StudentNumber { get; set; }
         public bool IsPrimaryGuardian { get; set; }
+
+        /// <summary>
+        /// Mode de facturation de l'école de cet enfant. Le client l'utilise
+        /// pour décider d'afficher ou non l'option « paiement libre ».
+        /// </summary>
+        public BillingMode? SchoolBillingMode { get; set; }
     }
 }
