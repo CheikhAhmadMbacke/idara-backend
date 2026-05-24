@@ -24,6 +24,7 @@ builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection(Email
 builder.Services.Configure<SuperAdminSettings>(builder.Configuration.GetSection(SuperAdminSettings.SectionName));
 builder.Services.Configure<OtpSettings>(builder.Configuration.GetSection(OtpSettings.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
+builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException("Section 'Jwt' manquante dans la configuration.");
