@@ -50,12 +50,10 @@ namespace Idara.API.Controllers
 
         /// <summary>
         /// `POST /api/payments/initiate` — initie un paiement Wave ou Orange.
-        /// Deux flows :
-        /// - 1er appel : sans PaymentId, avec StudentId + (InvoiceId ou Amount).
-        ///   Crée un Payment.Status=Pending, appelle SenePay, met à jour le
-        ///   Payment avec token/internalId, retourne le nextAction.
-        /// - 2e appel Orange OTP : avec PaymentId + OtpCode, sans StudentId/...
-        ///   Récupère le Payment existant, rappelle SenePay avec l'OTP.
+        /// Un seul flow : { studentId, invoiceId? ou amount, operator,
+        /// customerPhone, otpCode? }. L'otpCode est obligatoire pour
+        /// operator="orange" (le parent doit le générer via #144#391# avant)
+        /// et ignoré pour operator="wave".
         /// </summary>
         [HttpPost("initiate")]
         public async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> Initiate(
@@ -65,23 +63,22 @@ namespace Idara.API.Controllers
             var guardianId = User.GetUserId()
                 ?? throw new UnauthorizedAccessException("UserId missing from JWT");
 
-            // Branche 2e appel OTP : PaymentId + OtpCode fournis.
-            if (dto.PaymentId.HasValue)
+            // Validation d'usage : Orange exige otpCode AU 1er appel.
+            // SenePay rejettera de toute façon avec 400 si absent, mais on
+            // donne un message clair côté Idara au lieu de laisser remonter
+            // le 400 SenePay tel quel.
+            if (string.Equals(dto.Operator, "orange", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(dto.OtpCode))
             {
-                if (string.IsNullOrWhiteSpace(dto.OtpCode))
-                {
-                    return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                        "OtpCode est requis quand PaymentId est fourni (2e appel Orange)."));
-                }
-                return await ResubmitWithOtpAsync(guardianId, dto, ct);
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Pour Orange Money, l'OTP doit être généré sur le téléphone (#144#391#) puis fourni dans cette requête."));
             }
 
-            // Branche 1er appel : création de Payment.
             return await InitiateNewPaymentAsync(guardianId, dto, ct);
         }
 
         // ====================================================================
-        // ===== 1er appel : création Payment + SenePay initiate =====
+        // ===== Création Payment + SenePay initiate =====
         // ====================================================================
 
         private async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> InitiateNewPaymentAsync(
@@ -257,86 +254,6 @@ namespace Idara.API.Controllers
                 ErrorCode = senepayResponse.ErrorCode,
                 FailureReason = senepayResponse.FailedReason,
                 AmountChargedFcfa = amountToCharge
-            }));
-        }
-
-        // ====================================================================
-        // ===== 2e appel : Orange OTP =====
-        // ====================================================================
-
-        private async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> ResubmitWithOtpAsync(
-            int guardianId,
-            InitiatePaymentRequestDto dto,
-            CancellationToken ct)
-        {
-            var paymentId = dto.PaymentId!.Value;
-
-            var payment = await _context.Payments
-                .FirstOrDefaultAsync(p => p.Id == paymentId, ct);
-            if (payment == null)
-            {
-                return NotFound(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Paiement introuvable."));
-            }
-            if (payment.GuardianId != guardianId)
-            {
-                _logger.LogWarning(
-                    "[payment/initiate] Guardian {GuardianId} a tenté de soumettre OTP pour Payment {PaymentId} appartenant à un autre guardian",
-                    guardianId, paymentId);
-                return Forbid();
-            }
-            if (payment.Status != PaymentStatus.Pending)
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    $"Ce paiement est déjà en statut {payment.Status}, impossible de soumettre un OTP."));
-            }
-            if (payment.Operator != PaymentOperator.Orange)
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Le code OTP n'est utilisé que pour Orange Money."));
-            }
-
-            SenePayInitiatePaymentResponse senepayResponse;
-            try
-            {
-                senepayResponse = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(
-                    payment, "orange", dto.CustomerPhone, otpCode: dto.OtpCode, customerName: GuardianName()), ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex,
-                    "[payment/initiate] SenePay error pour Payment {PaymentId} (2e appel OTP)",
-                    payment.Id);
-                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "SenePay temporairement indisponible. Réessayez dans quelques secondes."));
-            }
-
-            // Mise à jour : nouveaux token/internalId potentiels (SenePay peut
-            // créer une nouvelle transaction interne — on tracke le dernier).
-            if (!string.IsNullOrEmpty(senepayResponse.InternalId))
-                payment.SenePayInternalId = senepayResponse.InternalId;
-            if (!string.IsNullOrEmpty(senepayResponse.Token))
-                payment.SenePayTransactionId = senepayResponse.Token;
-
-            if (string.Equals(senepayResponse.Status, "Failed", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = senepayResponse.FailedReason ?? senepayResponse.ErrorCode;
-            }
-
-            await _context.SaveChangesAsync(ct);
-
-            return Ok(ApiResponse<InitiatePaymentResponseDto>.Ok(new InitiatePaymentResponseDto
-            {
-                PaymentId = payment.Id,
-                Status = senepayResponse.Status ?? "Pending",
-                NextAction = senepayResponse.NextAction ?? "NONE",
-                RedirectUrl = senepayResponse.RedirectUrl,
-                OtpRequired = senepayResponse.OtpRequired,
-                ErrorCode = senepayResponse.ErrorCode,
-                FailureReason = senepayResponse.FailedReason,
-                AmountChargedFcfa = payment.AmountFcfa
             }));
         }
 
