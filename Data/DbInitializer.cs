@@ -27,6 +27,7 @@ namespace Idara.API.Data
             // non encore appliquees sont jouees (idempotent).
             await _context.Database.MigrateAsync();
             await SeedSuperAdminAsync();
+            await SeedPaymentFoundationsAsync();
         }
 
         private async Task SeedSuperAdminAsync()
@@ -53,6 +54,64 @@ namespace Idara.API.Data
             _context.Users.Add(superAdmin);
             await _context.SaveChangesAsync();
             _logger.LogInformation("SuperAdmin créé : {Email}", _settings.Email);
+        }
+
+        /// <summary>
+        /// Crée pour chaque école existante (a) un SchoolPaymentSettings avec
+        /// valeurs par défaut, (b) un SchoolWallet à zéro. Idempotent : ne touche
+        /// que les écoles qui n'en ont pas encore. Appelé à chaque démarrage —
+        /// rattrape les écoles créées avant ou pendant le déploiement de la
+        /// Phase 1.2.
+        /// </summary>
+        private async Task SeedPaymentFoundationsAsync()
+        {
+            var schoolIds = await _context.Schools.Select(s => s.Id).ToListAsync();
+            if (schoolIds.Count == 0) return;
+
+            var existingSettingsIds = await _context.SchoolPaymentSettings
+                .Select(s => s.SchoolId)
+                .ToListAsync();
+            var existingWalletIds = await _context.SchoolWallets
+                .Select(w => w.SchoolId)
+                .ToListAsync();
+
+            var now = DateTime.UtcNow;
+
+            var missingSettings = schoolIds.Except(existingSettingsIds)
+                .Select(id => new SchoolPaymentSettings
+                {
+                    SchoolId = id,
+                    BillingMode = BillingMode.FixedAmount,
+                    FeesPayer = FeesPayer.Parent,
+                    MonthlyDueDay = 5,
+                    BillingPeriod = BillingPeriod.Monthly,
+                    CreatedAt = now
+                })
+                .ToList();
+
+            var missingWallets = schoolIds.Except(existingWalletIds)
+                .Select(id => new SchoolWallet
+                {
+                    SchoolId = id,
+                    AvailableBalance = 0,
+                    PendingBalance = 0,
+                    TotalCreditedLifetime = 0,
+                    TotalWithdrawnLifetime = 0,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                })
+                .ToList();
+
+            if (missingSettings.Count > 0) _context.SchoolPaymentSettings.AddRange(missingSettings);
+            if (missingWallets.Count > 0) _context.SchoolWallets.AddRange(missingWallets);
+
+            if (missingSettings.Count > 0 || missingWallets.Count > 0)
+            {
+                await _context.SaveChangesAsync();
+                _logger.LogInformation(
+                    "Seed paiement : {Settings} SchoolPaymentSettings et {Wallets} SchoolWallet créés.",
+                    missingSettings.Count, missingWallets.Count);
+            }
         }
     }
 }

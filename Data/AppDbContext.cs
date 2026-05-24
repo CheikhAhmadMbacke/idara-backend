@@ -29,6 +29,16 @@ namespace Idara.API.Data
         public DbSet<DailyJournalEntry> DailyJournalEntries { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
 
+        // ----- Paiement (Phase 1) -----
+        public DbSet<SchoolPaymentSettings> SchoolPaymentSettings { get; set; }
+        public DbSet<ClassFee> ClassFees { get; set; }
+        public DbSet<StudentFeeOverride> StudentFeeOverrides { get; set; }
+        public DbSet<Invoice> Invoices { get; set; }
+        public DbSet<Payment> Payments { get; set; }
+        public DbSet<SchoolWallet> SchoolWallets { get; set; }
+        public DbSet<WalletTransaction> WalletTransactions { get; set; }
+        public DbSet<WebhookEvent> WebhookEvents { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -336,6 +346,152 @@ namespace Idara.API.Data
             // Index de recherche : "tokens actifs d'un user".
             modelBuilder.Entity<RefreshToken>()
                 .HasIndex(r => new { r.UserId, r.RevokedAt });
+
+            // ============================================================
+            // ===== Paiement (Phase 1) — fondations payin =====
+            // ============================================================
+
+            // --- SchoolPaymentSettings (1-1 avec School, PK = SchoolId) ---
+            modelBuilder.Entity<SchoolPaymentSettings>()
+                .HasKey(s => s.SchoolId);
+
+            modelBuilder.Entity<SchoolPaymentSettings>()
+                .HasOne(s => s.School)
+                .WithOne()
+                .HasForeignKey<SchoolPaymentSettings>(s => s.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // --- ClassFee (versionné par EffectiveFrom, append-only) ---
+            modelBuilder.Entity<ClassFee>()
+                .HasOne(f => f.Class)
+                .WithMany()
+                .HasForeignKey(f => f.ClassId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Index principal : lookup du tarif courant pour une classe
+            // (ORDER BY EffectiveFrom DESC LIMIT 1).
+            modelBuilder.Entity<ClassFee>()
+                .HasIndex(f => new { f.ClassId, f.EffectiveFrom });
+
+            // Filtre multi-tenant : "tous les ClassFee d'une école".
+            modelBuilder.Entity<ClassFee>()
+                .HasIndex(f => f.SchoolId);
+
+            // --- StudentFeeOverride (1-1 avec Student, PK = StudentId) ---
+            modelBuilder.Entity<StudentFeeOverride>()
+                .HasKey(o => o.StudentId);
+
+            modelBuilder.Entity<StudentFeeOverride>()
+                .HasOne(o => o.Student)
+                .WithOne()
+                .HasForeignKey<StudentFeeOverride>(o => o.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<StudentFeeOverride>()
+                .HasIndex(o => o.SchoolId);
+
+            // --- Invoice ---
+            modelBuilder.Entity<Invoice>()
+                .HasOne(i => i.Student)
+                .WithMany()
+                .HasForeignKey(i => i.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Idempotence du cron de génération : un seul Invoice actif
+            // (non Cancelled) par élève par période. On filtre sur Status pour
+            // permettre une régénération si l'admin annule manuellement.
+            modelBuilder.Entity<Invoice>()
+                .HasIndex(i => new { i.StudentId, i.PeriodStart })
+                .IsUnique()
+                .HasFilter("\"Status\" <> 3"); // 3 = InvoiceStatus.Cancelled
+
+            // Vues école : "factures en cours/en retard".
+            modelBuilder.Entity<Invoice>()
+                .HasIndex(i => new { i.SchoolId, i.Status });
+
+            modelBuilder.Entity<Invoice>()
+                .HasIndex(i => new { i.SchoolId, i.DueDate });
+
+            // --- Payment ---
+            // StudentId / GuardianId / InvoiceId tous nullables : un topup
+            // wallet école (Phase 4) n'a aucun de ces 3 liens.
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.Student)
+                .WithMany()
+                .HasForeignKey(p => p.StudentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.Guardian)
+                .WithMany()
+                .HasForeignKey(p => p.GuardianId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.Invoice)
+                .WithMany()
+                .HasForeignKey(p => p.InvoiceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Lookup par référence SenePay (webhook → Payment correspondant).
+            // Filtré IS NOT NULL car le Payment est créé AVANT l'appel SenePay.
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.SenePayTransactionId)
+                .IsUnique()
+                .HasFilter("\"SenePayTransactionId\" IS NOT NULL");
+
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.SenePayInternalId)
+                .HasFilter("\"SenePayInternalId\" IS NOT NULL");
+
+            // Vues école : "paiements récents", "paiements en attente".
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => new { p.SchoolId, p.Status, p.InitiatedAt });
+
+            // Vue Guardian : "mes paiements".
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => new { p.GuardianId, p.InitiatedAt });
+
+            // --- SchoolWallet (1-1 avec School, PK = SchoolId) ---
+            modelBuilder.Entity<SchoolWallet>()
+                .HasKey(w => w.SchoolId);
+
+            modelBuilder.Entity<SchoolWallet>()
+                .HasOne(w => w.School)
+                .WithOne()
+                .HasForeignKey<SchoolWallet>(w => w.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // --- WalletTransaction (append-only) ---
+            modelBuilder.Entity<WalletTransaction>()
+                .HasOne(t => t.Wallet)
+                .WithMany()
+                .HasForeignKey(t => t.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Journal trié par date desc (vue "derniers mouvements").
+            modelBuilder.Entity<WalletTransaction>()
+                .HasIndex(t => new { t.SchoolId, t.OccurredAt });
+
+            // Lookup "toutes les transactions liées à un Payment" (audit).
+            modelBuilder.Entity<WalletTransaction>()
+                .HasIndex(t => new { t.RelatedEntity, t.RelatedId });
+
+            // --- WebhookEvent (idempotence stricte) ---
+            // Cle de l'idempotence : INSERT (Provider, ExternalEventId) → si
+            // unique violation, c'est un rejeu, on retourne 200 sans rejouer.
+            modelBuilder.Entity<WebhookEvent>()
+                .HasIndex(w => new { w.Provider, w.ExternalEventId })
+                .IsUnique();
+
+            // Vue admin : "derniers webhooks reçus" (debug, monitoring).
+            modelBuilder.Entity<WebhookEvent>()
+                .HasIndex(w => new { w.Provider, w.ReceivedAt });
+
+            // jsonb natif PG pour requêtes ad hoc sur le payload SenePay.
+            modelBuilder.Entity<WebhookEvent>()
+                .Property(w => w.Payload)
+                .HasColumnType("jsonb");
         }
     }
 }

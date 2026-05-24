@@ -1,0 +1,57 @@
+using Idara.API.Enums;
+
+namespace Idara.API.Models
+{
+    /// <summary>
+    /// Un paiement réel transitant via SenePay. Cas couverts :
+    /// - paiement parent → école en mode FixedAmount (avec InvoiceId),
+    /// - paiement parent → école en mode FreeAmount (InvoiceId NULL),
+    /// - topup wallet école par le SchoolAdmin (Phase 4) : StudentId / GuardianId
+    ///   / InvoiceId tous NULL ; SchoolId reste obligatoire.
+    ///
+    /// Status Pending = créé en DB, attendant le webhook SenePay. Les transitions
+    /// terminales (Completed/Failed/...) ne reviennent jamais en arrière.
+    ///
+    /// AmountFcfa = montant débité du payeur (inclut +8 % si FeesPayer = Parent).
+    /// NetCreditedFcfa = ce que touche réellement le SchoolWallet (net de TOUT,
+    /// y compris la réserve payout — modèle "prélèvement à la source").
+    /// </summary>
+    public class Payment
+    {
+        public int Id { get; set; }
+        public int SchoolId { get; set; }
+
+        public int? StudentId { get; set; }
+        public Student? Student { get; set; }
+
+        public int? GuardianId { get; set; }
+        public User? Guardian { get; set; }
+
+        public int? InvoiceId { get; set; }
+        public Invoice? Invoice { get; set; }
+
+        public long AmountFcfa { get; set; }
+        public long FeesFcfa { get; set; }
+        public long NetCreditedFcfa { get; set; }
+
+        public PaymentOperator Operator { get; set; }
+
+        /// <summary>Snapshot de la politique école au moment de l'init (peut changer après).</summary>
+        public FeesPayer FeesPayer { get; set; }
+
+        public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
+
+        /// <summary>Référence publique SenePay (ex: SP-XXXX) — visible côté commerçant.</summary>
+        public string? SenePayTransactionId { get; set; }
+
+        /// <summary>Id interne SenePay (uuid) utilisé pour les polls/status.</summary>
+        public string? SenePayInternalId { get; set; }
+
+        public DateTime InitiatedAt { get; set; }
+        public DateTime? PaidAt { get; set; }
+        public DateTime? FailedAt { get; set; }
+        public string? FailureReason { get; set; }
+
+        public string? ReceiptPdfPath { get; set; }
+    }
+}
