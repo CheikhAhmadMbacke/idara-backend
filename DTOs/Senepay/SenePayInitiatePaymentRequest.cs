@@ -37,10 +37,16 @@ namespace Idara.API.DTOs.Senepay
         [JsonPropertyName("customerName")]
         public string? CustomerName { get; set; }
 
-        /// <summary>URL où SenePay redirige le client Wave après paiement (UI Flutter ouvre ensuite la page de polling).</summary>
-        [JsonPropertyName("returnUrl")]
-        public string? ReturnUrl { get; set; }
+        /// <summary>
+        /// URL absolue vers laquelle SenePay redirige le navigateur après un
+        /// paiement RÉUSSI (typiquement Wave). On y met l'URL de notre page
+        /// HTML hébergée `/pay/{paymentId}/{token}?status=success` qui poll
+        /// le statut + affiche le reçu PDF + bouton Partager WhatsApp.
+        /// </summary>
+        [JsonPropertyName("successUrl")]
+        public string? SuccessUrl { get; set; }
 
+        /// <summary>URL absolue en cas d'annulation/échec utilisateur.</summary>
         [JsonPropertyName("cancelUrl")]
         public string? CancelUrl { get; set; }
 

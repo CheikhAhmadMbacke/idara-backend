@@ -394,12 +394,24 @@ namespace Idara.API.Controllers
 
             // Si une Invoice est rattachée (mode FixedAmount), on met à jour
             // son AmountPaidFcfa et son statut (paid/over-paid).
+            //
+            // ATTENTION : on crédite l'invoice avec TargetAmountFcfa (montant
+            // cible original), PAS avec netAmount. En FeesPayer=Parent, on a
+            // chargé targetAmount × 1.08 — la majoration de 8% est censée
+            // couvrir les frais SenePay (~5,37%). Le wallet reçoit le net
+            // (~196 FCFA pour une cible de 200), mais l'invoice doit
+            // considérer les 200 comme payés sinon elle reste éternellement
+            // "presque payée" avec ~4 FCFA fantômes. Fallback sur netAmount
+            // pour les anciens Payments d'avant 1.10 qui n'ont pas le champ.
             if (payment.InvoiceId is int invoiceId)
             {
                 var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == invoiceId);
                 if (invoice != null)
                 {
-                    invoice.AmountPaidFcfa += netAmount;
+                    var creditedToInvoice = payment.TargetAmountFcfa > 0
+                        ? payment.TargetAmountFcfa
+                        : netAmount;
+                    invoice.AmountPaidFcfa += creditedToInvoice;
                     invoice.UpdatedAt = DateTime.UtcNow;
                     if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
                     {

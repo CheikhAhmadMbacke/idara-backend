@@ -289,6 +289,13 @@ namespace Idara.API.Controllers
 
             // Création Payment AVANT l'appel SenePay : le webhook peut arriver
             // entre l'appel et notre SaveChanges si l'opérateur est très rapide.
+            //
+            // PublicResultToken : GUID opaque utilisé dans la page HTML de
+            // résultat (`/pay/{id}/{token}`) — empêche un attaquant qui
+            // énumère les PaymentId de voir les reçus des autres parents.
+            // TargetAmountFcfa : montant que l'invoice doit considérer comme
+            // payé quand le webhook confirme (l'amountToCharge inclut la +8%
+            // de majoration, qui est censée couvrir les frais SenePay).
             var payment = new Payment
             {
                 SchoolId = schoolId,
@@ -296,12 +303,14 @@ namespace Idara.API.Controllers
                 GuardianId = guardianId,
                 InvoiceId = invoice?.Id,
                 AmountFcfa = amountToCharge,
+                TargetAmountFcfa = targetAmount,
                 FeesFcfa = 0, // rempli au webhook
                 NetCreditedFcfa = 0, // rempli au webhook
                 Operator = operatorEnum,
                 FeesPayer = settings.FeesPayer,
                 Status = PaymentStatus.Pending,
-                InitiatedAt = DateTime.UtcNow
+                InitiatedAt = DateTime.UtcNow,
+                PublicResultToken = GeneratePublicToken()
             };
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
@@ -380,6 +389,12 @@ namespace Idara.API.Controllers
             string? otpCode,
             string? customerName)
         {
+            // URLs page HTML résultat (servies par PaymentPublicController).
+            // Ne PAS oublier le token : sinon la page accepte n'importe quel
+            // PaymentId énuméré.
+            var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
+            var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
+
             return new SenePayInitiatePaymentRequest
             {
                 Amount = payment.AmountFcfa,
@@ -390,9 +405,19 @@ namespace Idara.API.Controllers
                 OtpCode = otpCode,
                 OrderId = payment.Id.ToString(),
                 CustomerName = customerName,
-                WebhookUrl = _senepaySettings.WebhookPayinUrl
+                WebhookUrl = _senepaySettings.WebhookPayinUrl,
+                SuccessUrl = $"{resultBase}?status=success",
+                CancelUrl = $"{resultBase}?status=cancel"
             };
         }
+
+        /// <summary>
+        /// Génère un token public opaque pour la page HTML de résultat.
+        /// Format compact (GUID sans tirets, 32 chars hexa) : court mais
+        /// imprévisible (128 bits d'entropie, GUID v4).
+        /// </summary>
+        private static string GeneratePublicToken() =>
+            Guid.NewGuid().ToString("N");
 
         private static PaymentOperator ParseOperator(string op)
         {

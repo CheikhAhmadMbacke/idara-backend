@@ -80,11 +80,17 @@ namespace Idara.API.Services
         /// Logique métier extraite (pas <see langword="private"/>) pour pouvoir
         /// être déclenchée manuellement depuis un endpoint admin (à venir en
         /// Phase 1.5 si besoin de rejouer un jour raté).
+        ///
+        /// <para><paramref name="forceDay"/> : si fourni (1-28), simule un
+        /// jour du mois différent du jour réel. Pratique pour tester sans
+        /// devoir attendre la vraie date. Le mois et l'année restent ceux
+        /// de <paramref name="nowUtc"/>.</para>
         /// </summary>
-        public async Task<InvoiceGenerationReport> RunOnceAsync(DateTime nowUtc, CancellationToken ct)
+        public async Task<InvoiceGenerationReport> RunOnceAsync(
+            DateTime nowUtc, CancellationToken ct, int? forceDay = null)
         {
             var today = nowUtc.Date;
-            var dayOfMonth = today.Day;
+            var dayOfMonth = forceDay ?? today.Day;
             var report = new InvoiceGenerationReport { RunAtUtc = nowUtc, DayOfMonth = dayOfMonth };
 
             using var scope = _scopeFactory.CreateScope();

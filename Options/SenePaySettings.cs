@@ -28,6 +28,15 @@ namespace Idara.API.Options
         public string WebhookPayinUrl { get; set; } = "https://api.idara.sn/api/webhooks/senepay/payin";
 
         /// <summary>
+        /// Base URL absolue utilisée pour construire le successUrl / cancelUrl
+        /// envoyé à SenePay à chaque init. Ces URLs pointent sur notre page
+        /// HTML de résultat `/pay/{paymentId}/{token}` — ouverte par le
+        /// navigateur du parent après confirmation Wave, sans JWT (auth =
+        /// match du token public stocké sur le Payment).
+        /// </summary>
+        public string PublicBaseUrl { get; set; } = "https://api.idara.sn";
+
+        /// <summary>
         /// URL absolue de notre endpoint webhook payout (utilisée Phase 3).
         /// Envoyée à SenePay dans le champ `callback_url` de chaque payout.
         /// </summary>

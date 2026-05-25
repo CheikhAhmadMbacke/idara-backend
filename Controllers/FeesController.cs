@@ -512,17 +512,28 @@ namespace Idara.API.Controllers
         // ========================================================
 
         /// <summary>
-        /// Déclenche manuellement la génération des Invoices mensuelles
-        /// comme si <c>now.Day == settings.MonthlyDueDay</c>. SuperAdmin
-        /// uniquement — utile pour tester la 1.5 sans attendre 02:00 UTC
-        /// du bon jour du mois, ou pour rejouer un jour raté.
+        /// Déclenche manuellement la génération des Invoices mensuelles.
+        /// SuperAdmin uniquement. Comportement :
+        ///  - sans paramètre : génère pour les écoles dont MonthlyDueDay tombe aujourd'hui ;
+        ///  - <c>?forceDay=N</c> (1..28) : simule le jour N du mois courant
+        ///    (génère pour les écoles dont MonthlyDueDay == N), pratique pour
+        ///    tester ou rejouer un jour raté.
         /// </summary>
         [HttpPost("cron/invoices/run")]
         [Authorize(Roles = UserRoles.SuperAdmin)]
-        public async Task<ActionResult<InvoiceGenerationReport>> RunInvoiceCron(CancellationToken ct)
+        public async Task<ActionResult<InvoiceGenerationReport>> RunInvoiceCron(
+            [FromQuery] int? forceDay,
+            CancellationToken ct)
         {
-            _logger.LogInformation("[fees] Cron Invoice déclenché manuellement par SuperAdmin {UserId}", User.GetUserId());
-            var report = await _invoiceJob.RunOnceAsync(DateTime.UtcNow, ct);
+            if (forceDay.HasValue && (forceDay.Value < 1 || forceDay.Value > 28))
+            {
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "forceDay doit être entre 1 et 28."));
+            }
+            _logger.LogInformation(
+                "[fees] Cron Invoice déclenché manuellement par SuperAdmin {UserId} (forceDay={ForceDay})",
+                User.GetUserId(), forceDay);
+            var report = await _invoiceJob.RunOnceAsync(DateTime.UtcNow, ct, forceDay);
             return Ok(report);
         }
 

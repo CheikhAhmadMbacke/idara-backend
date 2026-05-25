@@ -444,6 +444,14 @@ namespace Idara.API.Data
                 .HasIndex(p => p.SenePayInternalId)
                 .HasFilter("\"SenePayInternalId\" IS NOT NULL");
 
+            // Lookup public depuis la page HTML de résultat post-paiement
+            // (auth = match du token, pas de JWT). Filtré NOT NULL parce que
+            // les vieux Payments d'avant 1.10 n'en ont pas.
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.PublicResultToken)
+                .IsUnique()
+                .HasFilter("\"PublicResultToken\" IS NOT NULL");
+
             // Vues école : "paiements récents", "paiements en attente".
             modelBuilder.Entity<Payment>()
                 .HasIndex(p => new { p.SchoolId, p.Status, p.InitiatedAt });

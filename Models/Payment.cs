@@ -34,6 +34,14 @@ namespace Idara.API.Models
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }
 
+        /// <summary>
+        /// Montant cible original demandé à l'init (avant majoration parent +8%).
+        /// C'est ce qu'on crédite à l'Invoice quand le webhook confirme — pas
+        /// le net SenePay, qui est rogné des frais et laisserait l'invoice
+        /// éternellement "presque payée" en mode FeesPayer=Parent.
+        /// </summary>
+        public long TargetAmountFcfa { get; set; }
+
         public PaymentOperator Operator { get; set; }
 
         /// <summary>Snapshot de la politique école au moment de l'init (peut changer après).</summary>
@@ -53,5 +61,15 @@ namespace Idara.API.Models
         public string? FailureReason { get; set; }
 
         public string? ReceiptPdfPath { get; set; }
+
+        /// <summary>
+        /// Token public opaque (GUID) généré à l'init et passé dans le
+        /// successUrl/cancelUrl envoyé à SenePay. Permet à la page HTML de
+        /// résultat (servie par notre backend, ouverte par le navigateur de
+        /// l'utilisateur sans JWT) d'accéder au statut + reçu de CE paiement
+        /// précis sans qu'un attaquant puisse énumérer les PaymentId pour
+        /// voler les reçus des autres.
+        /// </summary>
+        public string? PublicResultToken { get; set; }
     }
 }

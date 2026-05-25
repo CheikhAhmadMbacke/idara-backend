@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="theme-color" content="#0B744D" />
+  <title>Idara — Résultat du paiement</title>
+  <style>
+    /* Palette alignée sur AppColors côté Flutter pour cohérence visuelle. */
+    :root {
+      --primary: #0B744D;
+      --primary-dark: #064A31;
+      --primary-light: #2A9D72;
+      --bg: #F7F9FC;
+      --surface: #FFFFFF;
+      --border: #E3E8EF;
+      --text-primary: #1A2233;
+      --text-secondary: #5B6478;
+      --text-tertiary: #8A93A6;
+      --success: #1E9E5C;
+      --success-soft: #E7F6EE;
+      --warning: #E8830C;
+      --warning-soft: #FDF1DF;
+      --danger: #D83B3B;
+      --danger-soft: #FAE5E5;
+      --whatsapp: #25D366;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text-primary); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+                   Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 16px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* En-tête : logo Idara + titre */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 8px;
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: var(--primary);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 800; font-size: 18px;
+    }
+    .brand {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--primary);
+      letter-spacing: -0.3px;
+    }
+
+    /* Card état */
+    .state-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(11, 116, 77, 0.06);
+    }
+    .state-icon {
+      width: 84px; height: 84px;
+      border-radius: 50%;
+      margin: 0 auto 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 44px;
+    }
+    .state-icon.loading { background: rgba(11, 116, 77, 0.1); color: var(--primary); }
+    .state-icon.success { background: var(--success-soft); color: var(--success); }
+    .state-icon.error { background: var(--danger-soft); color: var(--danger); }
+    .state-icon.warning { background: var(--warning-soft); color: var(--warning); }
+
+    .state-title {
+      font-size: 22px;
+      font-weight: 800;
+      margin: 0 0 8px;
+      color: var(--text-primary);
+    }
+    .state-subtitle {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+
+    /* Spinner CSS */
+    .spinner {
+      width: 44px; height: 44px;
+      border: 4px solid rgba(11, 116, 77, 0.15);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Récap montant */
+    .summary {
+      margin-top: 16px;
+      padding: 16px;
+      background: var(--bg);
+      border-radius: 12px;
+      text-align: left;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+    }
+    .summary-row + .summary-row { border-top: 1px solid var(--border); }
+    .summary-label { color: var(--text-secondary); }
+    .summary-value { color: var(--text-primary); font-weight: 600; }
+    .summary-value.big {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    /* Aperçu PDF dans iframe */
+    .pdf-frame {
+      width: 100%;
+      height: 540px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-top: 16px;
+      background: white;
+    }
+    @media (max-width: 480px) {
+      .pdf-frame { height: 420px; }
+    }
+
+    /* Boutons */
+    .actions {
+      margin-top: 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.05s;
+      min-height: 52px;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-whatsapp { background: var(--whatsapp); color: white; }
+    .btn-primary  { background: var(--primary); color: white; }
+    .btn-ghost    { background: transparent; color: var(--primary); border: 1.5px solid var(--primary); }
+
+    .btn svg { width: 20px; height: 20px; flex-shrink: 0; }
+
+    .footer {
+      text-align: center;
+      padding: 24px 8px 16px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+    .footer a { color: var(--text-tertiary); }
+
+    /* RTL support si on traduit la page en arabe plus tard */
+    [dir="rtl"] .header { flex-direction: row-reverse; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">i</div>
+      <div class="brand">Idara</div>
+    </div>
+
+    <div id="state" class="state-card">
+      <div id="state-icon" class="state-icon loading">
+        <div class="spinner"></div>
+      </div>
+      <h1 id="state-title" class="state-title">Vérification du paiement…</h1>
+      <p id="state-subtitle" class="state-subtitle">Nous confirmons votre transaction avec SenePay.</p>
+      <div id="summary" class="summary" style="display:none;"></div>
+    </div>
+
+    <iframe id="pdf-frame" class="pdf-frame" style="display:none;" title="Reçu PDF"></iframe>
+
+    <div id="actions" class="actions" style="display:none;"></div>
+
+    <div class="footer">
+      Paiement sécurisé via <strong>SenePay</strong> ·
+      <a href="https://idara.sn">idara.sn</a>
+    </div>
+  </div>
+
+  <script>
+    // --- Lecture des paramètres URL ---
+    // Format URL : /pay/{paymentId}/{token}?status=success|cancel
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    // ["pay", "{paymentId}", "{token}"]
+    const paymentId = pathParts[1];
+    const token = pathParts[2];
+    const initialStatus = new URLSearchParams(window.location.search).get('status') || 'success';
+
+    const stateIcon = document.getElementById('state-icon');
+    const stateTitle = document.getElementById('state-title');
+    const stateSubtitle = document.getElementById('state-subtitle');
+    const summaryEl = document.getElementById('summary');
+    const pdfFrame = document.getElementById('pdf-frame');
+    const actionsEl = document.getElementById('actions');
+
+    function fmt(n) {
+      if (n == null) return '—';
+      return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    }
+
+    function setState(kind, icon, title, subtitle) {
+      stateIcon.className = 'state-icon ' + kind;
+      stateIcon.innerHTML = kind === 'loading'
+        ? '<div class="spinner"></div>'
+        : icon;
+      stateTitle.textContent = title;
+      stateSubtitle.textContent = subtitle;
+    }
+
+    function renderSummary(data) {
+      const rows = [
+        { label: 'Montant payé', value: fmt(data.amountChargedFcfa) + ' FCFA', big: true },
+      ];
+      if (data.studentName) rows.push({ label: 'Élève', value: data.studentName });
+      if (data.schoolName) rows.push({ label: 'École', value: data.schoolName });
+      rows.push({ label: 'Moyen de paiement', value: data['operator'] === 'Orange' ? 'Orange Money' : 'Wave' });
+      if (data.senePayTransactionId) {
+        rows.push({ label: 'Référence', value: data.senePayTransactionId });
+      }
+      summaryEl.innerHTML = rows.map(r => `
+        <div class="summary-row">
+          <span class="summary-label">${r.label}</span>
+          <span class="summary-value ${r.big ? 'big' : ''}">${r.value}</span>
+        </div>
+      `).join('');
+      summaryEl.style.display = 'block';
+    }
+
+    function renderActions(data, completed) {
+      const items = [];
+      if (completed) {
+        // URL absolue du PDF — utilisée par WhatsApp pour le partage texte+lien.
+        // On envoie un lien plutôt qu'un fichier : WhatsApp gère mal les fichiers
+        // attachés depuis une web page, mais ouvre parfaitement un lien externe
+        // que le destinataire peut télécharger.
+        const pdfUrl = `${window.location.origin}/pay/${paymentId}/${token}/receipt.pdf`;
+        const waText = encodeURIComponent(
+          `Bonjour, voici le reçu de mon paiement Idara (${fmt(data.amountChargedFcfa)} FCFA). ${pdfUrl}`
+        );
+        items.push(`
+          <a class="btn btn-whatsapp" href="https://wa.me/?text=${waText}" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.2-1.8-.9-2.1-1-.3-.1-.5-.2-.7.2-.2.3-.8 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.3-.5-2.4-1.5-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.6.1-.1.3-.3.4-.5.1-.2.2-.3.3-.5.1-.2 0-.4 0-.5-.1-.2-.7-1.6-.9-2.2-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5 0 1.5 1 2.9 1.2 3.1.1.2 2.1 3.3 5.2 4.6.7.3 1.3.5 1.7.6.7.2 1.4.2 1.9.1.6-.1 1.8-.7 2-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.4Z"/><path d="M20.5 3.5C18.3 1.2 15.3 0 12 0 5.4 0 0 5.4 0 12c0 2.1.5 4.1 1.6 5.9L0 24l6.3-1.6c1.7.9 3.7 1.4 5.7 1.4 6.6 0 12-5.4 12-12 0-3.2-1.3-6.2-3.5-8.3Zm-8.5 18.4c-1.8 0-3.6-.5-5.1-1.4l-.4-.2-3.8 1 1-3.7-.2-.4C2.6 15.7 2 13.9 2 12c0-5.5 4.5-10 10-10s10 4.5 10 10-4.5 9.9-10 9.9Z"/></svg>
+            Partager sur WhatsApp
+          </a>
+        `);
+        items.push(`
+          <a class="btn btn-primary" href="${pdfUrl}?download=true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+            Télécharger le reçu
+          </a>
+        `);
+      }
+      // Bouton retour app (lien web public de l'app — futur Universal Link).
+      items.push(`
+        <a class="btn btn-ghost" href="https://idara.sn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>
+          Retour à Idara
+        </a>
+      `);
+      actionsEl.innerHTML = items.join('');
+      actionsEl.style.display = 'grid';
+    }
+
+    // --- Cas annulation immédiate ---
+    if (initialStatus === 'cancel') {
+      setState(
+        'warning',
+        '⚠️',
+        'Paiement annulé',
+        'Vous avez annulé le paiement. Vous pouvez réessayer depuis l\'application Idara.'
+      );
+      renderActions({}, false);
+    } else {
+      // --- Cas success : poll du statut côté serveur ---
+      let pollCount = 0;
+      const POLL_INTERVAL_MS = 3000;
+      const POLL_MAX_TICKS = 200; // ~10 min — couvre les délais Orange (jusqu'à 15 min réels, on coupe avant)
+
+      async function poll() {
+        pollCount++;
+        try {
+          const res = await fetch(`/pay/${paymentId}/${token}/status`);
+          if (!res.ok) {
+            if (res.status === 404) {
+              setState('error', '❌', 'Paiement introuvable',
+                'Ce lien de paiement n\'est pas valide ou a expiré.');
+              renderActions({}, false);
+              return;
+            }
+            throw new Error('HTTP ' + res.status);
+          }
+          const data = await res.json();
+          const s = (data.status || '').toLowerCase();
+          renderSummary(data);
+
+          if (s === 'completed') {
+            setState('success', '✓',
+              'Paiement confirmé',
+              'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
+            // Affiche le PDF en iframe.
+            pdfFrame.src = `/pay/${paymentId}/${token}/receipt.pdf`;
+            pdfFrame.style.display = 'block';
+            renderActions(data, true);
+            return; // stop polling
+          }
+          if (s === 'failed' || s === 'cancelled' || s === 'expired') {
+            setState('error', '❌',
+              s === 'expired' ? 'Paiement expiré' : 'Paiement échoué',
+              data.failureReason || 'Le paiement n\'a pas pu être traité. Vous pouvez réessayer.');
+            renderActions(data, false);
+            return; // stop polling
+          }
+          // Status pending : continue à poll
+          if (pollCount > POLL_MAX_TICKS) {
+            setState('warning', '⏱',
+              'Paiement en cours de traitement',
+              'La confirmation prend plus de temps que prévu. Le reçu apparaîtra dans votre historique Idara dès que le paiement est confirmé.');
+            renderActions(data, false);
+            return;
+          }
+          setTimeout(poll, POLL_INTERVAL_MS);
+        } catch (e) {
+          // Erreur réseau ponctuelle : continue le poll, jusqu'au timeout.
+          if (pollCount > POLL_MAX_TICKS) {
+            setState('error', '❌', 'Connexion perdue',
+              'Vérifiez votre connexion internet et rechargez la page.');
+            return;
+          }
+          setTimeout(poll, POLL_INTERVAL_MS);
+        }
+      }
+      poll();
+    }
+  </script>
+</body>
+</html>

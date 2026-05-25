@@ -274,9 +274,12 @@ namespace Idara.API.Controllers
         // ===== Phase 1.7 : Paiements parent =====
 
         /// <summary>
-        /// Liste des Invoices d'un de ses enfants. Inclut les non-Cancelled
-        /// par défaut. Tri : DueDate desc (les plus récentes/échues en haut).
-        /// Filtre status optionnel.
+        /// Liste des Invoices d'un de ses enfants. Comportement par défaut :
+        /// ne retourne QUE les invoices encore à payer (Pending + Overdue) —
+        /// les Paid et Cancelled sont exclues pour ne pas polluer l'onglet
+        /// "À payer" côté parent. Le client peut demander explicitement les
+        /// Paid (ou Cancelled) via le query `?status=Paid` s'il veut un
+        /// historique.
         /// </summary>
         [HttpGet("students/{studentId}/invoices")]
         public async Task<ActionResult<IEnumerable<InvoiceDto>>> GetChildInvoices(
@@ -294,7 +297,9 @@ namespace Idara.API.Controllers
             if (status.HasValue)
                 query = query.Where(i => i.Status == status.Value);
             else
-                query = query.Where(i => i.Status != InvoiceStatus.Cancelled);
+                query = query.Where(i =>
+                    i.Status == InvoiceStatus.Pending ||
+                    i.Status == InvoiceStatus.Overdue);
 
             var items = await query
                 .OrderByDescending(i => i.DueDate)
