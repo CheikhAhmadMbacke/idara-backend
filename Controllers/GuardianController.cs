@@ -295,11 +295,22 @@ namespace Idara.API.Controllers
                 .Where(i => i.StudentId == studentId);
 
             if (status.HasValue)
+            {
                 query = query.Where(i => i.Status == status.Value);
+            }
             else
+            {
+                // Defaut "A payer" : Pending + Overdue, MAIS on cache aussi les
+                // invoices essentiellement payees (remaining < 200) — c'est le
+                // minimum SenePay, donc impayable par les voies normales. Sinon
+                // l'invoice apparait en zombie avec "Montant a payer 0 FCFA" et
+                // bloque le UI. Cas typique : facture legacy crediree avec
+                // netAmount (196) au lieu de targetAmount (200) avant gotcha §59.
+                const long senepayMinAmountFcfa = 200;
                 query = query.Where(i =>
-                    i.Status == InvoiceStatus.Pending ||
-                    i.Status == InvoiceStatus.Overdue);
+                    (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
+                    && (i.AmountDueFcfa - i.AmountPaidFcfa) >= senepayMinAmountFcfa);
+            }
 
             var items = await query
                 .OrderByDescending(i => i.DueDate)
