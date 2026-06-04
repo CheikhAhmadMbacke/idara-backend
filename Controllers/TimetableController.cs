@@ -133,7 +133,7 @@ namespace Idara.API.Controllers
             var subOk = await _context.Subjects.AnyAsync(s => s.Id == subjectId && s.SchoolId == schoolId && !s.IsDeleted);
             if (teacherId.HasValue)
             {
-                var tOk = await _context.Users.AnyAsync(u => u.Id == teacherId.Value && u.SchoolId == schoolId && u.Role == UserRoles.Teacher);
+                var tOk = await _context.Users.AnyAsync(u => u.Id == teacherId.Value && u.SchoolId == schoolId && u.Role == UserRoles.Teacher && !u.IsDeleted);
                 if (!tOk) return false;
             }
             return cOk && subOk;

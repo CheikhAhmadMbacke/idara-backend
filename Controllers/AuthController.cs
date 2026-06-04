@@ -319,13 +319,13 @@ namespace Idara.API.Controllers
             school.KycStatus = KycStatus.Validated;
             school.ValidatedAt = DateTime.UtcNow;
             school.ValidatedBy = adminId.Value;
-            foreach (var u in school.Users)
+            foreach (var u in school.Users.Where(u => !u.IsDeleted))
                 u.AccountStatus = AccountStatus.Active;
 
             await _context.SaveChangesAsync();
 
             var adminUser = school.Users
-                .Where(u => u.Role == UserRoles.SchoolAdmin)
+                .Where(u => u.Role == UserRoles.SchoolAdmin && !u.IsDeleted)
                 .OrderBy(u => u.CreatedAt)
                 .FirstOrDefault();
             if (adminUser != null && school.Name != null)
@@ -366,7 +366,7 @@ namespace Idara.API.Controllers
             await _context.SaveChangesAsync();
 
             var adminUser = school.Users
-                .Where(u => u.Role == UserRoles.SchoolAdmin)
+                .Where(u => u.Role == UserRoles.SchoolAdmin && !u.IsDeleted)
                 .OrderBy(u => u.CreatedAt)
                 .FirstOrDefault();
             if (adminUser != null && school.Name != null)
@@ -428,7 +428,7 @@ namespace Idara.API.Controllers
             if (school == null)
                 return NotFound(ApiResponse<bool>.Fail("École non trouvée."));
 
-            foreach (var user in school.Users.Where(u => u.Role != UserRoles.Guardian))
+            foreach (var user in school.Users.Where(u => u.Role != UserRoles.Guardian && !u.IsDeleted))
                 user.AccountStatus = AccountStatus.Suspended;
 
             await _context.SaveChangesAsync();
@@ -448,7 +448,7 @@ namespace Idara.API.Controllers
 
             var newStatus = school.KycStatus == KycStatus.Validated ? AccountStatus.Active : AccountStatus.Inactive;
 
-            foreach (var user in school.Users.Where(u => u.Role != UserRoles.Guardian))
+            foreach (var user in school.Users.Where(u => u.Role != UserRoles.Guardian && !u.IsDeleted))
                 user.AccountStatus = newStatus;
 
             await _context.SaveChangesAsync();
@@ -465,7 +465,8 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
-            var user = await _context.Users.Include(u => u.School).FirstOrDefaultAsync(u => u.Id == userId);
+            var user = await _context.Users.Include(u => u.School)
+                .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
             if (user == null) return Unauthorized();
 
             return Ok(ApiResponse<object>.Ok(new
@@ -498,7 +499,7 @@ namespace Idara.API.Controllers
                 school.Name,
                 school.KycStatus,
                 school.RejectionReason,
-                Users = school.Users.Select(u => new { u.Email, u.Role, u.AccountStatus })
+                Users = school.Users.Where(u => !u.IsDeleted).Select(u => new { u.Email, u.Role, u.AccountStatus })
             }));
         }
 

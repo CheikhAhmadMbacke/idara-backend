@@ -193,7 +193,7 @@ namespace Idara.API.Controllers
 
             // Teacher : affectations + production pédagogique.
             if (await _context.ClassSubjectTeachers.AnyAsync(x => x.TeacherId == userId, ct)) return true;
-            if (await _context.DailyJournalEntries.AnyAsync(x => x.TeacherId == userId, ct)) return true;
+            if (await _context.DailyJournalEntries.AnyAsync(x => x.TeacherId == userId || x.DeletedById == userId, ct)) return true;
             if (await _context.CoranSessions.AnyAsync(x => x.TeacherId == userId, ct)) return true;
             if (await _context.TimetableSlots.AnyAsync(x => x.TeacherId == userId, ct)) return true;
 

@@ -45,7 +45,7 @@ namespace Idara.API.Controllers
             // Vérifier que les entités appartiennent à l'école
             var classExists = await _context.Classes.AnyAsync(c => c.Id == dto.ClassId && c.SchoolId == schoolId && !c.IsDeleted);
             var subjectExists = await _context.Subjects.AnyAsync(s => s.Id == dto.SubjectId && s.SchoolId == schoolId && !s.IsDeleted);
-            var teacher = await _context.Users.FirstOrDefaultAsync(u => u.Id == dto.TeacherId && u.SchoolId == schoolId && u.Role == UserRoles.Teacher);
+            var teacher = await _context.Users.FirstOrDefaultAsync(u => u.Id == dto.TeacherId && u.SchoolId == schoolId && u.Role == UserRoles.Teacher && !u.IsDeleted);
 
             if (!classExists)   return BadRequest(ApiResponse<bool>.Fail("Classe introuvable."));
             if (!subjectExists) return BadRequest(ApiResponse<bool>.Fail("Matière introuvable."));
