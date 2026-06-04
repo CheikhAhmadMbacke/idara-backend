@@ -42,9 +42,14 @@ namespace Idara.API.DTOs.Senepay
         /// paiement RÉUSSI (typiquement Wave). On y met l'URL de notre page
         /// HTML hébergée `/pay/{paymentId}/{token}?status=success` qui poll
         /// le statut + affiche le reçu PDF + bouton Partager WhatsApp.
+        ///
+        /// ⚠️ API Direct = `returnUrl` (PAS `successUrl` qui est le nom de
+        /// l'API Checkout hébergée — cf. gotcha §53/§66). Envoyer `successUrl`
+        /// est silencieusement ignoré → SenePay redirige Wave vers sa page par
+        /// défaut `https://api.sene-pay.com/payment-success`.
         /// </summary>
-        [JsonPropertyName("successUrl")]
-        public string? SuccessUrl { get; set; }
+        [JsonPropertyName("returnUrl")]
+        public string? ReturnUrl { get; set; }
 
         /// <summary>URL absolue en cas d'annulation/échec utilisateur.</summary>
         [JsonPropertyName("cancelUrl")]

@@ -406,7 +406,7 @@ namespace Idara.API.Controllers
                 OrderId = payment.Id.ToString(),
                 CustomerName = customerName,
                 WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                SuccessUrl = $"{resultBase}?status=success",
+                ReturnUrl = $"{resultBase}?status=success",
                 CancelUrl = $"{resultBase}?status=cancel"
             };
         }
