@@ -410,6 +410,81 @@ namespace Idara.API.Controllers
             return Ok(items);
         }
 
+        /// <summary>
+        /// Annule une facture (passe son Status à <see cref="InvoiceStatus.Cancelled"/>).
+        /// SchoolAdmin uniquement.
+        ///
+        /// <para>Ce n'est PAS un soft-delete déguisé : l'index unique du cron de
+        /// génération est filtré sur <c>Status &lt;&gt; Cancelled</c> (gotcha §58),
+        /// donc annuler LIBÈRE la période <c>(StudentId, PeriodStart)</c> — le cron
+        /// recréera une facture neuve au prochain run (ou via le déclenchement
+        /// manuel SuperAdmin). C'est le chemin officiel pour repartir proprement
+        /// sur une mensualité erronée.</para>
+        ///
+        /// <para>⚠️ Annuler NE REMBOURSE RIEN : si la facture a déjà reçu un
+        /// paiement, l'argent reste crédité au wallet école (Payment /
+        /// WalletTransaction sont append-only et indépendants — gotcha §55). On
+        /// bloque donc l'annulation d'une facture déjà (partiellement) payée sauf
+        /// <c>?force=true</c> explicite (correction admin ou test assumé).</para>
+        /// </summary>
+        [HttpPost("invoices/{id}/cancel")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<InvoiceDto>>> CancelInvoice(
+            int id,
+            [FromQuery] bool force,
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var invoice = await _context.Invoices
+                .Include(i => i.Student).ThenInclude(s => s.Class)
+                .FirstOrDefaultAsync(i => i.Id == id && i.SchoolId == schoolId.Value, ct);
+
+            if (invoice == null)
+                return NotFound(ApiResponse<InvoiceDto>.Fail("Facture introuvable."));
+
+            if (invoice.Status == InvoiceStatus.Cancelled)
+                return BadRequest(ApiResponse<InvoiceDto>.Fail("Cette facture est déjà annulée."));
+
+            // Garde-fou : un montant déjà payé = argent réellement encaissé.
+            // L'annulation ne le rembourse pas, on exige un force explicite.
+            if (invoice.AmountPaidFcfa > 0 && !force)
+            {
+                return BadRequest(ApiResponse<InvoiceDto>.Fail(
+                    $"Cette facture a déjà reçu {invoice.AmountPaidFcfa} FCFA. " +
+                    "L'annuler ne rembourse pas ce montant (il reste crédité au wallet école). " +
+                    "Confirmez avec force=true si vous êtes sûr."));
+            }
+
+            invoice.Status = InvoiceStatus.Cancelled;
+            invoice.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[fees] Invoice {InvoiceId} annulée par SchoolAdmin {UserId} (School {SchoolId}, montantPayé={Paid}, force={Force})",
+                invoice.Id, User.GetUserId(), schoolId.Value, invoice.AmountPaidFcfa, force);
+
+            return Ok(ApiResponse<InvoiceDto>.Ok(new InvoiceDto
+            {
+                Id = invoice.Id,
+                SchoolId = invoice.SchoolId,
+                StudentId = invoice.StudentId,
+                StudentFirstName = invoice.Student.FirstName,
+                StudentLastName = invoice.Student.LastName,
+                StudentNumber = invoice.Student.StudentNumber,
+                ClassName = invoice.Student.Class?.Name,
+                PeriodStart = invoice.PeriodStart,
+                PeriodEnd = invoice.PeriodEnd,
+                DueDate = invoice.DueDate,
+                AmountDueFcfa = invoice.AmountDueFcfa,
+                AmountPaidFcfa = invoice.AmountPaidFcfa,
+                Status = invoice.Status,
+                CreatedAt = invoice.CreatedAt,
+                UpdatedAt = invoice.UpdatedAt
+            }, "Facture annulée."));
+        }
+
         // ========================================================
         // ===== Vue école : Wallet + transactions =====
         // ========================================================
