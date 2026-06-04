@@ -24,5 +24,17 @@ namespace Idara.API.Models
         /// Codes ISO 2 lettres : "fr" (défaut) ou "ar".
         /// </summary>
         public string PreferredLanguage { get; set; } = "fr";
+
+        /// <summary>
+        /// Suppression logique. Mis à <c>true</c> lors d'une suppression
+        /// SuperAdmin quand l'utilisateur a un historique (paiements, journaux,
+        /// affectations…) qu'on ne peut pas effacer sans casser l'intégrité
+        /// financière append-only (cf. UsersController.DeleteUser). Un User
+        /// vierge (aucune référence) est supprimé physiquement à la place.
+        /// Quand <c>true</c> : PII scrubées, email anonymisé (libère l'original),
+        /// PasswordHash vidé (login impossible). Exclu des listings et du login.
+        /// </summary>
+        public bool IsDeleted { get; set; } = false;
+        public DateTime? DeletedAt { get; set; }
     }
 }

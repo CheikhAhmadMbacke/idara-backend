@@ -24,7 +24,7 @@ namespace Idara.API.Controllers
             if (schoolId == null) return Unauthorized();
 
             var teachers = await _context.Users
-                .Where(u => u.SchoolId == schoolId.Value && u.Role == UserRoles.Teacher)
+                .Where(u => u.SchoolId == schoolId.Value && u.Role == UserRoles.Teacher && !u.IsDeleted)
                 .OrderBy(u => u.LastName).ThenBy(u => u.FirstName)
                 .Select(u => new UserInfoDto
                 {

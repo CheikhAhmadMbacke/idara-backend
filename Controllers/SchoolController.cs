@@ -75,7 +75,7 @@ namespace Idara.API.Controllers
             var totalStudents = await _context.Students
                 .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted);
             var totalTeachers = await _context.Users
-                .CountAsync(u => u.SchoolId == schoolId.Value && u.Role == UserRoles.Teacher);
+                .CountAsync(u => u.SchoolId == schoolId.Value && u.Role == UserRoles.Teacher && !u.IsDeleted);
             var totalGuardians = await _context.StudentGuardians
                 .Where(sg => sg.Student.SchoolId == schoolId.Value)
                 .Select(sg => sg.GuardianId)
@@ -123,7 +123,7 @@ namespace Idara.API.Controllers
             RepresentativePhone = school.RepresentativePhone ?? string.Empty,
             RepresentativeIdDocumentUrls = school.RepresentativeIdDocumentUrl?
                 .Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
-            Users = school.Users.Select(u => new UserInfoDto
+            Users = school.Users.Where(u => !u.IsDeleted).Select(u => new UserInfoDto
             {
                 Id = u.Id,
                 Email = u.Email,

@@ -172,7 +172,7 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             var user = await _context.Users.Include(u => u.School)
-                .FirstOrDefaultAsync(u => u.Email == request.Email);
+                .FirstOrDefaultAsync(u => u.Email == request.Email && !u.IsDeleted);
 
             if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
                 return Unauthorized(ApiResponse<bool>.Fail("Email ou mot de passe incorrect."));
@@ -604,6 +604,7 @@ namespace Idara.API.Controllers
             var guardian = await _context.Users
                 .Where(u => u.Role == UserRoles.Guardian
                     && u.Email == email
+                    && !u.IsDeleted
                     && _context.StudentGuardians.Any(sg =>
                         sg.GuardianId == u.Id
                         && sg.Student.SchoolId == schoolId.Value
