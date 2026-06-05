@@ -184,6 +184,131 @@ namespace Idara.API.Services
             return parsed;
         }
 
+        public async Task<SenePayPayoutStatusResponse?> GetPayoutStatusAsync(
+            string idOrExternalId,
+            CancellationToken ct = default)
+        {
+            var startedAt = DateTime.UtcNow;
+            var path = $"api/v1/payouts/{Uri.EscapeDataString(idOrExternalId)}";
+
+            _logger.LogInformation("[SenePay] GET /payouts/{Id}", idOrExternalId);
+
+            HttpResponseMessage httpResponse;
+            try
+            {
+                httpResponse = await _http.GetAsync(path, ct);
+            }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "[SenePay] TIMEOUT GET /payouts/{Id}", idOrExternalId);
+                throw new SenePayApiException("Timeout calling SenePay GET /payouts/{id}", null, null, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[SenePay] NETWORK ERROR GET /payouts/{Id}", idOrExternalId);
+                throw new SenePayApiException("Network error calling SenePay GET payout", null, null, ex);
+            }
+
+            var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+            // 404 = décaissement jamais créé (ex. rejet pré-exécution). On
+            // retourne null — l'appelant tranchera (généralement : pas de payout
+            // réel donc on peut restituer, ou rester prudent selon le contexte).
+            if (httpResponse.StatusCode == HttpStatusCode.NotFound)
+            {
+                _logger.LogInformation(
+                    "[SenePay] GET /payouts/{Id} → 404 (introuvable) elapsedMs={Elapsed:0}",
+                    idOrExternalId, elapsedMs);
+                return null;
+            }
+
+            // Tout autre non-2xx (auth, 5xx, timeout côté serveur) = indéterminé :
+            // on lève, l'appelant garde UnderVerification et réessaiera.
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "[SenePay] HTTP {Status} GET /payouts/{Id} elapsedMs={Elapsed:0} body={Body}",
+                    (int)httpResponse.StatusCode, idOrExternalId, elapsedMs, Truncate(responseBody, 500));
+                throw new SenePayApiException(
+                    $"SenePay returned HTTP {(int)httpResponse.StatusCode}",
+                    (int)httpResponse.StatusCode,
+                    responseBody);
+            }
+
+            SenePayPayoutStatusResponse? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<SenePayPayoutStatusResponse>(responseBody, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex,
+                    "[SenePay] GET /payouts/{Id} body 200 mais JSON inattendu : {Body}",
+                    idOrExternalId, Truncate(responseBody, 500));
+                throw new SenePayApiException("Malformed SenePay payout status response", 200, responseBody, ex);
+            }
+
+            if (parsed == null)
+            {
+                _logger.LogError(
+                    "[SenePay] GET /payouts/{Id} body 200 mais null après parsing : {Body}",
+                    idOrExternalId, Truncate(responseBody, 500));
+                throw new SenePayApiException("Empty SenePay payout status response", 200, responseBody);
+            }
+
+            _logger.LogInformation(
+                "[SenePay] OK GET /payouts/{Id} status={Status} disbursementId={DisbId} elapsedMs={Elapsed:0}",
+                idOrExternalId, parsed.Status, parsed.DisbursementId, elapsedMs);
+
+            return parsed;
+        }
+
+        public async Task<SenePayMerchantBalanceResponse> GetMerchantBalanceAsync(
+            CancellationToken ct = default)
+        {
+            var startedAt = DateTime.UtcNow;
+
+            HttpResponseMessage httpResponse;
+            try
+            {
+                httpResponse = await _http.GetAsync("api/v1/merchant/wallet/balance", ct);
+            }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "[SenePay] TIMEOUT GET /merchant/wallet/balance");
+                throw new SenePayApiException("Timeout calling SenePay merchant balance", null, null, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[SenePay] NETWORK ERROR GET /merchant/wallet/balance");
+                throw new SenePayApiException("Network error calling SenePay merchant balance", null, null, ex);
+            }
+
+            var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "[SenePay] HTTP {Status} GET /merchant/wallet/balance elapsedMs={Elapsed:0} body={Body}",
+                    (int)httpResponse.StatusCode, elapsedMs, Truncate(responseBody, 500));
+                throw new SenePayApiException(
+                    $"SenePay returned HTTP {(int)httpResponse.StatusCode}",
+                    (int)httpResponse.StatusCode,
+                    responseBody);
+            }
+
+            var parsed = JsonSerializer.Deserialize<SenePayMerchantBalanceResponse>(responseBody, JsonOptions)
+                ?? throw new SenePayApiException("Empty SenePay merchant balance response", 200, responseBody);
+
+            _logger.LogInformation(
+                "[SenePay] OK GET /merchant/wallet/balance reserve={Reserve} elapsedMs={Elapsed:0}",
+                parsed.ReserveBalanceFcfa, elapsedMs);
+
+            return parsed;
+        }
+
         private static string MaskPhone(string phone)
         {
             if (string.IsNullOrEmpty(phone) || phone.Length < 4) return "***";

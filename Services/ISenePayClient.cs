@@ -28,11 +28,39 @@ namespace Idara.API.Services
         /// </summary>
         /// <exception cref="SenePayApiException">
         /// Lancée si SenePay retourne une vraie 4xx/5xx (auth, montant invalide,
-        /// solde marchand insuffisant...). L'appelant doit alors restituer la
-        /// réservation wallet (le payout n'a pas démarré).
+        /// solde marchand insuffisant, timeout...). L'appelant branche sur
+        /// <see cref="SenePayApiException.StatusCode"/> : un 4xx (hors duplicate)
+        /// = rejet pré-exécution sûr à restituer ; un 5xx/timeout = indéterminé
+        /// → passer le retrait en UnderVerification (ne PAS restituer).
         /// </exception>
         Task<SenePayPayoutResponse> InitiatePayoutAsync(
             SenePayPayoutRequest request,
+            CancellationToken ct = default);
+
+        /// <summary>
+        /// `GET /api/v1/payouts/{id}` — état **autoritatif** d'un décaissement.
+        /// <paramref name="idOrExternalId"/> accepte le disbursement_id (DISB_…)
+        /// OU notre external_id (= Withdrawal.Id). Source de vérité pour trancher
+        /// un retrait resté en UnderVerification.
+        /// </summary>
+        /// <returns>
+        /// La réponse parsée ; <c>null</c> si SenePay répond 404 (décaissement
+        /// jamais créé — ex. après un rejet pré-exécution).
+        /// </returns>
+        /// <exception cref="SenePayApiException">
+        /// Lancée sur timeout / 5xx / réseau : l'appelant garde UnderVerification
+        /// et réessaiera au prochain back-off (jamais de restitution sur ambigu).
+        /// </exception>
+        Task<SenePayPayoutStatusResponse?> GetPayoutStatusAsync(
+            string idOrExternalId,
+            CancellationToken ct = default);
+
+        /// <summary>
+        /// `GET /api/v1/merchant/wallet/balance` — solde réserve du compte
+        /// marchand Idara. Utilisé par le job de réconciliation quotidien.
+        /// </summary>
+        /// <exception cref="SenePayApiException">Lancée sur 4xx/5xx/timeout.</exception>
+        Task<SenePayMerchantBalanceResponse> GetMerchantBalanceAsync(
             CancellationToken ct = default);
     }
 }

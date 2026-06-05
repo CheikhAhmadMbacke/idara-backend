@@ -30,6 +30,7 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly SenePaySettings _senepay;
         private readonly IReceiptPdfService _receiptPdf;
+        private readonly IPayoutSettlementService _settlement;
         private readonly ILogger<WebhooksController> _logger;
 
         // Constantes du provider — figées dans le code pour empêcher une typo
@@ -48,11 +49,13 @@ namespace Idara.API.Controllers
             AppDbContext context,
             IOptions<SenePaySettings> senepay,
             IReceiptPdfService receiptPdf,
+            IPayoutSettlementService settlement,
             ILogger<WebhooksController> logger)
         {
             _context = context;
             _senepay = senepay.Value;
             _receiptPdf = receiptPdf;
+            _settlement = settlement;
             _logger = logger;
         }
 
@@ -380,12 +383,15 @@ namespace Idara.API.Controllers
             string? processingError = null;
             try
             {
-                await using var tx = await _context.Database.BeginTransactionAsync();
+                // Le IPayoutSettlementService gère sa PROPRE transaction (verrou
+                // pessimiste wallet) — on n'en ouvre donc PAS ici, sinon Npgsql
+                // lèverait sur une transaction imbriquée. L'idempotence du webhook
+                // est déjà garantie par l'INSERT unique WebhookEvent ci-dessus, et
+                // celle du règlement par les gardes de statut dans le service.
                 await ProcessPayoutPayloadAsync(payload);
                 ev.ProcessedAt = DateTime.UtcNow;
                 ev.Status = WebhookEventStatus.Processed;
                 await _context.SaveChangesAsync();
-                await tx.CommitAsync();
             }
             catch (Exception ex)
             {
@@ -562,8 +568,9 @@ namespace Idara.API.Controllers
 
         /// <summary>
         /// Clôt un retrait depuis le webhook payout. external_id = Withdrawal.Id.
-        /// completed → débit définitif du Pending. failed → restitution Pending
-        /// → Available + transaction Release.
+        /// Délègue à <see cref="IPayoutSettlementService"/> (verrou pessimiste,
+        /// idempotence, et webhook CORRECTEUR : un `completed` arrivant sur un
+        /// retrait déjà Failed annule la restitution au lieu d'être ignoré).
         /// </summary>
         private async Task ProcessPayoutPayloadAsync(SenePayPayoutWebhookPayload payload)
         {
@@ -573,74 +580,34 @@ namespace Idara.API.Controllers
                     $"external_id '{payload.ExternalId}' non parsable en Withdrawal.Id");
             }
 
-            var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId)
-                ?? throw new InvalidOperationException(
-                    $"Withdrawal.Id={withdrawalId} introuvable pour ce webhook payout");
-
-            // Idempotence métier : si le retrait n'est plus Initiated, on ne
-            // rejoue rien (webhook tardif / doublon logique / déjà restitué à
-            // l'init suite à un rejet SenePay synchrone).
-            if (withdrawal.Status != WithdrawalStatus.Initiated)
-            {
-                _logger.LogInformation(
-                    "[webhook/payout] Withdrawal.Id={Id} déjà en statut {Status}, webhook ignoré",
-                    withdrawal.Id, withdrawal.Status);
-                return;
-            }
-
-            // Verrou pessimiste : sérialise vs un retrait/restitution concurrent
-            // sur le même wallet (cf. WalletLockExtensions).
-            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId)
-                ?? throw new InvalidOperationException(
-                    $"SchoolWallet manquant pour SchoolId={withdrawal.SchoolId}");
-
             var statusLower = payload.Status?.ToLowerInvariant();
-            withdrawal.SenePayDisbursementId ??= payload.DisbursementId;
 
-            if (statusLower == "completed")
+            switch (statusLower)
             {
-                // Débit définitif : la réservation (Available -= X faite à
-                // l'init) devient permanente. On vide juste le Pending — pas de
-                // nouvelle WalletTransaction car AvailableBalance NE bouge PAS
-                // (la somme des transactions doit rester == AvailableBalance,
-                // cf. gotcha §55). La transaction Reservation portait déjà le -X.
-                withdrawal.Status = WithdrawalStatus.Completed;
-                withdrawal.CompletedAt = payload.CompletedAt?.ToUtcSafe()
-                    ?? payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                withdrawal.FeesFcfa = (long)Math.Round(payload.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero);
-                withdrawal.NetReceivedFcfa = (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero);
+                case "completed":
+                    await _settlement.SettleCompletedAsync(
+                        withdrawalId, payload.DisbursementId,
+                        (long)Math.Round(payload.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero),
+                        (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero),
+                        payload.CompletedAt ?? payload.Timestamp, "webhook");
+                    break;
 
-                wallet.PendingBalance -= withdrawal.AmountFcfa;
-                wallet.TotalWithdrawnLifetime += withdrawal.AmountFcfa;
-                wallet.UpdatedAt = DateTime.UtcNow;
-            }
-            else if (statusLower == "failed")
-            {
-                // Restitution : Pending → Available + transaction Release.
-                withdrawal.Status = WithdrawalStatus.Failed;
-                withdrawal.FailedAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                withdrawal.FailureReason = payload.ErrorMessage ?? payload.ErrorCode ?? "failed";
+                case "failed":
+                case "cancelled":
+                    await _settlement.SettleFailedAsync(
+                        withdrawalId,
+                        payload.ErrorMessage ?? payload.ErrorCode ?? statusLower,
+                        payload.DisbursementId, payload.Timestamp, "webhook");
+                    break;
 
-                wallet.PendingBalance -= withdrawal.AmountFcfa;
-                wallet.AvailableBalance += withdrawal.AmountFcfa;
-                wallet.UpdatedAt = DateTime.UtcNow;
-
-                _context.WalletTransactions.Add(new WalletTransaction
-                {
-                    SchoolId = withdrawal.SchoolId,
-                    Type = WalletTransactionType.Release,
-                    AmountFcfa = withdrawal.AmountFcfa, // release = signé positif
-                    BalanceAfter = wallet.AvailableBalance,
-                    RelatedEntity = WalletRelatedEntity.Withdrawal,
-                    RelatedId = withdrawal.Id,
-                    Note = $"Restitution retrait #{withdrawal.Id} (échec opérateur)",
-                    OccurredAt = DateTime.UtcNow
-                });
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Statut payout inattendu '{payload.Status}' (event={payload.Event}) pour Withdrawal.Id={withdrawal.Id}");
+                default:
+                    // Webhook avec un statut NON terminal (inhabituel — SenePay
+                    // envoie normalement completed/failed). On ne touche pas aux
+                    // fonds : le PayoutVerificationJob tranchera via GET status.
+                    _logger.LogInformation(
+                        "[webhook/payout] Withdrawal.Id={Id} statut non terminal '{Status}' (event={Event}) — ignoré, le poll tranchera",
+                        withdrawalId, payload.Status, payload.Event);
+                    break;
             }
         }
 

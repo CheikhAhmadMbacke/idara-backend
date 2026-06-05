@@ -41,6 +41,7 @@ namespace Idara.API.Data
         public DbSet<TransferBeneficiary> TransferBeneficiaries { get; set; }
         public DbSet<WebhookEvent> WebhookEvents { get; set; }
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
+        public DbSet<PayoutAlert> PayoutAlerts { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -547,6 +548,21 @@ namespace Idara.API.Data
             modelBuilder.Entity<WebhookEvent>()
                 .Property(w => w.Payload)
                 .HasColumnType("jsonb");
+
+            // --- PayoutAlert (anomalies de décaissement, append-only) ---
+            // Détails structurés en jsonb (montants, ids SenePay…) pour debug.
+            modelBuilder.Entity<PayoutAlert>()
+                .Property(a => a.Details)
+                .HasColumnType("jsonb");
+
+            // Vue dashboard SuperAdmin : alertes non résolues, récentes d'abord.
+            modelBuilder.Entity<PayoutAlert>()
+                .HasIndex(a => new { a.Resolved, a.CreatedAt });
+
+            // Lookup "alertes d'un retrait donné" (dont la garde anti-spam
+            // StuckUnderVerification dans PayoutVerificationJob).
+            modelBuilder.Entity<PayoutAlert>()
+                .HasIndex(a => a.WithdrawalId);
         }
     }
 }

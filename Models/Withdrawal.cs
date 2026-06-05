@@ -66,6 +66,30 @@ namespace Idara.API.Models
 
         public string? FailureReason { get; set; }
 
+        // --- Suivi de la vérification d'état (statut UnderVerification) ---
+        // Quand l'issue du payout est indéterminée (timeout/5xx du POST, ou
+        // statut non terminal), on garde les fonds réservés et on interroge
+        // GET /payouts/{id} (autoritatif) avec back-off jusqu'à un état terminal.
+
+        /// <summary>Nombre de tentatives de poll GET /payouts/{id} déjà effectuées.</summary>
+        public int VerificationAttempts { get; set; }
+
+        /// <summary>Premier passage en UnderVerification (sert au seuil StuckUnderVerification 48h).</summary>
+        public DateTime? VerificationStartedAt { get; set; }
+
+        /// <summary>Prochain poll dû (back-off : 30s → 1min → 5min → 15min → cap 1h).</summary>
+        public DateTime? NextVerificationAt { get; set; }
+
+        /// <summary>Dernier poll GET status effectué (terminal ou non).</summary>
+        public DateTime? LastCheckedAt { get; set; }
+
+        /// <summary>
+        /// Horodatage d'un re-débit correcteur : un `completed` est arrivé après
+        /// qu'on ait restitué et marqué Failed → on a annulé la restitution
+        /// (scénario S3 / point D du durcissement). null = pas de correction.
+        /// </summary>
+        public DateTime? ReversedAt { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
         public DateTime? FailedAt { get; set; }

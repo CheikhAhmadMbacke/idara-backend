@@ -101,6 +101,9 @@ builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
+// Source unique des transitions de solde wallet liées aux payouts (verrou
+// pessimiste, idempotence, webhook correcteur anti double dépense).
+builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
 builder.Services.AddScoped<DbInitializer>();
 
 // ---------- Cron / background jobs ----------
@@ -110,6 +113,17 @@ builder.Services.AddScoped<DbInitializer>();
 // endpoint admin de déclencher RunOnceAsync manuellement pour rejouer un jour.
 builder.Services.AddSingleton<MonthlyInvoiceGenerationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MonthlyInvoiceGenerationJob>());
+
+// Vérifie en continu (~60s) les retraits restés en UnderVerification (issue
+// indéterminée) via GET /payouts/{id} autoritatif, avec back-off. Anti double
+// dépense : ne restitue jamais sur un état ambigu.
+builder.Services.AddSingleton<PayoutVerificationJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutVerificationJob>());
+
+// Réconciliation quotidienne (02:30 UTC) : invariant réserve marchand ≈
+// Σ(wallets) + backstop de re-poll. Dépend du PayoutVerificationJob (singleton).
+builder.Services.AddSingleton<PayoutReconciliationJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliationJob>());
 
 // ---------- SenePay (HttpClient typé) ----------
 builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>

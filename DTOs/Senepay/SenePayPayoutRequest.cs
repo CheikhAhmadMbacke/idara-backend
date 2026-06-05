@@ -11,8 +11,13 @@ namespace Idara.API.DTOs.Senepay
     /// </summary>
     public class SenePayPayoutRequest
     {
-        /// <summary>Idempotence : notre Withdrawal.Id sérialisé. Un 2e appel avec
-        /// le même external_id renvoie DUPLICATE_EXTERNAL_ID.</summary>
+        /// <summary>
+        /// Idempotence : notre Withdrawal.Id sérialisé. Depuis le durcissement
+        /// SenePay, l'external_id est **idempotent en replay** : un 2e POST avec
+        /// le même external_id renvoie HTTP 200 + le décaissement existant (plus
+        /// de 400 DUPLICATE_EXTERNAL_ID). On peut donc rejouer un POST après un
+        /// timeout sans risque de double décaissement — on récupère l'état réel.
+        /// </summary>
         [JsonPropertyName("external_id")]
         public string ExternalId { get; set; } = string.Empty;
 

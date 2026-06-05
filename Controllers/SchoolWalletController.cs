@@ -33,6 +33,7 @@ namespace Idara.API.Controllers
         private readonly ISenePayClient _senepay;
         private readonly SenePaySettings _senepaySettings;
         private readonly IOtpService _otp;
+        private readonly IPayoutSettlementService _settlement;
         private readonly ILogger<SchoolWalletController> _logger;
 
         // Montant minimum de retrait et frais payout (%) ne sont plus codés en
@@ -43,12 +44,14 @@ namespace Idara.API.Controllers
             ISenePayClient senepay,
             IOptions<SenePaySettings> senepaySettings,
             IOtpService otp,
+            IPayoutSettlementService settlement,
             ILogger<SchoolWalletController> logger)
         {
             _context = context;
             _senepay = senepay;
             _senepaySettings = senepaySettings.Value;
             _otp = otp;
+            _settlement = settlement;
             _logger = logger;
         }
 
@@ -231,25 +234,48 @@ namespace Idara.API.Controllers
             }
             catch (SenePayApiException ex)
             {
-                // Le payout n'a pas démarré côté SenePay → on restitue la
-                // réservation et on marque le retrait Failed. Aucun webhook ne
-                // viendra (SenePay a rejeté avant traitement).
-                await ReleaseReservationAsync(withdrawal.Id, schoolId.Value, dto.Amount,
-                    ex.ResponseBody ?? ex.Message, ct);
-                _logger.LogError(ex,
-                    "[withdraw] Échec appel SenePay payout pour Withdrawal {Id} — réservation restituée", withdrawal.Id);
-                return StatusCode(502, ApiResponse<WithdrawalDto>.Fail(
-                    "Le retrait n'a pas pu être lancé auprès de l'opérateur. Votre solde a été restitué. Réessayez plus tard."));
+                // DURCISSEMENT ANTI DOUBLE DÉPENSE : un timeout/5xx ne signifie PAS
+                // que le décaissement a échoué — il peut être sorti côté
+                // AfribaPay/opérateur. On ne restitue QUE sur un rejet 4xx clair
+                // (validation pré-exécution, aucun fonds sorti).
+                var isDuplicate = (ex.ResponseBody ?? string.Empty)
+                    .Contains("DUPLICATE_EXTERNAL_ID", StringComparison.OrdinalIgnoreCase);
+
+                if (ex.StatusCode is >= 400 and < 500 && !isDuplicate)
+                {
+                    // Rejet pré-exécution (numéro/opérateur invalide, solde
+                    // marchand insuffisant…) → restitution immédiate + feedback.
+                    await _settlement.SettleFailedAsync(
+                        withdrawal.Id, ex.ResponseBody ?? ex.Message, null, null, "sync-init", ct);
+                    _logger.LogWarning(ex,
+                        "[withdraw] SenePay {Status} (rejet pré-exécution) Withdrawal {Id} — réservation restituée",
+                        ex.StatusCode, withdrawal.Id);
+                    return BadRequest(ApiResponse<WithdrawalDto>.Fail(
+                        "Le retrait a été refusé (coordonnées ou solde). Votre solde a été restitué."));
+                }
+
+                // 5xx / timeout / réseau / duplicate = INDÉTERMINÉ → on garde les
+                // fonds réservés (UnderVerification) et le PayoutVerificationJob
+                // interrogera GET /payouts/{id} (autoritatif) jusqu'à résolution.
+                await _settlement.MarkUnderVerificationAsync(
+                    withdrawal.Id, null, ex.Message, "sync-init", ct);
+                await _context.Entry(withdrawal).ReloadAsync(ct);
+                _logger.LogWarning(ex,
+                    "[withdraw] SenePay indéterminé (status={Status}) Withdrawal {Id} — passé en vérification",
+                    ex.StatusCode, withdrawal.Id);
+                return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
+                    "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
             }
 
             var statusLower = resp.Status?.ToLowerInvariant();
 
-            // Rejet synchrone (200 mais success=false / status failed|cancelled) :
-            // même traitement — restitution + Failed.
-            if (!resp.Success || statusLower == "failed" || statusLower == "cancelled")
+            // Rejet TERMINAL explicite (failed/cancelled) : aucun fonds sorti →
+            // restitution + Failed.
+            if (statusLower is "failed" or "cancelled")
             {
-                await ReleaseReservationAsync(withdrawal.Id, schoolId.Value, dto.Amount,
-                    resp.ErrorCode ?? resp.Message ?? resp.Status ?? "rejected", ct);
+                await _settlement.SettleFailedAsync(
+                    withdrawal.Id, resp.ErrorCode ?? resp.Message ?? statusLower,
+                    resp.DisbursementId, null, "sync-init", ct);
                 _logger.LogWarning(
                     "[withdraw] SenePay a rejeté le payout Withdrawal {Id} (status={Status}) — réservation restituée",
                     withdrawal.Id, resp.Status);
@@ -257,37 +283,37 @@ namespace Idara.API.Controllers
                     "Le retrait a été refusé par l'opérateur. Votre solde a été restitué."));
             }
 
-            // Succès SYNCHRONE immédiat (rare pour mobile money, mais possible — et
-            // SenePay n'enverrait alors peut-être pas de webhook séparé) : on clôt
-            // tout de suite. Idempotent vis-à-vis d'un webhook éventuel (qui verra
-            // Status != Initiated). Sans ça : Withdrawal bloqué en Initiated +
-            // Pending fantôme permanent (cf. revue Phase 3, M2).
+            // Succès SYNCHRONE (défensif — depuis le durcissement SenePay, le POST
+            // ne renvoie plus `completed` synchrone en prod, mais on le gère par
+            // sécurité si SenePay n'envoyait pas de webhook séparé).
             if (statusLower == "completed")
             {
                 var fees = (long)Math.Round(resp.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero);
                 var net = (long)Math.Round(resp.NetAmount, MidpointRounding.AwayFromZero);
-                await FinalizeCompletedAsync(withdrawal.Id, schoolId.Value, dto.Amount,
-                    resp.DisbursementId, fees, net, ct);
+                await _settlement.SettleCompletedAsync(
+                    withdrawal.Id, resp.DisbursementId, fees, net, null, "sync-init", ct);
+                await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogInformation(
                     "[withdraw] Withdrawal {Id} complété SYNCHRONE (School {SchoolId}, {Amount} FCFA)",
                     withdrawal.Id, schoolId.Value, dto.Amount);
                 return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal), "Retrait effectué."));
             }
 
-            // Sinon (pending/processing/submitted) : on pose juste le disbursement_id
-            // via un UPDATE ciblé (ExecuteUpdate, change tracker ignoré) gardé par
-            // Status=Initiated pour ne pas écraser une clôture concurrente d'un
-            // webhook ultra-rapide. Puis on attend le webhook final.
-            await _context.Withdrawals
-                .Where(w => w.Id == withdrawal.Id && w.Status == WithdrawalStatus.Initiated)
-                .ExecuteUpdateAsync(s => s.SetProperty(w => w.SenePayDisbursementId, resp.DisbursementId), ct);
+            // Tout le reste — submitted / processing / pending / pending_approval /
+            // pending_verification / inconnu / success=false-sans-statut-terminal :
+            // INDÉTERMINÉ. On garde les fonds réservés et on poll. C'est désormais
+            // le chemin nominal (submitted = opérateur a accepté, confirmation à venir).
+            await _settlement.MarkUnderVerificationAsync(
+                withdrawal.Id, resp.DisbursementId,
+                $"status={resp.Status} success={resp.Success}", "sync-init", ct);
+            await _context.Entry(withdrawal).ReloadAsync(ct);
 
             _logger.LogInformation(
-                "[withdraw] Withdrawal {Id} initié (School {SchoolId}, {Amount} FCFA, sepay={Sepay}, disbId={DisbId}, status={Status})",
+                "[withdraw] Withdrawal {Id} en vérification (School {SchoolId}, {Amount} FCFA, sepay={Sepay}, disbId={DisbId}, status={Status})",
                 withdrawal.Id, schoolId.Value, dto.Amount, sepayAmount, resp.DisbursementId, resp.Status);
 
             return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
-                "Retrait initié. Vous serez notifié une fois les fonds envoyés."));
+                "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
         }
 
         /// <summary>
@@ -316,80 +342,6 @@ namespace Idara.API.Controllers
         // ====================================================================
         // ===== Helpers =====
         // ====================================================================
-
-        /// <summary>
-        /// Restitue une réservation : Pending → Available + transaction Release +
-        /// Withdrawal.Status = Failed. Utilisé quand le payout n'a pas pu
-        /// démarrer (échec/refus SenePay à l'init). Transaction PG atomique.
-        /// </summary>
-        private async Task ReleaseReservationAsync(
-            int withdrawalId, int schoolId, long amount, string reason, CancellationToken ct)
-        {
-            await using var tx = await _context.Database.BeginTransactionAsync(ct);
-
-            // Verrou pessimiste sur le wallet (sérialise vs un éventuel webhook).
-            var wallet = await _context.LockWalletAsync(schoolId, ct);
-            var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId, ct);
-            if (wallet == null || withdrawal == null) return;
-
-            // Idempotence : ne restituer que si encore réservé (Initiated).
-            if (withdrawal.Status != WithdrawalStatus.Initiated) return;
-
-            wallet.PendingBalance -= amount;
-            wallet.AvailableBalance += amount;
-            wallet.UpdatedAt = DateTime.UtcNow;
-
-            withdrawal.Status = WithdrawalStatus.Failed;
-            withdrawal.FailedAt = DateTime.UtcNow;
-            withdrawal.FailureReason = Truncate(reason, 480);
-
-            _context.WalletTransactions.Add(new WalletTransaction
-            {
-                SchoolId = schoolId,
-                Type = WalletTransactionType.Release,
-                AmountFcfa = amount, // release = signé positif
-                BalanceAfter = wallet.AvailableBalance,
-                RelatedEntity = WalletRelatedEntity.Withdrawal,
-                RelatedId = withdrawalId,
-                Note = $"Restitution retrait #{withdrawalId} (échec init)",
-                OccurredAt = DateTime.UtcNow
-            });
-
-            await _context.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
-
-        /// <summary>
-        /// Clôt un retrait completed (cas synchrone à l'init) : débit définitif
-        /// du Pending + TotalWithdrawn. Pas de WalletTransaction (Available ne
-        /// bouge pas — la réservation portait déjà le -X, cf. gotcha §55).
-        /// Verrou pessimiste + garde Status=Initiated pour rester idempotent vis
-        /// d'un éventuel webhook completed qui arriverait ensuite.
-        /// </summary>
-        private async Task FinalizeCompletedAsync(
-            int withdrawalId, int schoolId, long amount,
-            string? disbursementId, long fees, long netReceived, CancellationToken ct)
-        {
-            await using var tx = await _context.Database.BeginTransactionAsync(ct);
-
-            var wallet = await _context.LockWalletAsync(schoolId, ct);
-            var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId, ct);
-            if (wallet == null || withdrawal == null) return;
-            if (withdrawal.Status != WithdrawalStatus.Initiated) return;
-
-            withdrawal.Status = WithdrawalStatus.Completed;
-            withdrawal.CompletedAt = DateTime.UtcNow;
-            withdrawal.FeesFcfa = fees;
-            withdrawal.NetReceivedFcfa = netReceived;
-            withdrawal.SenePayDisbursementId ??= disbursementId;
-
-            wallet.PendingBalance -= amount;
-            wallet.TotalWithdrawnLifetime += amount;
-            wallet.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
 
         private static WithdrawalDto MapToDto(Withdrawal w) => new()
         {
@@ -427,12 +379,6 @@ namespace Idara.API.Controllers
             var at = email.IndexOf('@');
             if (at <= 1) return "***" + (at >= 0 ? email[at..] : "");
             return email[0] + new string('*', Math.Min(at - 1, 6)) + email[at..];
-        }
-
-        private static string Truncate(string s, int max)
-        {
-            if (string.IsNullOrEmpty(s)) return string.Empty;
-            return s.Length <= max ? s : s[..max];
         }
     }
 }

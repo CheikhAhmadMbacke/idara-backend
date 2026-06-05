@@ -3,9 +3,17 @@ using System.Text.Json.Serialization;
 namespace Idara.API.DTOs.Senepay
 {
     /// <summary>
-    /// Réponse de `POST /api/v1/payouts`. `status` toujours en minuscules
-    /// (pending / pending_approval / processing / submitted / completed /
-    /// failed / cancelled). Les frais sont nichés dans un objet `fees`.
+    /// Réponse de `POST /api/v1/payouts`. `status` toujours en minuscules.
+    ///
+    /// ⚠️ Depuis le durcissement SenePay : le POST **ne renvoie plus `completed`
+    /// de façon synchrone** en prod. Il renvoie `submitted` (ordre transmis) ou
+    /// `pending_verification` (issue indéterminée : timeout/erreur transport
+    /// SenePay↔AfribaPay — les fonds peuvent être sortis ou non). Le statut
+    /// TERMINAL (`completed` / `failed` / `cancelled`) arrive par webhook ou via
+    /// `GET /payouts/{id}` (autoritatif). On ne restitue JAMAIS sur un statut non
+    /// terminal — on passe le Withdrawal en UnderVerification et on poll le GET.
+    ///
+    /// Les frais sont nichés dans un objet `fees`.
     /// </summary>
     public class SenePayPayoutResponse
     {
