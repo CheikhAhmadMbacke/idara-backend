@@ -342,6 +342,37 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<UserDeletionResultDto>.Fail(
                     "Cet utilisateur n'appartient pas à votre école."));
 
+            // Cloisonnement multi-tenant : si le parent est AUSSI lié à des élèves
+            // d'une AUTRE école, on ne touche PAS au compte global (le service
+            // hybride retirerait tous ses liens + anonymiserait le compte, ce qui
+            // affecterait l'autre école). On se contente de le dissocier de NOS
+            // élèves. Le SuperAdmin, lui, garde l'autorité globale (UsersController).
+            if (user.Role == UserRoles.Guardian)
+            {
+                var hasOtherSchoolLinks = await _context.StudentGuardians.AnyAsync(
+                    sg => sg.GuardianId == userId && sg.Student.SchoolId != schoolId.Value, ct);
+                if (hasOtherSchoolLinks)
+                {
+                    var myLinks = _context.StudentGuardians.Where(
+                        sg => sg.GuardianId == userId && sg.Student.SchoolId == schoolId.Value);
+                    _context.StudentGuardians.RemoveRange(myLinks);
+                    await _context.SaveChangesAsync(ct);
+
+                    _logger.LogInformation(
+                        "[school] Parent {UserId} retiré de l'école {SchoolId} par dissociation (lié à une autre école, compte conservé)",
+                        userId, schoolId);
+
+                    return Ok(ApiResponse<UserDeletionResultDto>.Ok(
+                        new UserDeletionResultDto
+                        {
+                            UserId = userId,
+                            Action = "Unlinked",
+                            Message = "Parent retiré de votre école (compte conservé car lié à une autre école)."
+                        },
+                        "Parent retiré de votre école (compte conservé car lié à une autre école)."));
+                }
+            }
+
             var result = await _userDeletion.DeleteOrAnonymizeAsync(user, currentUserId.Value, ct);
             _logger.LogInformation(
                 "[school] User {UserId} ({Role}) retiré de l'école {SchoolId} par SchoolAdmin {AdminId} → {Action}",
