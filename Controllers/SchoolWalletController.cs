@@ -137,7 +137,13 @@ namespace Idara.API.Controllers
 
             // Montant majoré envoyé à SenePay pour que le bénéficiaire reçoive
             // exactement dto.Amount après les frais opérateur (PayoutFeePercent).
-            var sepayAmount = (long)Math.Ceiling(dto.Amount / (1 - platform.PayoutFeeRate));
+            // Garde-fou : un taux >= 1 (mal configuré) provoquerait une division
+            // par zéro / un overflow → on retombe sur le montant brut sans
+            // majoration plutôt que de crasher (le DTO borne déjà à 95 %).
+            var payoutRate = platform.PayoutFeeRate;
+            var sepayAmount = payoutRate < 1.0
+                ? (long)Math.Ceiling(dto.Amount / (1 - payoutRate))
+                : dto.Amount;
 
             var withdrawal = new Withdrawal
             {

@@ -25,9 +25,10 @@ namespace Idara.API.Common.Extensions
             {
                 await db.SaveChangesAsync(ct);
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex) when (
+                ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
             {
-                // Concurrence : créé entre-temps par une autre requête.
+                // Concurrence : créé entre-temps par une autre requête (unique 23505).
                 db.Entry(settings).State = EntityState.Detached;
                 settings = await db.PlatformSettings
                     .FirstAsync(x => x.Id == Models.PlatformSettings.SingletonId, ct);

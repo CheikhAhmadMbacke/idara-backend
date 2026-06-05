@@ -68,11 +68,14 @@ namespace Idara.API.Common.Extensions
             {
                 await db.SaveChangesAsync(ct);
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex) when (
+                ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
             {
                 // Concurrence : une autre requête a créé les fondations entre
-                // nos AnyAsync et le SaveChanges. Les lignes existent désormais,
-                // on détache nos doublons en attente et on continue sans erreur.
+                // nos AnyAsync et le SaveChanges (violation unique 23505). Les
+                // lignes existent désormais, on détache nos doublons en attente
+                // et on continue sans erreur. Toute autre DbUpdateException
+                // (vraie erreur DB) remonte normalement.
                 foreach (var entry in db.ChangeTracker.Entries<SchoolPaymentSettings>()
                              .Where(e => e.State == EntityState.Added).ToList())
                     entry.State = EntityState.Detached;

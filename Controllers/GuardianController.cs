@@ -240,15 +240,15 @@ namespace Idara.API.Controllers
         {
             if (!await IsLinked(studentId)) return Forbid();
 
-            var classId = await _context.Students
+            var student = await _context.Students
                 .Where(s => s.Id == studentId)
-                .Select(s => s.ClassId)
+                .Select(s => new { s.ClassId, s.SchoolId })
                 .FirstOrDefaultAsync();
-            if (classId == null) return Ok(Array.Empty<TimetableSlotDto>());
+            if (student?.ClassId == null) return Ok(Array.Empty<TimetableSlotDto>());
 
             var items = await _context.TimetableSlots
                 .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
-                .Where(t => t.ClassId == classId.Value)
+                .Where(t => t.ClassId == student.ClassId.Value && t.SchoolId == student.SchoolId)
                 .OrderBy(t => t.DayOfWeek).ThenBy(t => t.StartTime)
                 .ToListAsync();
 

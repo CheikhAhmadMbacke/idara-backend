@@ -24,7 +24,10 @@ namespace Idara.API.DTOs.Platform
         [Range(0, 100, ErrorMessage = "La majoration parent (%) doit être entre 0 et 100.")]
         public double ParentFeePercent { get; set; }
 
-        [Range(0, 100, ErrorMessage = "Les frais de retrait (%) doivent être entre 0 et 100.")]
+        // Borné < 100 strict : ce taux est au DÉNOMINATEUR du calcul du montant
+        // envoyé à SenePay (Amount / (1 - taux)), donc 100 % provoquerait une
+        // division par zéro. 95 est déjà très au-dessus du réel (~1,77 %).
+        [Range(0, 95, ErrorMessage = "Les frais de retrait (%) doivent être entre 0 et 95.")]
         public double PayoutFeePercent { get; set; }
     }
 }
