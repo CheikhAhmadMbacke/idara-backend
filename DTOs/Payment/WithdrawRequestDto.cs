@@ -1,36 +1,74 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Enums;
 
 namespace Idara.API.DTOs.Payment
 {
     /// <summary>
-    /// Corps de `POST /api/school/wallet/withdraw`. Saisie manuelle complète à
-    /// chaque retrait (pas de comptes pré-enregistrés — spec §4.2). Le montant,
-    /// le solde et l'égalité des deux numéros sont aussi revalidés serveur.
+    /// Corps de `POST /api/school/wallet/withdraw` (transfert sortant unifié :
+    /// retrait simple OU paiement d'un bénéficiaire du carnet).
+    ///
+    /// Deux modes :
+    ///  - <b>Carnet</b> : <see cref="BeneficiaryId"/> fourni → nom/téléphone/
+    ///    opérateur viennent du bénéficiaire enregistré (les champs manuels sont
+    ///    ignorés).
+    ///  - <b>Ponctuel</b> : <see cref="BeneficiaryId"/> null → saisie manuelle
+    ///    complète (nom + téléphone × 2 confirmation + opérateur), comme avant.
+    ///
+    /// Le montant minimum n'est plus codé en dur ici : il est vérifié serveur
+    /// contre PlatformSettings.MinWithdrawalFcfa (éditable SuperAdmin), pour
+    /// permettre des transferts plus petits (ex. petits salaires). On garde juste
+    /// un plancher positif.
     /// </summary>
-    public class WithdrawRequestDto
+    public class WithdrawRequestDto : IValidatableObject
     {
-        /// <summary>Montant à retirer (FCFA). Min 25 000, max = AvailableBalance (vérifié serveur).</summary>
-        [Range(25000, long.MaxValue, ErrorMessage = "Le montant minimum de retrait est de 25 000 FCFA.")]
+        [Range(1, long.MaxValue, ErrorMessage = "Le montant doit être positif.")]
         public long Amount { get; set; }
 
-        [Required(ErrorMessage = "Le nom du bénéficiaire est obligatoire.")]
+        /// <summary>Nature du transfert (retrait, salaire, loyer…).</summary>
+        public TransferCategory Category { get; set; } = TransferCategory.Withdrawal;
+
+        /// <summary>Bénéficiaire du carnet. Null = saisie manuelle ponctuelle.</summary>
+        public int? BeneficiaryId { get; set; }
+
         [StringLength(120, MinimumLength = 3, ErrorMessage = "Le nom doit faire au moins 3 caractères.")]
-        public string RecipientName { get; set; } = string.Empty;
+        public string? RecipientName { get; set; }
 
         /// <summary>Numéro national sénégalais : 9 chiffres commençant par 7.</summary>
-        [Required(ErrorMessage = "Le numéro du bénéficiaire est obligatoire.")]
-        [RegularExpression(@"^7\d{8}$", ErrorMessage = "Numéro invalide (format attendu : 7XXXXXXXX).")]
-        public string RecipientPhone { get; set; } = string.Empty;
+        public string? RecipientPhone { get; set; }
 
-        [Required(ErrorMessage = "Veuillez confirmer le numéro.")]
-        public string RecipientPhoneConfirm { get; set; } = string.Empty;
+        public string? RecipientPhoneConfirm { get; set; }
 
         /// <summary>"wave" ou "orange".</summary>
-        [Required(ErrorMessage = "L'opérateur est obligatoire.")]
-        public string Operator { get; set; } = string.Empty;
+        public string? Operator { get; set; }
 
         [Required(ErrorMessage = "Le code OTP est obligatoire.")]
         [RegularExpression(@"^\d{6}$", ErrorMessage = "Le code OTP doit contenir 6 chiffres.")]
         public string OtpCode { get; set; } = string.Empty;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            // En mode saisie ponctuelle (pas de bénéficiaire du carnet), les
+            // coordonnées manuelles deviennent obligatoires et validées.
+            if (BeneficiaryId == null)
+            {
+                if (string.IsNullOrWhiteSpace(RecipientName) || RecipientName.Trim().Length < 3)
+                    yield return new ValidationResult(
+                        "Le nom du bénéficiaire est obligatoire.", new[] { nameof(RecipientName) });
+
+                if (string.IsNullOrWhiteSpace(RecipientPhone) ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(RecipientPhone, @"^7\d{8}$"))
+                    yield return new ValidationResult(
+                        "Numéro invalide (format attendu : 7XXXXXXXX).", new[] { nameof(RecipientPhone) });
+
+                if (RecipientPhone != RecipientPhoneConfirm)
+                    yield return new ValidationResult(
+                        "Les deux numéros ne correspondent pas.", new[] { nameof(RecipientPhoneConfirm) });
+
+                var op = Operator?.ToLowerInvariant();
+                if (op != "wave" && op != "orange")
+                    yield return new ValidationResult(
+                        "L'opérateur est obligatoire (wave ou orange).", new[] { nameof(Operator) });
+            }
+        }
     }
 }

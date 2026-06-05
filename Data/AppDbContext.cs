@@ -38,6 +38,7 @@ namespace Idara.API.Data
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
         public DbSet<Withdrawal> Withdrawals { get; set; }
+        public DbSet<TransferBeneficiary> TransferBeneficiaries { get; set; }
         public DbSet<WebhookEvent> WebhookEvents { get; set; }
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
 
@@ -510,6 +511,26 @@ namespace Idara.API.Data
                 .HasIndex(w => w.SenePayDisbursementId)
                 .IsUnique()
                 .HasFilter("\"SenePayDisbursementId\" IS NOT NULL");
+
+            // FK optionnelle vers le bénéficiaire du carnet. Restrict : on
+            // n'efface jamais un bénéficiaire référencé par un transfert passé
+            // (on l'archive), pour préserver l'historique financier.
+            modelBuilder.Entity<Withdrawal>()
+                .HasOne(w => w.Beneficiary)
+                .WithMany()
+                .HasForeignKey(w => w.BeneficiaryId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // --- TransferBeneficiary (carnet de bénéficiaires par école) ---
+            modelBuilder.Entity<TransferBeneficiary>()
+                .HasOne(b => b.School)
+                .WithMany()
+                .HasForeignKey(b => b.SchoolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Vue carnet : bénéficiaires actifs d'une école.
+            modelBuilder.Entity<TransferBeneficiary>()
+                .HasIndex(b => new { b.SchoolId, b.IsArchived });
 
             // --- WebhookEvent (idempotence stricte) ---
             // Cle de l'idempotence : INSERT (Provider, ExternalEventId) → si

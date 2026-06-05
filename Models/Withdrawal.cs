@@ -35,7 +35,22 @@ namespace Idara.API.Models
 
         public PaymentOperator Operator { get; set; }
 
-        /// <summary>Coordonnées bénéficiaire saisies manuellement à chaque retrait.</summary>
+        /// <summary>
+        /// Nature du transfert (retrait simple, salaire, loyer…). Par défaut
+        /// Withdrawal (= ancien comportement « retrait »), rétro-compatible avec
+        /// les lignes existantes (valeur 0).
+        /// </summary>
+        public TransferCategory Category { get; set; } = TransferCategory.Withdrawal;
+
+        /// <summary>
+        /// Bénéficiaire du carnet utilisé (null = saisie ponctuelle). On snapshote
+        /// quand même Name/Phone ci-dessous pour figer l'historique même si le
+        /// bénéficiaire est modifié/archivé ensuite.
+        /// </summary>
+        public int? BeneficiaryId { get; set; }
+        public TransferBeneficiary? Beneficiary { get; set; }
+
+        /// <summary>Coordonnées bénéficiaire (saisie manuelle OU copiées du carnet, figées ici).</summary>
         public string RecipientName { get; set; } = string.Empty;
 
         /// <summary>Numéro national 9 chiffres (sans indicatif). On préfixe "221" à l'appel SenePay.</summary>

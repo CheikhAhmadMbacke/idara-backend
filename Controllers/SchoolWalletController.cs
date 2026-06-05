@@ -92,15 +92,36 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
-            // --- Validations métier (au-delà des DataAnnotations) ---
-            if (dto.RecipientPhone != dto.RecipientPhoneConfirm)
-                return BadRequest(ApiResponse<WithdrawalDto>.Fail("Les deux numéros ne correspondent pas."));
-
+            // --- Résolution du bénéficiaire (carnet OU saisie ponctuelle) ---
+            // La validation conditionnelle (champs manuels requis si pas de
+            // BeneficiaryId, égalité des numéros, format) est faite par
+            // WithdrawRequestDto.Validate (IValidatableObject).
+            string recipientName;
+            string recipientPhone;
             PaymentOperator operatorEnum;
-            try { operatorEnum = ParseOperator(dto.Operator); }
-            catch (ArgumentOutOfRangeException)
+            int? beneficiaryId = null;
+
+            if (dto.BeneficiaryId != null)
             {
-                return BadRequest(ApiResponse<WithdrawalDto>.Fail("Opérateur non supporté (wave ou orange)."));
+                var beneficiary = await _context.TransferBeneficiaries.FirstOrDefaultAsync(
+                    b => b.Id == dto.BeneficiaryId.Value
+                         && b.SchoolId == schoolId.Value
+                         && !b.IsArchived, ct);
+                if (beneficiary == null)
+                    return BadRequest(ApiResponse<WithdrawalDto>.Fail(
+                        "Bénéficiaire introuvable ou archivé."));
+
+                recipientName = beneficiary.Name;
+                recipientPhone = beneficiary.Phone;
+                operatorEnum = beneficiary.Operator;
+                beneficiaryId = beneficiary.Id;
+            }
+            else
+            {
+                // Saisie manuelle — champs garantis non-null/valides par le DTO.
+                operatorEnum = ParseOperator(dto.Operator!);
+                recipientName = dto.RecipientName!.Trim();
+                recipientPhone = dto.RecipientPhone!;
             }
 
             var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
@@ -112,7 +133,7 @@ namespace Idara.API.Controllers
             // Montant minimum : check statique avant toute transaction.
             if (dto.Amount < platform.MinWithdrawalFcfa)
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                    $"Le montant minimum de retrait est de {platform.MinWithdrawalFcfa} FCFA."));
+                    $"Le montant minimum est de {platform.MinWithdrawalFcfa} FCFA."));
 
             // Montant majoré envoyé à SenePay pour que le bénéficiaire reçoive
             // exactement dto.Amount après les frais opérateur (PayoutFeePercent).
@@ -124,8 +145,10 @@ namespace Idara.API.Controllers
                 AmountFcfa = dto.Amount,
                 SepayAmountFcfa = sepayAmount,
                 Operator = operatorEnum,
-                RecipientName = dto.RecipientName.Trim(),
-                RecipientPhone = dto.RecipientPhone,
+                Category = dto.Category,
+                BeneficiaryId = beneficiaryId,
+                RecipientName = recipientName,
+                RecipientPhone = recipientPhone,
                 Status = WithdrawalStatus.Initiated,
                 InitiatedById = userId.Value,
                 CreatedAt = DateTime.UtcNow
@@ -191,8 +214,8 @@ namespace Idara.API.Controllers
                 {
                     ExternalId = withdrawal.Id.ToString(),
                     Amount = sepayAmount,
-                    Phone = "221" + dto.RecipientPhone,
-                    RecipientName = dto.RecipientName.Trim(),
+                    Phone = "221" + recipientPhone,
+                    RecipientName = recipientName,
                     Country = "SN",
                     Operator = operatorEnum == PaymentOperator.Wave ? "wave" : "orange",
                     Type = "seller_payment",
@@ -369,6 +392,7 @@ namespace Idara.API.Controllers
             FeesFcfa = w.FeesFcfa,
             NetReceivedFcfa = w.NetReceivedFcfa,
             Operator = w.Operator,
+            Category = w.Category,
             RecipientName = w.RecipientName,
             RecipientPhoneMasked = MaskPhone(w.RecipientPhone),
             Status = w.Status,
