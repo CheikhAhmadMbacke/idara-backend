@@ -20,6 +20,15 @@ namespace Idara.API.Models
 
         public BillingPeriod BillingPeriod { get; set; } = BillingPeriod.Monthly;
 
+        /// <summary>
+        /// Tarif général de l'école : montant mensuel appliqué à TOUS les élèves
+        /// qui n'ont ni override individuel ni tarif de classe. Null = pas de
+        /// tarif général (on retombe sur tarif classe / override uniquement).
+        /// Hiérarchie de résolution : override élève > tarif classe > tarif général.
+        /// Pratique pour les daara mono-tarif (un seul montant pour toute l'école).
+        /// </summary>
+        public long? GeneralMonthlyFeeFcfa { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }

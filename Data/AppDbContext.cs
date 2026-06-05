@@ -39,10 +39,16 @@ namespace Idara.API.Data
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
         public DbSet<Withdrawal> Withdrawals { get; set; }
         public DbSet<WebhookEvent> WebhookEvents { get; set; }
+        public DbSet<PlatformSettings> PlatformSettings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            // --- PlatformSettings (singleton, Id figé = 1, pas de séquence) ---
+            modelBuilder.Entity<PlatformSettings>()
+                .Property(p => p.Id)
+                .ValueGeneratedNever();
 
             modelBuilder.Entity<User>()
                 .HasOne(u => u.School)

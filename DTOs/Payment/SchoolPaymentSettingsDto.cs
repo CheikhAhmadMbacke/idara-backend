@@ -10,6 +10,10 @@ namespace Idara.API.DTOs.Payment
         public FeesPayer FeesPayer { get; set; }
         public int MonthlyDueDay { get; set; }
         public BillingPeriod BillingPeriod { get; set; }
+
+        /// <summary>Tarif général appliqué aux élèves sans override ni tarif de classe. Null = non défini.</summary>
+        public long? GeneralMonthlyFeeFcfa { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }
@@ -29,5 +33,9 @@ namespace Idara.API.DTOs.Payment
 
         [Required]
         public BillingPeriod BillingPeriod { get; set; }
+
+        /// <summary>Tarif général école (FCFA/mois). Null ou 0 = pas de tarif général.</summary>
+        [Range(0, 100_000_000, ErrorMessage = "Le tarif général doit être entre 0 et 100 000 000 FCFA.")]
+        public long? GeneralMonthlyFeeFcfa { get; set; }
     }
 }

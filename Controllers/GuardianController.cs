@@ -231,6 +231,43 @@ namespace Idara.API.Controllers
             }));
         }
 
+        /// <summary>
+        /// Emploi du temps de la classe de l'enfant (lecture seule). Vide si
+        /// l'élève n'est rattaché à aucune classe.
+        /// </summary>
+        [HttpGet("students/{studentId}/timetable")]
+        public async Task<IActionResult> GetChildTimetable(int studentId)
+        {
+            if (!await IsLinked(studentId)) return Forbid();
+
+            var classId = await _context.Students
+                .Where(s => s.Id == studentId)
+                .Select(s => s.ClassId)
+                .FirstOrDefaultAsync();
+            if (classId == null) return Ok(Array.Empty<TimetableSlotDto>());
+
+            var items = await _context.TimetableSlots
+                .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
+                .Where(t => t.ClassId == classId.Value)
+                .OrderBy(t => t.DayOfWeek).ThenBy(t => t.StartTime)
+                .ToListAsync();
+
+            return Ok(items.Select(t => new TimetableSlotDto
+            {
+                Id = t.Id,
+                ClassId = t.ClassId,
+                ClassName = t.Class?.Name ?? string.Empty,
+                SubjectId = t.SubjectId,
+                SubjectName = t.Subject?.Name ?? string.Empty,
+                TeacherId = t.TeacherId,
+                TeacherName = t.Teacher?.FullName ?? t.Teacher?.Email,
+                DayOfWeek = t.DayOfWeek,
+                StartTime = t.StartTime,
+                EndTime = t.EndTime,
+                Room = t.Room
+            }));
+        }
+
         [HttpGet("students/{studentId}/report-cards")]
         public async Task<IActionResult> GetChildReportCards(int studentId)
         {

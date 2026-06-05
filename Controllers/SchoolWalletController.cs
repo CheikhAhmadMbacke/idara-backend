@@ -35,11 +35,8 @@ namespace Idara.API.Controllers
         private readonly IOtpService _otp;
         private readonly ILogger<SchoolWalletController> _logger;
 
-        private const long MinWithdrawalFcfa = 25000;
-
-        /// <summary>Frais opérateur+taxe au payout (1,5 % + 0,27 %). SenePay ne reprend
-        /// pas sa commission (déjà réservée au payin). Cf. spec §3.5 / §4.4.</summary>
-        private const double PayoutFeeRate = 0.0177;
+        // Montant minimum de retrait et frais payout (%) ne sont plus codés en
+        // dur : lus depuis PlatformSettings (éditable SuperAdmin).
 
         public SchoolWalletController(
             AppDbContext context,
@@ -109,14 +106,17 @@ namespace Idara.API.Controllers
             var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
             if (admin == null) return Unauthorized();
 
+            // Réglages globaux (min retrait + frais payout %), éditables SuperAdmin.
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+
             // Montant minimum : check statique avant toute transaction.
-            if (dto.Amount < MinWithdrawalFcfa)
+            if (dto.Amount < platform.MinWithdrawalFcfa)
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                    $"Le montant minimum de retrait est de {MinWithdrawalFcfa} FCFA."));
+                    $"Le montant minimum de retrait est de {platform.MinWithdrawalFcfa} FCFA."));
 
             // Montant majoré envoyé à SenePay pour que le bénéficiaire reçoive
-            // exactement dto.Amount après les ~1,77 % de frais opérateur.
-            var sepayAmount = (long)Math.Ceiling(dto.Amount / (1 - PayoutFeeRate));
+            // exactement dto.Amount après les frais opérateur (PayoutFeePercent).
+            var sepayAmount = (long)Math.Ceiling(dto.Amount / (1 - platform.PayoutFeeRate));
 
             var withdrawal = new Withdrawal
             {

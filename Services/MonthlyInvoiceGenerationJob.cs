@@ -129,7 +129,8 @@ namespace Idara.API.Services
                 try
                 {
                     var perSchool = await GenerateForSchoolAsync(
-                        db, settings.SchoolId, periodStart, periodEnd, dueDate, today, ct);
+                        db, settings.SchoolId, settings.GeneralMonthlyFeeFcfa,
+                        periodStart, periodEnd, dueDate, today, ct);
                     report.SchoolsProcessed++;
                     report.InvoicesCreated += perSchool.Created;
                     report.InvoicesSkipped += perSchool.Skipped;
@@ -159,6 +160,7 @@ namespace Idara.API.Services
         private async Task<PerSchoolStats> GenerateForSchoolAsync(
             AppDbContext db,
             int schoolId,
+            long? generalFee,
             DateTime periodStart,
             DateTime periodEnd,
             DateTime dueDate,
@@ -214,6 +216,7 @@ namespace Idara.API.Services
             //    veut catch l'unique violation par élève sans casser le batch.
             foreach (var s in students)
             {
+                // Hiérarchie : override élève > tarif classe > tarif général école.
                 long? amount = null;
                 if (overrides.TryGetValue(s.Id, out var ov))
                 {
@@ -223,12 +226,16 @@ namespace Idara.API.Services
                 {
                     amount = cf;
                 }
+                else if (generalFee is > 0)
+                {
+                    amount = generalFee;
+                }
 
                 if (amount is null or <= 0)
                 {
                     stats.WithoutFee++;
                     _logger.LogWarning(
-                        "[invoice-cron] SchoolId={SchoolId} StudentId={StudentId} ({Name}) sans tarif (override ni ClassFee) — skip",
+                        "[invoice-cron] SchoolId={SchoolId} StudentId={StudentId} ({Name}) sans tarif (override, ClassFee ni tarif général) — skip",
                         schoolId, s.Id, $"{s.FirstName} {s.LastName}");
                     continue;
                 }

@@ -26,10 +26,10 @@ namespace Idara.API.Models
         /// <summary>Texte multi-ligne : ce que l'élève a appris/travaillé aujourd'hui.</summary>
         public string LearnedToday { get; set; } = string.Empty;
 
-        /// <summary>Note de comportement /5 (optionnel).</summary>
+        /// <summary>Appréciation comportement, échelle 1-3 (1=Mauvais, 2=Moyen, 3=Bien). Optionnel.</summary>
         public int? BehaviorScore { get; set; }
 
-        /// <summary>Note d'effort/concentration /5 (optionnel).</summary>
+        /// <summary>Appréciation effort/concentration, échelle 1-3 (1=Mauvais, 2=Moyen, 3=Bien). Optionnel.</summary>
         public int? EffortScore { get; set; }
 
         public DateTime CreatedAt { get; set; }

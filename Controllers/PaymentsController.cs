@@ -31,12 +31,8 @@ namespace Idara.API.Controllers
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<PaymentsController> _logger;
 
-        // Majoration parent fixée à +8 % (cf. spec §3.6 — couvre 5,37 % payin
-        // + 1,77 % payout + coussin ~20 FCFA/paiement pour fluctuations SenePay).
-        private const double ParentFeeMultiplier = 1.08;
-
-        // Minimum SenePay (cf. doc §1 ligne 581).
-        private const long MinAmountFcfa = 200;
+        // Majoration parent (+8 %) et minimum de paiement (200 FCFA) ne sont
+        // plus codés en dur : lus depuis PlatformSettings (éditable SuperAdmin).
 
         public PaymentsController(
             AppDbContext context,
@@ -225,6 +221,9 @@ namespace Idara.API.Controllers
             // sur une école créée entre deux redémarrages (cf. seed DbInitializer).
             await _context.EnsurePaymentFoundationsAsync(schoolId, ct);
 
+            // Réglages globaux (min paiement + majoration parent), éditables SuperAdmin.
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+
             // Récupère la config paiement de l'école.
             var settings = await _context.SchoolPaymentSettings
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
@@ -277,17 +276,17 @@ namespace Idara.API.Controllers
                     "InvoiceId ou Amount doit être fourni."));
             }
 
-            if (targetAmount < MinAmountFcfa)
+            if (targetAmount < platform.MinPayinFcfa)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    $"Le montant minimum est de {MinAmountFcfa} FCFA."));
+                    $"Le montant minimum est de {platform.MinPayinFcfa} FCFA."));
             }
 
             // Majoration parent : si FeesPayer=Parent, on charge targetAmount × 1.08
             // (le parent porte les frais SenePay+opérateurs). Si FeesPayer=School,
             // on charge targetAmount tel quel (l'école absorbe les frais au net).
             long amountToCharge = settings.FeesPayer == FeesPayer.Parent
-                ? (long)Math.Ceiling(targetAmount * ParentFeeMultiplier)
+                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
                 : targetAmount;
 
             var operatorEnum = ParseOperator(dto.Operator);

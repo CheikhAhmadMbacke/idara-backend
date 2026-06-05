@@ -28,6 +28,25 @@ namespace Idara.API.Data
             await _context.Database.MigrateAsync();
             await SeedSuperAdminAsync();
             await SeedPaymentFoundationsAsync();
+            await SeedPlatformSettingsAsync();
+        }
+
+        /// <summary>
+        /// Crée la ligne singleton de PlatformSettings (réglages globaux : mins
+        /// + frais %) avec les valeurs par défaut si elle n'existe pas encore.
+        /// </summary>
+        private async Task SeedPlatformSettingsAsync()
+        {
+            var exists = await _context.PlatformSettings
+                .AnyAsync(p => p.Id == Models.PlatformSettings.SingletonId);
+            if (exists) return;
+
+            _context.PlatformSettings.Add(new Models.PlatformSettings
+            {
+                Id = Models.PlatformSettings.SingletonId
+            });
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("PlatformSettings : ligne singleton créée avec valeurs par défaut.");
         }
 
         private async Task SeedSuperAdminAsync()

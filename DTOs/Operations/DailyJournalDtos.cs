@@ -26,6 +26,10 @@ namespace Idara.API.DTOs.Operations
         [Required] public DateTime Date { get; set; }
         [Required, StringLength(2000, MinimumLength = 1)]
         public string LearnedToday { get; set; } = string.Empty;
+        // Échelle 1-3 (1=Mauvais, 2=Moyen, 3=Bien). Validation laissée à 1-5
+        // (tolérante) pour ne pas rejeter d'éventuelles anciennes valeurs
+        // pendant la fenêtre de déploiement — le client n'envoie plus que 1-3,
+        // l'affichage mappe toute valeur >2 sur "Bien".
         [Range(1, 5)] public int? BehaviorScore { get; set; }
         [Range(1, 5)] public int? EffortScore { get; set; }
     }
@@ -63,6 +67,10 @@ namespace Idara.API.DTOs.Operations
     {
         [Required] public int StudentId { get; set; }
         [StringLength(2000)] public string? LearnedToday { get; set; }
+        // Échelle 1-3 (1=Mauvais, 2=Moyen, 3=Bien). Validation laissée à 1-5
+        // (tolérante) pour ne pas rejeter d'éventuelles anciennes valeurs
+        // pendant la fenêtre de déploiement — le client n'envoie plus que 1-3,
+        // l'affichage mappe toute valeur >2 sur "Bien".
         [Range(1, 5)] public int? BehaviorScore { get; set; }
         [Range(1, 5)] public int? EffortScore { get; set; }
     }

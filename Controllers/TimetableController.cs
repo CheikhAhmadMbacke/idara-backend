@@ -35,6 +35,42 @@ namespace Idara.API.Controllers
             return Ok(items.Select(Map));
         }
 
+        /// <summary>
+        /// Emploi du temps des classes de l'enseignant connecté (lecture seule).
+        /// Renvoie tous les créneaux des classes auxquelles il est affecté (via
+        /// ses affectations matière OU les créneaux qu'il assure directement) —
+        /// y compris les créneaux assurés par d'autres maîtres dans ces classes.
+        /// </summary>
+        [HttpGet("my-classes")]
+        [Authorize(Roles = UserRoles.Teacher)]
+        public async Task<IActionResult> MyClasses()
+        {
+            var schoolId = User.GetSchoolId();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Classes où l'enseignant est affecté (affectations matière) OU déjà
+            // présent dans un créneau.
+            var assignedClassIds = await _context.ClassSubjectTeachers
+                .Where(a => a.SchoolId == schoolId.Value && a.TeacherId == userId.Value)
+                .Select(a => a.ClassId)
+                .ToListAsync();
+            var slotClassIds = await _context.TimetableSlots
+                .Where(t => t.SchoolId == schoolId.Value && t.TeacherId == userId.Value)
+                .Select(t => t.ClassId)
+                .ToListAsync();
+
+            var classIds = assignedClassIds.Concat(slotClassIds).Distinct().ToList();
+            if (classIds.Count == 0) return Ok(Array.Empty<TimetableSlotDto>());
+
+            var items = await _context.TimetableSlots
+                .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
+                .Where(t => t.SchoolId == schoolId.Value && classIds.Contains(t.ClassId))
+                .OrderBy(t => t.DayOfWeek).ThenBy(t => t.StartTime)
+                .ToListAsync();
+            return Ok(items.Select(Map));
+        }
+
         [HttpPost]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<IActionResult> Create([FromBody] TimetableSlotCreateDto dto)
@@ -71,6 +107,84 @@ namespace Idara.API.Controllers
                 .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
                 .FirstAsync(t => t.Id == entity.Id);
             return Ok(Map(saved));
+        }
+
+        /// <summary>
+        /// Duplique tous les créneaux d'un jour source vers un/plusieurs jours
+        /// cibles pour une même classe. Les créneaux qui entreraient en conflit
+        /// (classe ou enseignant déjà occupé) sont ignorés, pas écrasés.
+        /// </summary>
+        [HttpPost("duplicate")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> Duplicate([FromBody] TimetableDuplicateDto dto)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var classOk = await _context.Classes
+                .AnyAsync(c => c.Id == dto.ClassId && c.SchoolId == schoolId.Value && !c.IsDeleted);
+            if (!classOk) return BadRequest(ApiResponse<bool>.Fail("Classe invalide."));
+
+            var sourceSlots = await _context.TimetableSlots
+                .Where(t => t.SchoolId == schoolId.Value
+                            && t.ClassId == dto.ClassId
+                            && t.DayOfWeek == dto.SourceDay)
+                .OrderBy(t => t.StartTime)
+                .ToListAsync();
+
+            var result = new TimetableDuplicateResultDto();
+            if (sourceSlots.Count == 0)
+                return Ok(ApiResponse<TimetableDuplicateResultDto>.Ok(
+                    result, "Aucun créneau à dupliquer pour le jour source."));
+
+            var createdIds = new List<int>();
+            foreach (var day in dto.TargetDays.Distinct())
+            {
+                foreach (var src in sourceSlots)
+                {
+                    // Conflit vérifié contre l'état DB courant — on SaveChanges
+                    // après chaque insert pour que les créneaux ajoutés dans
+                    // cette même opération soient pris en compte.
+                    var conflict = await FindConflictAsync(
+                        schoolId.Value, dto.ClassId, src.TeacherId, day,
+                        src.StartTime, src.EndTime, ignoreSlotId: null);
+                    if (conflict != null)
+                    {
+                        result.SkippedConflicts++;
+                        continue;
+                    }
+
+                    var entity = new TimetableSlot
+                    {
+                        SchoolId = schoolId.Value,
+                        ClassId = dto.ClassId,
+                        SubjectId = src.SubjectId,
+                        TeacherId = src.TeacherId,
+                        DayOfWeek = day,
+                        StartTime = src.StartTime,
+                        EndTime = src.EndTime,
+                        Room = src.Room
+                    };
+                    _context.TimetableSlots.Add(entity);
+                    await _context.SaveChangesAsync();
+                    createdIds.Add(entity.Id);
+                    result.Copied++;
+                }
+            }
+
+            if (createdIds.Count > 0)
+            {
+                var created = await _context.TimetableSlots
+                    .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
+                    .Where(t => createdIds.Contains(t.Id))
+                    .OrderBy(t => t.DayOfWeek).ThenBy(t => t.StartTime)
+                    .ToListAsync();
+                result.CreatedSlots = created.Select(Map).ToList();
+            }
+
+            return Ok(ApiResponse<TimetableDuplicateResultDto>.Ok(
+                result,
+                $"{result.Copied} créneau(x) copié(s), {result.SkippedConflicts} ignoré(s) pour conflit."));
         }
 
         [HttpPut("{id}")]

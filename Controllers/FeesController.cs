@@ -100,6 +100,9 @@ namespace Idara.API.Controllers
             settings.FeesPayer = dto.FeesPayer;
             settings.MonthlyDueDay = dto.MonthlyDueDay;
             settings.BillingPeriod = dto.BillingPeriod;
+            // 0 est traité comme "pas de tarif général" → on normalise en null.
+            settings.GeneralMonthlyFeeFcfa =
+                (dto.GeneralMonthlyFeeFcfa is > 0) ? dto.GeneralMonthlyFeeFcfa : null;
             settings.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
@@ -628,6 +631,7 @@ namespace Idara.API.Controllers
             FeesPayer = s.FeesPayer,
             MonthlyDueDay = s.MonthlyDueDay,
             BillingPeriod = s.BillingPeriod,
+            GeneralMonthlyFeeFcfa = s.GeneralMonthlyFeeFcfa,
             CreatedAt = s.CreatedAt,
             UpdatedAt = s.UpdatedAt
         };
