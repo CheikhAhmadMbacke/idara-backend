@@ -100,6 +100,7 @@ builder.Services.AddScoped<IStudentService, StudentService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
+builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
 builder.Services.AddScoped<DbInitializer>();
 
 // ---------- Cron / background jobs ----------

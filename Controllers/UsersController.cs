@@ -3,7 +3,7 @@ using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
 using Idara.API.DTOs.Common;
-using Idara.API.Enums;
+using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -26,11 +26,16 @@ namespace Idara.API.Controllers
     public class UsersController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IUserDeletionService _userDeletion;
         private readonly ILogger<UsersController> _logger;
 
-        public UsersController(AppDbContext context, ILogger<UsersController> logger)
+        public UsersController(
+            AppDbContext context,
+            IUserDeletionService userDeletion,
+            ILogger<UsersController> logger)
         {
             _context = context;
+            _userDeletion = userDeletion;
             _logger = logger;
         }
 
@@ -117,95 +122,8 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<UserDeletionResultDto>.Fail(
                     "Impossible de supprimer un compte SuperAdmin."));
 
-            var hasReferences = await HasReferencesAsync(user.Id, ct);
-
-            // Toujours révoquer les sessions actives, quel que soit le chemin.
-            var tokens = _context.RefreshTokens.Where(t => t.UserId == user.Id);
-            _context.RefreshTokens.RemoveRange(tokens);
-
-            UserDeletionResultDto result;
-
-            if (!hasReferences)
-            {
-                _context.Users.Remove(user);
-                await _context.SaveChangesAsync(ct);
-
-                _logger.LogInformation(
-                    "[users] Hard-delete User {UserId} ({Role}) par SuperAdmin {AdminId}",
-                    id, user.Role, currentUserId);
-
-                result = new UserDeletionResultDto
-                {
-                    UserId = id,
-                    Action = "HardDeleted",
-                    Message = "Utilisateur supprimé définitivement."
-                };
-            }
-            else
-            {
-                // Les liens parent-élève ne sont PAS de l'historique financier :
-                // on les retire pour qu'un parent supprimé disparaisse bien des
-                // fiches élèves (l'historique Payment.GuardianId, lui, reste).
-                var links = _context.StudentGuardians.Where(sg => sg.GuardianId == user.Id);
-                _context.StudentGuardians.RemoveRange(links);
-
-                // Anonymisation : on garde la ligne pour ne pas orpheliner les
-                // références (paiements, journaux, audit), mais on efface tout
-                // ce qui est personnel et on rend le compte inutilisable.
-                user.IsDeleted = true;
-                user.DeletedAt = DateTime.UtcNow;
-                user.Email = $"deleted-{user.Id}@deleted.idara.local";
-                user.FullName = null;
-                user.FirstName = null;
-                user.LastName = null;
-                user.PhoneNumber = null;
-                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString());
-                user.AccountStatus = AccountStatus.Suspended;
-                user.LastLoginAt = null;
-                await _context.SaveChangesAsync(ct);
-
-                _logger.LogInformation(
-                    "[users] Anonymisation User {UserId} ({Role}) par SuperAdmin {AdminId} (historique préservé)",
-                    id, user.Role, currentUserId);
-
-                result = new UserDeletionResultDto
-                {
-                    UserId = id,
-                    Action = "Anonymized",
-                    Message = "Utilisateur anonymisé (historique financier/pédagogique préservé)."
-                };
-            }
-
+            var result = await _userDeletion.DeleteOrAnonymizeAsync(user, currentUserId ?? 0, ct);
             return Ok(ApiResponse<UserDeletionResultDto>.Ok(result, result.Message));
-        }
-
-        /// <summary>
-        /// Vrai si l'utilisateur est référencé n'importe où (FK contraintes OU
-        /// colonnes d'audit sans FK). Détermine hard-delete vs anonymisation.
-        /// Court-circuite dès la première référence trouvée. Ordonné du plus
-        /// probable au moins probable selon les rôles courants.
-        /// </summary>
-        private async Task<bool> HasReferencesAsync(int userId, CancellationToken ct)
-        {
-            // Guardian : liens élèves + paiements.
-            if (await _context.StudentGuardians.AnyAsync(x => x.GuardianId == userId, ct)) return true;
-            if (await _context.Payments.AnyAsync(x => x.GuardianId == userId, ct)) return true;
-
-            // Teacher : affectations + production pédagogique.
-            if (await _context.ClassSubjectTeachers.AnyAsync(x => x.TeacherId == userId, ct)) return true;
-            if (await _context.DailyJournalEntries.AnyAsync(x => x.TeacherId == userId || x.DeletedById == userId, ct)) return true;
-            if (await _context.CoranSessions.AnyAsync(x => x.TeacherId == userId, ct)) return true;
-            if (await _context.TimetableSlots.AnyAsync(x => x.TeacherId == userId, ct)) return true;
-
-            // Audit (sans FK déclarée — orphelinerait l'ID si on hard-delete).
-            if (await _context.Attendances.AnyAsync(x => x.RecordedById == userId || x.DeletedById == userId, ct)) return true;
-            if (await _context.Grades.AnyAsync(x => x.RecordedById == userId || x.DeletedById == userId, ct)) return true;
-            if (await _context.CoranProgresses.AnyAsync(x => x.UpdatedById == userId, ct)) return true;
-            if (await _context.ClassFees.AnyAsync(x => x.CreatedById == userId, ct)) return true;
-            if (await _context.StudentFeeOverrides.AnyAsync(x => x.CreatedById == userId, ct)) return true;
-            if (await _context.Schools.AnyAsync(x => x.ValidatedBy == userId, ct)) return true;
-
-            return false;
         }
     }
 }
