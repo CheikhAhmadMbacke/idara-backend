@@ -496,6 +496,11 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            // Filet de secours : une école créée entre deux redémarrages n'a
+            // pas été seedée par DbInitializer → on crée ses fondations à la
+            // volée pour ne jamais renvoyer 404 sur le wallet.
+            await _context.EnsurePaymentFoundationsAsync(schoolId.Value, ct);
+
             var wallet = await _context.SchoolWallets
                 .FirstOrDefaultAsync(w => w.SchoolId == schoolId.Value, ct);
             if (wallet == null) return NotFound(ApiResponse<bool>.Fail("Wallet introuvable."));

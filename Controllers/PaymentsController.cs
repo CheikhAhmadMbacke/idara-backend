@@ -220,6 +220,11 @@ namespace Idara.API.Controllers
             var student = link.Student;
             var schoolId = student.SchoolId;
 
+            // Garantit que l'école a ses fondations (settings + wallet) avant
+            // tout paiement — sinon le crédit webhook throwerait faute de wallet
+            // sur une école créée entre deux redémarrages (cf. seed DbInitializer).
+            await _context.EnsurePaymentFoundationsAsync(schoolId, ct);
+
             // Récupère la config paiement de l'école.
             var settings = await _context.SchoolPaymentSettings
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);

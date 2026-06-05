@@ -297,6 +297,10 @@ namespace Idara.API.Controllers
             user.SchoolId = school.Id;
             await _context.SaveChangesAsync();
 
+            // Fondations paiement (wallet + settings) dès la création de l'école,
+            // sans attendre le prochain redémarrage / le seed DbInitializer.
+            await _context.EnsurePaymentFoundationsAsync(school.Id);
+
             return Ok(ApiResponse<bool>.Ok(true, "Informations soumises. En attente de validation par l'administration."));
         }
 
