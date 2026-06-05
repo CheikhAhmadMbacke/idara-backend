@@ -277,6 +277,144 @@ namespace Idara.API.Controllers
             return Ok(new { received = true, processed = processingError == null });
         }
 
+        /// <summary>
+        /// Webhook payout SenePay (`disbursement.completed` / `.failed`). Même
+        /// schéma que le payin : HMAC sur corps brut, idempotence stricte via
+        /// WebhookEvent (ExternalEventId = disbursement_id), traitement en
+        /// transaction PG. Toujours 200 si signature valide (sauf 401/400).
+        /// </summary>
+        [HttpPost("payout")]
+        public async Task<IActionResult> HandlePayout()
+        {
+            var startedAt = DateTime.UtcNow;
+
+            string rawBody;
+            try
+            {
+                Request.EnableBuffering();
+                using var reader = new StreamReader(Request.Body, Encoding.UTF8, leaveOpen: true);
+                rawBody = await reader.ReadToEndAsync();
+                Request.Body.Position = 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[webhook/payout] Échec lecture body brut");
+                return BadRequest(new { error = "Unable to read body" });
+            }
+
+            var signatureHeader = Request.Headers["X-SenePay-Signature"].FirstOrDefault();
+            var eventHeader = Request.Headers["X-SenePay-Event"].FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(signatureHeader))
+            {
+                _logger.LogWarning("[webhook/payout] Header X-SenePay-Signature manquant");
+                return Unauthorized(new { error = "Missing signature header" });
+            }
+
+            var expectedSignature = ComputeHmacHex(rawBody, _senepay.WebhookSecret);
+            var actualBytes = TryHexDecode(signatureHeader);
+            var expectedBytes = TryHexDecode(expectedSignature);
+            var signatureValid =
+                actualBytes != null && expectedBytes != null
+                && actualBytes.Length == expectedBytes.Length
+                && CryptographicOperations.FixedTimeEquals(actualBytes, expectedBytes);
+            var signatureHash = Sha256Hex(signatureHeader);
+
+            if (!signatureValid)
+            {
+                _logger.LogWarning(
+                    "[webhook/payout] SIGNATURE INVALIDE — rejected. event={Event} sigHash={SigHash}",
+                    eventHeader, signatureHash);
+                await TrySaveInvalidSignatureAuditAsync(eventHeader, signatureHash, rawBody, "payout");
+                return Unauthorized(new { error = "Invalid signature" });
+            }
+
+            SenePayPayoutWebhookPayload? payload;
+            try
+            {
+                payload = JsonSerializer.Deserialize<SenePayPayoutWebhookPayload>(
+                    rawBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "[webhook/payout] Signature OK mais JSON invalide. event={Event}", eventHeader);
+                await TrySaveMalformedAuditAsync(eventHeader, signatureHash, rawBody, ex.Message, "payout");
+                return Ok(new { received = true, processed = false, reason = "malformed_json" });
+            }
+
+            if (payload == null || string.IsNullOrWhiteSpace(payload.DisbursementId))
+            {
+                _logger.LogWarning("[webhook/payout] Payload sans disbursement_id — impossible d'idempotenter.");
+                await TrySaveMalformedAuditAsync(eventHeader, signatureHash, rawBody, "missing_disbursement_id", "payout");
+                return Ok(new { received = true, processed = false, reason = "missing_disbursement_id" });
+            }
+
+            var ev = new WebhookEvent
+            {
+                Provider = ProviderName,
+                // Préfixe "payout:" pour garantir qu'un disbursement_id ne
+                // collisionne jamais avec un transaction_id payin sur l'unique
+                // (Provider, ExternalEventId) — espaces de nommage SenePay non
+                // garantis disjoints par contrat (cf. revue Phase 3, m1).
+                ExternalEventId = "payout:" + payload.DisbursementId,
+                EventType = payload.Event ?? eventHeader ?? "unknown",
+                Payload = rawBody,
+                SignatureHash = signatureHash,
+                ReceivedAt = startedAt,
+                Status = WebhookEventStatus.Received
+            };
+
+            _context.WebhookEvents.Add(ev);
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException dbex) when (IsUniqueViolation(dbex))
+            {
+                _context.Entry(ev).State = EntityState.Detached;
+                _logger.LogInformation(
+                    "[webhook/payout] DUPLICATE — disbursementId={Disb} déjà traité", payload.DisbursementId);
+                return Ok(new { received = true, processed = false, duplicate = true });
+            }
+
+            string? processingError = null;
+            try
+            {
+                await using var tx = await _context.Database.BeginTransactionAsync();
+                await ProcessPayoutPayloadAsync(payload);
+                ev.ProcessedAt = DateTime.UtcNow;
+                ev.Status = WebhookEventStatus.Processed;
+                await _context.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                processingError = ex.Message;
+                _logger.LogError(ex,
+                    "[webhook/payout] ÉCHEC TRAITEMENT disbursementId={Disb} event={Event}",
+                    payload.DisbursementId, payload.Event);
+                try
+                {
+                    await _context.WebhookEvents
+                        .Where(w => w.Id == ev.Id)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(w => w.Status, WebhookEventStatus.ProcessingFailed)
+                            .SetProperty(w => w.ProcessingError, processingError));
+                }
+                catch (Exception innerEx)
+                {
+                    _logger.LogError(innerEx, "[webhook/payout] Échec maj ProcessingFailed ev.Id={Id}", ev.Id);
+                }
+            }
+
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "[webhook/payout] OK disbursementId={Disb} event={Event} status={Status} processed={Processed} elapsedMs={Elapsed:0}",
+                payload.DisbursementId, payload.Event, payload.Status, processingError == null, elapsedMs);
+
+            return Ok(new { received = true, processed = processingError == null });
+        }
+
         // ====================================================================
         // ===== Traitement métier =====
         // ====================================================================
@@ -370,8 +508,9 @@ namespace Idara.API.Controllers
             // SchoolWallet est seedé pour chaque école par DbInitializer (1.2).
             // Si jamais absent (race ou bug), on lève — on ne crée pas un
             // wallet à la volée depuis un webhook (audit trail).
-            var wallet = await _context.SchoolWallets
-                .FirstOrDefaultAsync(w => w.SchoolId == payment.SchoolId)
+            // Verrou pessimiste : sérialise vs un retrait concurrent sur le même
+            // wallet (cf. WalletLockExtensions). Évite tout lost update Available.
+            var wallet = await _context.LockWalletAsync(payment.SchoolId)
                 ?? throw new InvalidOperationException(
                     $"SchoolWallet manquant pour SchoolId={payment.SchoolId}");
 
@@ -418,6 +557,90 @@ namespace Idara.API.Controllers
                         invoice.Status = InvoiceStatus.Paid;
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Clôt un retrait depuis le webhook payout. external_id = Withdrawal.Id.
+        /// completed → débit définitif du Pending. failed → restitution Pending
+        /// → Available + transaction Release.
+        /// </summary>
+        private async Task ProcessPayoutPayloadAsync(SenePayPayoutWebhookPayload payload)
+        {
+            if (!int.TryParse(payload.ExternalId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var withdrawalId))
+            {
+                throw new InvalidOperationException(
+                    $"external_id '{payload.ExternalId}' non parsable en Withdrawal.Id");
+            }
+
+            var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId)
+                ?? throw new InvalidOperationException(
+                    $"Withdrawal.Id={withdrawalId} introuvable pour ce webhook payout");
+
+            // Idempotence métier : si le retrait n'est plus Initiated, on ne
+            // rejoue rien (webhook tardif / doublon logique / déjà restitué à
+            // l'init suite à un rejet SenePay synchrone).
+            if (withdrawal.Status != WithdrawalStatus.Initiated)
+            {
+                _logger.LogInformation(
+                    "[webhook/payout] Withdrawal.Id={Id} déjà en statut {Status}, webhook ignoré",
+                    withdrawal.Id, withdrawal.Status);
+                return;
+            }
+
+            // Verrou pessimiste : sérialise vs un retrait/restitution concurrent
+            // sur le même wallet (cf. WalletLockExtensions).
+            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId)
+                ?? throw new InvalidOperationException(
+                    $"SchoolWallet manquant pour SchoolId={withdrawal.SchoolId}");
+
+            var statusLower = payload.Status?.ToLowerInvariant();
+            withdrawal.SenePayDisbursementId ??= payload.DisbursementId;
+
+            if (statusLower == "completed")
+            {
+                // Débit définitif : la réservation (Available -= X faite à
+                // l'init) devient permanente. On vide juste le Pending — pas de
+                // nouvelle WalletTransaction car AvailableBalance NE bouge PAS
+                // (la somme des transactions doit rester == AvailableBalance,
+                // cf. gotcha §55). La transaction Reservation portait déjà le -X.
+                withdrawal.Status = WithdrawalStatus.Completed;
+                withdrawal.CompletedAt = payload.CompletedAt?.ToUtcSafe()
+                    ?? payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
+                withdrawal.FeesFcfa = (long)Math.Round(payload.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero);
+                withdrawal.NetReceivedFcfa = (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero);
+
+                wallet.PendingBalance -= withdrawal.AmountFcfa;
+                wallet.TotalWithdrawnLifetime += withdrawal.AmountFcfa;
+                wallet.UpdatedAt = DateTime.UtcNow;
+            }
+            else if (statusLower == "failed")
+            {
+                // Restitution : Pending → Available + transaction Release.
+                withdrawal.Status = WithdrawalStatus.Failed;
+                withdrawal.FailedAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
+                withdrawal.FailureReason = payload.ErrorMessage ?? payload.ErrorCode ?? "failed";
+
+                wallet.PendingBalance -= withdrawal.AmountFcfa;
+                wallet.AvailableBalance += withdrawal.AmountFcfa;
+                wallet.UpdatedAt = DateTime.UtcNow;
+
+                _context.WalletTransactions.Add(new WalletTransaction
+                {
+                    SchoolId = withdrawal.SchoolId,
+                    Type = WalletTransactionType.Release,
+                    AmountFcfa = withdrawal.AmountFcfa, // release = signé positif
+                    BalanceAfter = wallet.AvailableBalance,
+                    RelatedEntity = WalletRelatedEntity.Withdrawal,
+                    RelatedId = withdrawal.Id,
+                    Note = $"Restitution retrait #{withdrawal.Id} (échec opérateur)",
+                    OccurredAt = DateTime.UtcNow
+                });
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Statut payout inattendu '{payload.Status}' (event={payload.Event}) pour Withdrawal.Id={withdrawal.Id}");
             }
         }
 
@@ -475,11 +698,11 @@ namespace Idara.API.Controllers
         /// car les vrais commencent par "SENEPAY_PAYIN_").
         /// </summary>
         private async Task TrySaveInvalidSignatureAuditAsync(
-            string? eventHeader, string signatureHash, string rawBody)
+            string? eventHeader, string signatureHash, string rawBody, string source = "payin")
         {
             try
             {
-                var fakeId = $"INVALID_SIG_{DateTime.UtcNow.Ticks}_{signatureHash[..8]}";
+                var fakeId = $"INVALID_SIG_{source.ToUpperInvariant()}_{DateTime.UtcNow.Ticks}_{signatureHash[..8]}";
                 _context.WebhookEvents.Add(new WebhookEvent
                 {
                     Provider = ProviderName,
@@ -502,11 +725,11 @@ namespace Idara.API.Controllers
         }
 
         private async Task TrySaveMalformedAuditAsync(
-            string? eventHeader, string signatureHash, string rawBody, string reason)
+            string? eventHeader, string signatureHash, string rawBody, string reason, string source = "payin")
         {
             try
             {
-                var fakeId = $"MALFORMED_{DateTime.UtcNow.Ticks}_{signatureHash[..8]}";
+                var fakeId = $"MALFORMED_{source.ToUpperInvariant()}_{DateTime.UtcNow.Ticks}_{signatureHash[..8]}";
                 _context.WebhookEvents.Add(new WebhookEvent
                 {
                     Provider = ProviderName,

@@ -37,6 +37,7 @@ namespace Idara.API.Data
         public DbSet<Payment> Payments { get; set; }
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
+        public DbSet<Withdrawal> Withdrawals { get; set; }
         public DbSet<WebhookEvent> WebhookEvents { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -484,6 +485,25 @@ namespace Idara.API.Data
             // Lookup "toutes les transactions liées à un Payment" (audit).
             modelBuilder.Entity<WalletTransaction>()
                 .HasIndex(t => new { t.RelatedEntity, t.RelatedId });
+
+            // --- Withdrawal (retraits école, append-only) ---
+            modelBuilder.Entity<Withdrawal>()
+                .HasOne(w => w.School)
+                .WithMany()
+                .HasForeignKey(w => w.SchoolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Vue école : historique des retraits (récents d'abord).
+            modelBuilder.Entity<Withdrawal>()
+                .HasIndex(w => new { w.SchoolId, w.CreatedAt });
+
+            // Lookup webhook payout → Withdrawal correspondant. Rempli après
+            // l'appel SenePay (le Withdrawal est créé AVANT), d'où le filtre
+            // NOT NULL sur l'unique.
+            modelBuilder.Entity<Withdrawal>()
+                .HasIndex(w => w.SenePayDisbursementId)
+                .IsUnique()
+                .HasFilter("\"SenePayDisbursementId\" IS NOT NULL");
 
             // --- WebhookEvent (idempotence stricte) ---
             // Cle de l'idempotence : INSERT (Provider, ExternalEventId) → si

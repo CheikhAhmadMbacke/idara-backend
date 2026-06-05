@@ -21,5 +21,18 @@ namespace Idara.API.Services
         Task<SenePayInitiatePaymentResponse> InitiatePaymentAsync(
             SenePayInitiatePaymentRequest request,
             CancellationToken ct = default);
+
+        /// <summary>
+        /// `POST /api/v1/payouts` — initie un retrait école → Mobile Money.
+        /// Retourne la réponse SenePay (disbursement_id, status initial, fees...).
+        /// </summary>
+        /// <exception cref="SenePayApiException">
+        /// Lancée si SenePay retourne une vraie 4xx/5xx (auth, montant invalide,
+        /// solde marchand insuffisant...). L'appelant doit alors restituer la
+        /// réservation wallet (le payout n'a pas démarré).
+        /// </exception>
+        Task<SenePayPayoutResponse> InitiatePayoutAsync(
+            SenePayPayoutRequest request,
+            CancellationToken ct = default);
     }
 }

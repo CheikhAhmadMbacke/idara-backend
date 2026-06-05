@@ -115,6 +115,75 @@ namespace Idara.API.Services
             return parsed;
         }
 
+        public async Task<SenePayPayoutResponse> InitiatePayoutAsync(
+            SenePayPayoutRequest request,
+            CancellationToken ct = default)
+        {
+            var startedAt = DateTime.UtcNow;
+            var bodyJson = JsonSerializer.Serialize(request, JsonOptions);
+
+            _logger.LogInformation(
+                "[SenePay] POST /payouts amount={Amount} operator={Op} phone={Phone} externalId={ExternalId}",
+                request.Amount, request.Operator, MaskPhone(request.Phone), request.ExternalId);
+
+            HttpResponseMessage httpResponse;
+            try
+            {
+                using var content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+                httpResponse = await _http.PostAsync("api/v1/payouts", content, ct);
+            }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "[SenePay] TIMEOUT POST /payouts");
+                throw new SenePayApiException("Timeout calling SenePay /payouts", null, null, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[SenePay] NETWORK ERROR POST /payouts");
+                throw new SenePayApiException("Network error calling SenePay payout", null, null, ex);
+            }
+
+            var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+            // 4xx/5xx = vrai problème (auth, montant, solde marchand insuffisant).
+            // L'appelant restituera la réservation wallet.
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "[SenePay] HTTP {Status} POST /payouts elapsedMs={Elapsed:0} body={Body}",
+                    (int)httpResponse.StatusCode, elapsedMs, Truncate(responseBody, 500));
+                throw new SenePayApiException(
+                    $"SenePay returned HTTP {(int)httpResponse.StatusCode}",
+                    (int)httpResponse.StatusCode,
+                    responseBody);
+            }
+
+            SenePayPayoutResponse? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<SenePayPayoutResponse>(responseBody, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex,
+                    "[SenePay] Payout body 200 OK mais JSON inattendu : {Body}", Truncate(responseBody, 500));
+                throw new SenePayApiException("Malformed SenePay payout response", 200, responseBody, ex);
+            }
+
+            if (parsed == null)
+            {
+                _logger.LogError("[SenePay] Payout body 200 OK mais null après parsing : {Body}", Truncate(responseBody, 500));
+                throw new SenePayApiException("Empty SenePay payout response", 200, responseBody);
+            }
+
+            _logger.LogInformation(
+                "[SenePay] OK /payouts status={Status} disbursementId={DisbId} netAmount={Net} elapsedMs={Elapsed:0}",
+                parsed.Status, parsed.DisbursementId, parsed.NetAmount, elapsedMs);
+
+            return parsed;
+        }
+
         private static string MaskPhone(string phone)
         {
             if (string.IsNullOrEmpty(phone) || phone.Length < 4) return "***";

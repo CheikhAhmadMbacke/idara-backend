@@ -7,6 +7,10 @@ namespace Idara.API.Enums
     public enum OtpPurpose
     {
         Register = 0,
-        ResetPassword = 1
+        ResetPassword = 1,
+
+        /// <summary>OTP de validation d'un retrait wallet école (action sensible).
+        /// Interim : envoyé par email au SchoolAdmin (le WA viendra en Phase 2).</summary>
+        Withdrawal = 2
     }
 }
