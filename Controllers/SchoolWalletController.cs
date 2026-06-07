@@ -228,7 +228,12 @@ namespace Idara.API.Controllers
                     Country = "SN",
                     Operator = operatorEnum == PaymentOperator.Wave ? "wave" : "orange",
                     Type = "seller_payment",
-                    Description = $"Retrait Idara école {schoolId.Value}",
+                    // SenePay/AfribaPay mappe `description` sur son `reference_id`
+                    // en aval, qui n'accepte que [A-Za-z0-9_-] : ni accents ni
+                    // espaces (sinon HTTP 400 "reference_id ... invalid or
+                    // contains unsupported characters"). On garde donc une chaîne
+                    // ASCII sans espace — découvert au 1er test payout réel.
+                    Description = $"Idara-retrait-ecole-{schoolId.Value}",
                     CallbackUrl = _senepaySettings.WebhookPayoutUrl
                 }, ct);
             }
