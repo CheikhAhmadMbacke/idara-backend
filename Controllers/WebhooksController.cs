@@ -482,7 +482,7 @@ namespace Idara.API.Controllers
             {
                 case PaymentStatus.Completed:
                     payment.PaidAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                    await CreditSchoolWalletAsync(payment, payment.NetCreditedFcfa);
+                    await CreditSchoolWalletAsync(payment);
                     break;
 
                 case PaymentStatus.Failed:
@@ -501,13 +501,41 @@ namespace Idara.API.Controllers
             return payment;
         }
 
-        private async Task CreditSchoolWalletAsync(Payment payment, long netAmount)
+        private async Task CreditSchoolWalletAsync(Payment payment)
         {
-            if (netAmount <= 0)
+            var netAmount = payment.NetCreditedFcfa;
+
+            // Montant crédité au wallet école — dépend de QUI porte les frais :
+            //
+            //  • FeesPayer=Parent : on crédite le montant CIBLE (TargetAmountFcfa,
+            //    ce que l'école a fixé), PAS le net reçu de SenePay. Le parent a
+            //    payé target × 1,08 ; la majoration de 8% couvre les frais payin
+            //    (5,37%) ET la réserve du futur payout (1,77%). L'école reçoit
+            //    donc EXACTEMENT ce qu'elle a fixé, en payin comme au retrait
+            //    (décision 2026-06-07 : les Daara reçoivent toujours leur montant
+            //    fixé, ni plus ni moins). L'excédent (net réel − target) reste
+            //    dans la réserve marchand SenePay : c'est le coussin qui finance
+            //    les frais de payout et la marge plateforme. Sans ce choix, le
+            //    wallet recevrait le net (variable, ex 529 pour une cible de 500)
+            //    et l'école toucherait un surplus imprévisible.
+            //
+            //  • FeesPayer=School : l'école absorbe les frais à la source (spec
+            //    §4.4) → on crédite le NET réellement reversé par SenePay. Le
+            //    wallet reflète le net post-frais, c'est le principe de ce mode.
+            //    Créditer le target ici sur-créditerait le wallet vs la réserve
+            //    marchand réelle → casserait l'invariant de réconciliation §78.
+            //
+            //  Fallback sur netAmount pour les anciens Payments d'avant 1.10 qui
+            //  n'ont pas TargetAmountFcfa rempli (= 0).
+            var amountToCredit = payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0
+                ? payment.TargetAmountFcfa
+                : netAmount;
+
+            if (amountToCredit <= 0)
             {
                 _logger.LogWarning(
-                    "[webhook/payin] netAmount={Net} <= 0 pour Payment.Id={Id}, pas de crédit wallet",
-                    netAmount, payment.Id);
+                    "[webhook/payin] montant à créditer={Amount} <= 0 pour Payment.Id={Id} (net={Net}, target={Target}, feesPayer={FeesPayer}), pas de crédit wallet",
+                    amountToCredit, payment.Id, netAmount, payment.TargetAmountFcfa, payment.FeesPayer);
                 return;
             }
 
@@ -520,15 +548,15 @@ namespace Idara.API.Controllers
                 ?? throw new InvalidOperationException(
                     $"SchoolWallet manquant pour SchoolId={payment.SchoolId}");
 
-            wallet.AvailableBalance += netAmount;
-            wallet.TotalCreditedLifetime += netAmount;
+            wallet.AvailableBalance += amountToCredit;
+            wallet.TotalCreditedLifetime += amountToCredit;
             wallet.UpdatedAt = DateTime.UtcNow;
 
             var txEntry = new WalletTransaction
             {
                 SchoolId = payment.SchoolId,
                 Type = WalletTransactionType.Credit,
-                AmountFcfa = netAmount, // Crédit = montant signé positif.
+                AmountFcfa = amountToCredit, // Crédit = montant signé positif.
                 BalanceAfter = wallet.AvailableBalance,
                 RelatedEntity = WalletRelatedEntity.Payment,
                 RelatedId = payment.Id,
@@ -537,17 +565,10 @@ namespace Idara.API.Controllers
             };
             _context.WalletTransactions.Add(txEntry);
 
-            // Si une Invoice est rattachée (mode FixedAmount), on met à jour
-            // son AmountPaidFcfa et son statut (paid/over-paid).
-            //
-            // ATTENTION : on crédite l'invoice avec TargetAmountFcfa (montant
-            // cible original), PAS avec netAmount. En FeesPayer=Parent, on a
-            // chargé targetAmount × 1.08 — la majoration de 8% est censée
-            // couvrir les frais SenePay (~5,37%). Le wallet reçoit le net
-            // (~196 FCFA pour une cible de 200), mais l'invoice doit
-            // considérer les 200 comme payés sinon elle reste éternellement
-            // "presque payée" avec ~4 FCFA fantômes. Fallback sur netAmount
-            // pour les anciens Payments d'avant 1.10 qui n'ont pas le champ.
+            // Si une Invoice est rattachée (mode FixedAmount), on met à jour son
+            // AmountPaidFcfa et son statut. On crédite l'invoice avec le montant
+            // CIBLE (cohérent avec le wallet en mode Parent), sinon elle resterait
+            // éternellement "presque payée" avec quelques FCFA fantômes.
             if (payment.InvoiceId is int invoiceId)
             {
                 var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == invoiceId);
