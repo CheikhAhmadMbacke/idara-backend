@@ -183,10 +183,19 @@ namespace Idara.API.Services
 
                 if (payment.NetCreditedFcfa > 0)
                 {
+                    // Montant réellement crédité au wallet école. En FeesPayer=Parent
+                    // c'est le montant CIBLE fixé par l'école (§82), PAS le net SenePay :
+                    // le wallet reçoit 500 (cible), pas 529 (net). Afficher le net ici
+                    // contredirait "montant débité 540 − frais 40 = 500" et le solde
+                    // wallet réel. Fallback net pour les anciens Payments sans cible.
+                    var creditedToSchool =
+                        payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0
+                            ? payment.TargetAmountFcfa
+                            : payment.NetCreditedFcfa;
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6)
                         .Text("Net crédité à l'école").FontSize(9).FontColor(TextSecondary);
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6).AlignRight()
-                        .Text($"{payment.NetCreditedFcfa:N0} FCFA").FontSize(9).FontColor(TextSecondary);
+                        .Text($"{creditedToSchool:N0} FCFA").FontSize(9).FontColor(TextSecondary);
                 }
 
                 table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
