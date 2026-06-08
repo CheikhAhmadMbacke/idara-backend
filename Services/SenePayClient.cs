@@ -178,8 +178,8 @@ namespace Idara.API.Services
             }
 
             _logger.LogInformation(
-                "[SenePay] OK /payouts status={Status} disbursementId={DisbId} netAmount={Net} elapsedMs={Elapsed:0}",
-                parsed.Status, parsed.DisbursementId, parsed.NetAmount, elapsedMs);
+                "[SenePay] OK /payouts status={Status} disbursementId={DisbId} amount={Amount} debited={Debited} net={Net} feeMode={FeeMode} elapsedMs={Elapsed:0}",
+                parsed.Status, parsed.DisbursementId, parsed.Amount, parsed.AmountDebited, parsed.NetAmount, parsed.FeeMode, elapsedMs);
 
             return parsed;
         }

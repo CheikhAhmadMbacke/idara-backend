@@ -51,5 +51,15 @@ namespace Idara.API.DTOs.Senepay
 
         [JsonPropertyName("metadata")]
         public Dictionary<string, string>? Metadata { get; set; }
+
+        /// <summary>
+        /// Prise en charge des frais (modèle SenePay 2026). On force `on_top` :
+        /// le bénéficiaire reçoit EXACTEMENT `amount`, les frais opérateur sont
+        /// prélevés en plus sur la réserve marchand. Si le solde ne couvre pas
+        /// amount+frais, SenePay ÉCHOUE (au lieu du repli `inclusive` qui
+        /// verserait amount−frais) → garantit "ni plus ni moins" côté Daara.
+        /// </summary>
+        [JsonPropertyName("fee_mode")]
+        public string? FeeMode { get; set; }
     }
 }

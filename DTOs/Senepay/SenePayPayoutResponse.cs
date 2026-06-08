@@ -32,6 +32,14 @@ namespace Idara.API.DTOs.Senepay
         [JsonPropertyName("amount")]
         public decimal Amount { get; set; }
 
+        /// <summary>Montant réellement débité de la réserve marchand (= amount + frais en on_top).</summary>
+        [JsonPropertyName("amount_debited")]
+        public decimal AmountDebited { get; set; }
+
+        /// <summary>Mode de frais effectivement appliqué par SenePay (`on_top` / `inclusive`).</summary>
+        [JsonPropertyName("fee_mode")]
+        public string? FeeMode { get; set; }
+
         [JsonPropertyName("currency")]
         public string? Currency { get; set; }
 

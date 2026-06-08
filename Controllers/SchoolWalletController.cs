@@ -138,15 +138,17 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
                     $"Le montant minimum est de {platform.MinWithdrawalFcfa} FCFA."));
 
-            // Montant majoré envoyé à SenePay pour que le bénéficiaire reçoive
-            // exactement dto.Amount après les frais opérateur (PayoutFeePercent).
-            // Garde-fou : un taux >= 1 (mal configuré) provoquerait une division
-            // par zéro / un overflow → on retombe sur le montant brut sans
-            // majoration plutôt que de crasher (le DTO borne déjà à 95 %).
-            var payoutRate = platform.PayoutFeeRate;
-            var sepayAmount = payoutRate < 1.0
-                ? (long)Math.Ceiling(dto.Amount / (1 - payoutRate))
-                : dto.Amount;
+            // Montant EXACT envoyé à SenePay — plus de majoration côté Idara.
+            // Depuis le modèle de frais SenePay 2026, on force fee_mode="on_top"
+            // (cf. SenePayPayoutRequest.FeeMode) : le bénéficiaire reçoit
+            // précisément dto.Amount, les frais opérateur (~1,77%) sont prélevés
+            // EN PLUS sur la réserve marchand — financés par le coussin de la
+            // majoration payin +8% (§82). L'ancienne majoration `dto.Amount /
+            // (1 - PayoutFeeRate)` faisait SUR-verser le bénéficiaire (bug réel :
+            // retrait de 500 → 510 reçu), car le nouveau modèle SenePay verse le
+            // montant saisi tel quel. `PayoutFeePercent` (PlatformSettings) n'est
+            // donc plus utilisé pour le calcul — conservé pour estimation/affichage.
+            var sepayAmount = dto.Amount;
 
             var withdrawal = new Withdrawal
             {
@@ -234,6 +236,9 @@ namespace Idara.API.Controllers
                     // contains unsupported characters"). On garde donc une chaîne
                     // ASCII sans espace — découvert au 1er test payout réel.
                     Description = $"Idara-retrait-ecole-{schoolId.Value}",
+                    // Frais "en plus" : le bénéficiaire reçoit exactement sepayAmount
+                    // (= dto.Amount), pas de repli "inclusive" (cf. SenePayPayoutRequest).
+                    FeeMode = "on_top",
                     CallbackUrl = _senepaySettings.WebhookPayoutUrl
                 }, ct);
             }
