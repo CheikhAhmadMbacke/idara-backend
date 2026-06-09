@@ -55,6 +55,14 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : bienvenue {prenom}. {ecole} vous a ajoute comme {fonctionFr}. Connectez-vous sur idara.sn avec votre numero {phone} et le code {code}. Vous pourrez le changer dans l'app.",
             Ar: $"Idara: مرحبا {prenom}، أضافتك {ecole} بصفة {fonctionAr}. سجّل الدخول على idara.sn برقمك {phone} والرمز {code}. يمكنك تغييره لاحقا في التطبيق.");
 
+        // ===== Régénération du code d'accès (reset par l'école, sans SMS auto) =====
+        // L'école régénère un nouveau code à 6 chiffres pour un parent/enseignant
+        // qui a oublié le sien, et le lui recommunique (modal récap + WhatsApp).
+        public static BilingualMessage AccessCodeReset(
+            string prenom, string ecole, string phone, string code) => new(
+            Fr: $"Idara : {prenom}, {ecole} a regenere votre code d'acces. Connectez-vous sur idara.sn avec votre numero {phone} et le nouveau code {code}. Vous pourrez le changer dans l'app.",
+            Ar: $"Idara: {prenom}، أعادت {ecole} إنشاء رمز دخولك. سجّل الدخول على idara.sn برقمك {phone} والرمز الجديد {code}. يمكنك تغييره لاحقا في التطبيق.");
+
         // ===== Code OTP (activation / réinitialisation par SMS) =====
         public static BilingualMessage OtpCode(string code) => new(
             Fr: $"Idara : votre code est {code}. Il expire dans 10 minutes. Ne le partagez avec personne.",

@@ -45,6 +45,7 @@ namespace Idara.API.Data
 
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
+        public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -62,6 +63,18 @@ namespace Idara.API.Data
                 .HasIndex(n => new { n.TemplateCode, n.RelatedEntityId });
             modelBuilder.Entity<NotificationLog>()
                 .HasIndex(n => n.CreatedAt);
+
+            // --- PushDeviceToken : token unique (réaffectable), index par user ---
+            modelBuilder.Entity<PushDeviceToken>()
+                .HasIndex(t => t.Token)
+                .IsUnique();
+            modelBuilder.Entity<PushDeviceToken>()
+                .HasIndex(t => t.UserId);
+            modelBuilder.Entity<PushDeviceToken>()
+                .HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<User>()
                 .HasOne(u => u.School)

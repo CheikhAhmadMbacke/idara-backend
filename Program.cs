@@ -27,6 +27,7 @@ builder.Services.Configure<OtpSettings>(builder.Configuration.GetSection(OtpSett
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
 builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
 builder.Services.Configure<AfricasTalkingSettings>(builder.Configuration.GetSection(AfricasTalkingSettings.SectionName));
+builder.Services.Configure<FcmSettings>(builder.Configuration.GetSection(FcmSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException("Section 'Jwt' manquante dans la configuration.");
@@ -165,6 +166,12 @@ builder.Services.AddHttpClient<ISmsService, AfricasTalkingSmsService>((sp, clien
     client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(30);
 });
+
+// ---------- Notifications push (Firebase Cloud Messaging) ----------
+// Singleton : FirebaseApp est coûteux et créé une seule fois. No-op tant que le
+// compte de service FCM n'est pas configuré (Fcm__ServiceAccountPath/Json) — un
+// déploiement avant configuration ne casse rien.
+builder.Services.AddSingleton<Idara.API.Services.Push.IPushService, Idara.API.Services.Push.FcmPushService>();
 
 // ---------- Authentification JWT ----------
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

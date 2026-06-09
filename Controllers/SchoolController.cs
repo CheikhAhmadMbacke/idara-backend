@@ -167,10 +167,14 @@ namespace Idara.API.Controllers
             await _context.Subjects.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.Classes.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
 
-            // 4) Utilisateurs : sessions puis comptes
+            // 4) Utilisateurs : sessions + tokens push puis comptes
             await _context.RefreshTokens.Where(t => t.User!.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.PushDeviceTokens.Where(t => t.User.SchoolId == id).ExecuteDeleteAsync(ct);
             if (guardianIds.Count > 0)
+            {
                 await _context.RefreshTokens.Where(t => guardianIds.Contains(t.UserId)).ExecuteDeleteAsync(ct);
+                await _context.PushDeviceTokens.Where(t => guardianIds.Contains(t.UserId)).ExecuteDeleteAsync(ct);
+            }
 
             await _context.Users.Where(u => u.SchoolId == id).ExecuteDeleteAsync(ct); // admin/staff/teacher
 

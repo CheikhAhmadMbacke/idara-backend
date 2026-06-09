@@ -758,6 +758,86 @@ namespace Idara.API.Controllers
             }, "Utilisateur ajouté."));
         }
 
+        /// <summary>
+        /// Régénère le code d'accès à 6 chiffres d'un compte « identité par
+        /// téléphone » (Teacher / SchoolStaff / Guardian) de l'école, pour un
+        /// utilisateur qui a oublié le sien. Le nouveau code est renvoyé pour le
+        /// modal récap (l'école le recommunique par WhatsApp) ET envoyé en SMS
+        /// best-effort. Remplace le « mot de passe oublié par SMS » tant que le
+        /// SMS auto n'est pas actif. SchoolAdmin/SchoolStaff only, scopé à l'école.
+        /// Révoque les sessions existantes (l'ancien code ne marche plus).
+        /// </summary>
+        [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
+        [HttpPost("users/{userId}/regenerate-code")]
+        public async Task<IActionResult> RegenerateAccessCode(int userId)
+        {
+            var currentUserId = User.GetUserId();
+            if (currentUserId == null) return Unauthorized();
+
+            var currentUser = await _context.Users.Include(u => u.School)
+                .FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser?.School == null || currentUser.SchoolId == null)
+                return BadRequest(ApiResponse<UserCredentialDto>.Fail("École non trouvée pour cet utilisateur."));
+            if (currentUser.AccountStatus != AccountStatus.Active)
+                return BadRequest(ApiResponse<UserCredentialDto>.Fail("Votre compte doit être actif."));
+
+            var target = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (target == null)
+                return NotFound(ApiResponse<UserCredentialDto>.Fail("Utilisateur introuvable."));
+
+            // Seuls les comptes « identité par téléphone » ont un code à 6 chiffres.
+            if (target.Role == UserRoles.SuperAdmin || target.Role == UserRoles.SchoolAdmin)
+                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
+                    "Le code d'accès ne concerne que les parents, enseignants et personnel."));
+            if (string.IsNullOrWhiteSpace(target.PhoneNumber))
+                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
+                    "Ce compte n'a pas de numéro : aucun code à régénérer."));
+
+            // Scoping strict multi-tenant : la cible appartient à mon école.
+            var belongsToSchool = target.Role == UserRoles.Guardian
+                ? await _context.StudentGuardians.AnyAsync(
+                    sg => sg.GuardianId == userId && sg.Student.SchoolId == currentUser.SchoolId.Value)
+                : target.SchoolId == currentUser.SchoolId.Value;
+            if (!belongsToSchool)
+                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
+                    "Cet utilisateur n'appartient pas à votre école."));
+
+            var code = SixDigitCode();
+            target.PasswordHash = BCrypt.Net.BCrypt.HashPassword(code);
+            await _context.SaveChangesAsync();
+
+            // L'ancien code / mot de passe ne doit plus donner accès.
+            await _context.RefreshTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync();
+
+            var phone = target.PhoneNumber!;
+            var fullName = target.FullName ?? string.Empty;
+            var platform = await _context.GetPlatformSettingsAsync();
+            var msg = NotificationTemplates.AccessCodeReset(
+                fullName, currentUser.School.Name ?? "Idara", phone, code);
+            var messageText = msg.Compose(platform.SmsBilingual, target.PreferredLanguage);
+
+            await _notif.SendSmsAsync(new NotificationSmsRequest(
+                UserId: target.Id,
+                RawPhone: phone,
+                PreferredLanguage: target.PreferredLanguage,
+                Message: msg,
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "ACCESS_CODE_RESET",
+                RelatedEntityId: target.Id));
+
+            _logger.LogInformation(
+                "[auth] Code d'accès régénéré pour user {UserId} ({Role}) par {AdminId} (école {SchoolId})",
+                target.Id, target.Role, currentUserId, currentUser.SchoolId);
+
+            return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
+            {
+                FullName = fullName,
+                Phone = phone,
+                Code = code,
+                Message = messageText,
+            }, "Nouveau code généré."));
+        }
+
         /// <summary>Libellés de fonction localisés (FR, AR) pour les SMS.</summary>
         private static (string Fr, string Ar) FunctionLabels(string role) => role switch
         {
