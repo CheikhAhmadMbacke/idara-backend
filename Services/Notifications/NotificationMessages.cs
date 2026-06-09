@@ -1,0 +1,63 @@
+namespace Idara.API.Services.Notifications
+{
+    /// <summary>
+    /// Un message de notification dans ses deux versions : français et arabe.
+    ///
+    /// La méthode <see cref="Compose"/> décide à l'envoi si on colle les DEUX
+    /// langues dans le même corps (compréhension garantie, mais ~3× plus cher en
+    /// SMS car l'arabe force l'encodage UCS-2 = 70 car/segment sur tout le
+    /// message), ou une seule langue selon la préférence fiable de l'utilisateur
+    /// (<c>User.PreferredLanguage</c>). Le mode est piloté par un réglage
+    /// SuperAdmin (PlatformSettings) → bascule sans redéploiement.
+    /// </summary>
+    public sealed record BilingualMessage(string Fr, string Ar)
+    {
+        public string Compose(bool bilingual, string preferredLanguage = "fr")
+        {
+            if (bilingual)
+                return Fr + "\n\n" + Ar;
+            return string.Equals(preferredLanguage, "ar", System.StringComparison.OrdinalIgnoreCase)
+                ? Ar
+                : Fr;
+        }
+    }
+
+    /// <summary>
+    /// Catalogue centralisé des textes de notification (validés 2026-06-08).
+    /// Contraintes SMS respectées : accents GSM-7 uniquement côté FR (é è à ç ù —
+    /// pas de ê î ô â ë ï qui forceraient l'UCS-2) ; marque « Idara » TOUJOURS en
+    /// latin, même en arabe (jamais إدارة). Pas d'emoji.
+    /// Les libellés de fonction sont fournis déjà localisés par l'appelant.
+    /// </summary>
+    public static class NotificationTemplates
+    {
+        // ===== Notifications parent (incrément 1) =====
+
+        public static BilingualMessage InvoiceDue(string eleve, long montantFcfa, string periode) => new(
+            Fr: $"Idara : la mensualite de {eleve} ({montantFcfa} FCFA) pour {periode} est a payer. Reglez sur idara.sn.",
+            Ar: $"Idara: قسط {eleve} ({montantFcfa} FCFA) عن {periode} مستحق الدفع. ادفع عبر idara.sn.");
+
+        public static BilingualMessage PaymentReceived(string eleve, long montantFcfa) => new(
+            Fr: $"Idara : paiement de {montantFcfa} FCFA recu pour {eleve}. Merci. Votre recu est disponible dans l'application.",
+            Ar: $"Idara: تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. شكرا. الإيصال متاح في التطبيق.");
+
+        public static BilingualMessage InvoiceOverdue(string eleve, long montantFcfa) => new(
+            Fr: $"Idara : rappel. La mensualite de {eleve} ({montantFcfa} FCFA) reste a regler. Reglez sur idara.sn.",
+            Ar: $"Idara: تذكير. قسط {eleve} ({montantFcfa} FCFA) ما زال غير مدفوع. ادفع عبر idara.sn.");
+
+        // ===== Invitation par numéro (incrément 2) =====
+        // Le code à 6 chiffres EST le mot de passe initial (non-expirant). Le
+        // parent se connecte avec son numero + ce code, puis pourra le changer
+        // dans l'app.
+        public static BilingualMessage InviteWelcome(
+            string prenom, string ecole, string fonctionFr, string fonctionAr,
+            string phone, string code) => new(
+            Fr: $"Idara : bienvenue {prenom}. {ecole} vous a ajoute comme {fonctionFr}. Connectez-vous sur idara.sn avec votre numero {phone} et le code {code}. Vous pourrez le changer dans l'app.",
+            Ar: $"Idara: مرحبا {prenom}، أضافتك {ecole} بصفة {fonctionAr}. سجّل الدخول على idara.sn برقمك {phone} والرمز {code}. يمكنك تغييره لاحقا في التطبيق.");
+
+        // ===== Code OTP (activation / réinitialisation par SMS) =====
+        public static BilingualMessage OtpCode(string code) => new(
+            Fr: $"Idara : votre code est {code}. Il expire dans 10 minutes. Ne le partagez avec personne.",
+            Ar: $"Idara: رمزك هو {code}. ينتهي خلال 10 دقائق. لا تشاركه مع أحد.");
+    }
+}

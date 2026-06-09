@@ -9,6 +9,7 @@ namespace Idara.API.DTOs.Platform
         public long MinWithdrawalFcfa { get; set; }
         public double ParentFeePercent { get; set; }
         public double PayoutFeePercent { get; set; }
+        public bool SmsBilingual { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }
 
@@ -29,5 +30,8 @@ namespace Idara.API.DTOs.Platform
         // division par zéro. 95 est déjà très au-dessus du réel (~1,77 %).
         [Range(0, 95, ErrorMessage = "Les frais de retrait (%) doivent être entre 0 et 95.")]
         public double PayoutFeePercent { get; set; }
+
+        /// <summary>Envoyer les SMS en FR+AR (true) ou une seule langue par utilisateur (false).</summary>
+        public bool SmsBilingual { get; set; } = true;
     }
 }

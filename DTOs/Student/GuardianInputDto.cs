@@ -4,9 +4,9 @@ namespace Idara.API.DTOs.Student
 {
     public class GuardianInputDto
     {
-        [Required(ErrorMessage = "L'email du responsable est requis.")]
-        [EmailAddress(ErrorMessage = "Format d'email invalide.")]
-        public string Email { get; set; } = string.Empty;
+        // Email FACULTATIF (incrément 2) : le responsable s'identifie par numéro.
+        [Idara.API.Common.Validation.OptionalEmailAddress]
+        public string? Email { get; set; }
 
         [Required(ErrorMessage = "Le prénom du responsable est requis.")]
         [StringLength(100)]
@@ -16,6 +16,7 @@ namespace Idara.API.DTOs.Student
         [StringLength(100)]
         public string LastName { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Le numéro de téléphone du responsable est requis.")]
         public string? PhoneNumber { get; set; }
 
         [StringLength(50)]

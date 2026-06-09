@@ -4,9 +4,11 @@ namespace Idara.API.DTOs.Auth
 {
     public class InviteUserRequest : IValidatableObject
     {
-        [Required(ErrorMessage = "L'email est requis.")]
-        [EmailAddress(ErrorMessage = "Format d'email invalide.")]
-        public string Email { get; set; } = string.Empty;
+        // Email FACULTATIF depuis l'incrément 2 Phase 2 : les utilisateurs ajoutés
+        // par les écoles s'identifient par TÉLÉPHONE. L'email peut être fourni
+        // mais n'est plus requis (et n'est plus le canal de notification).
+        [Idara.API.Common.Validation.OptionalEmailAddress]
+        public string? Email { get; set; }
 
         [Required(ErrorMessage = "Le numéro de téléphone est requis.")]
         public string PhoneNumber { get; set; } = string.Empty;

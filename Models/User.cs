@@ -5,7 +5,14 @@ namespace Idara.API.Models
     public class User
     {
         public int Id { get; set; }
-        public string Email { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Email — identifiant de connexion pour SuperAdmin/SchoolAdmin. NULLABLE
+        /// depuis l'incrément 2 Phase 2 : les comptes ajoutés par les écoles
+        /// (Teacher/SchoolStaff/Guardian) s'identifient par TÉLÉPHONE et n'ont pas
+        /// forcément d'email. Unicité email vérifiée en code (pas d'index DB).
+        /// </summary>
+        public string? Email { get; set; }
         public string? FullName { get; set; }
         public string? FirstName { get; set; }
         public string? LastName { get; set; }

@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
+using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
+using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -12,12 +14,18 @@ namespace Idara.API.Services
     {
         private readonly AppDbContext _context;
         private readonly IEmailService _emailService;
+        private readonly INotificationService _notif;
         private readonly OtpSettings _settings;
 
-        public OtpService(AppDbContext context, IEmailService emailService, IOptions<OtpSettings> settings)
+        public OtpService(
+            AppDbContext context,
+            IEmailService emailService,
+            INotificationService notif,
+            IOptions<OtpSettings> settings)
         {
             _context = context;
             _emailService = emailService;
+            _notif = notif;
             _settings = settings.Value;
         }
 
@@ -43,6 +51,41 @@ namespace Idara.API.Services
             await _context.SaveChangesAsync();
 
             await _emailService.SendOtpEmailAsync(email, otpCode, language);
+            return otpCode;
+        }
+
+        public async Task<string> GenerateAndSendSmsOtpAsync(
+            string phoneE164, OtpPurpose purpose, int? userId, string preferredLanguage = "fr")
+        {
+            // L'identifiant de l'OtpRecord est le numéro (la colonne "Email" sert
+            // de clé d'identité générique). VerifyOtpAsync compare sur cette clé.
+            var old = _context.OtpRecords
+                .Where(o => o.Email == phoneE164 && o.Purpose == purpose && !o.IsUsed);
+            _context.OtpRecords.RemoveRange(old);
+
+            var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+            var minutes = _settings.ExpirationMinutes > 0 ? _settings.ExpirationMinutes : 10;
+
+            _context.OtpRecords.Add(new OtpRecord
+            {
+                Email = phoneE164,
+                OtpCode = otpCode,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(minutes),
+                IsUsed = false,
+                Purpose = purpose
+            });
+            await _context.SaveChangesAsync();
+
+            var platform = await _context.GetPlatformSettingsAsync();
+            await _notif.SendSmsAsync(new NotificationSmsRequest(
+                UserId: userId,
+                RawPhone: phoneE164,
+                PreferredLanguage: preferredLanguage,
+                Message: NotificationTemplates.OtpCode(otpCode),
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "OTP",
+                RelatedEntityId: null));
+
             return otpCode;
         }
 

@@ -52,6 +52,7 @@ namespace Idara.API.Controllers
             s.MinWithdrawalFcfa = dto.MinWithdrawalFcfa;
             s.ParentFeePercent = dto.ParentFeePercent;
             s.PayoutFeePercent = dto.PayoutFeePercent;
+            s.SmsBilingual = dto.SmsBilingual;
             s.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
@@ -69,6 +70,7 @@ namespace Idara.API.Controllers
             MinWithdrawalFcfa = s.MinWithdrawalFcfa,
             ParentFeePercent = s.ParentFeePercent,
             PayoutFeePercent = s.PayoutFeePercent,
+            SmsBilingual = s.SmsBilingual,
             UpdatedAt = s.UpdatedAt
         };
     }

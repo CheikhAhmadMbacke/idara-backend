@@ -8,9 +8,11 @@ using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
 using Idara.API.Services;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 namespace Idara.API.Controllers
@@ -25,6 +27,8 @@ namespace Idara.API.Controllers
         private readonly IRefreshTokenService _refreshTokens;
         private readonly IWebHostEnvironment _environment;
         private readonly IEmailService _emailService;
+        private readonly INotificationService _notif;
+        private readonly IMemoryCache _cache;
         private readonly UploadSettings _uploads;
         private readonly ILogger<AuthController> _logger;
 
@@ -35,6 +39,8 @@ namespace Idara.API.Controllers
             IRefreshTokenService refreshTokens,
             IWebHostEnvironment environment,
             IEmailService emailService,
+            INotificationService notif,
+            IMemoryCache cache,
             IOptions<UploadSettings> uploads,
             ILogger<AuthController> logger)
         {
@@ -44,9 +50,27 @@ namespace Idara.API.Controllers
             _refreshTokens = refreshTokens;
             _environment = environment;
             _emailService = emailService;
+            _notif = notif;
+            _cache = cache;
             _uploads = uploads.Value;
             _logger = logger;
         }
+
+        // ===== Rate-limiting applicatif (anti brute-force) =====
+        // Compteur de tentatives par clé, en mémoire. Mono-instance.
+
+        private static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(15);
+
+        private bool IsRateLimited(string key, int max) =>
+            _cache.TryGetValue(key, out int count) && count >= max;
+
+        private void RegisterAttempt(string key)
+        {
+            var count = _cache.TryGetValue(key, out int c) ? c : 0;
+            _cache.Set(key, count + 1, RateWindow);
+        }
+
+        private void ResetAttempts(string key) => _cache.Remove(key);
 
         /// <summary>
         /// Envoie un OTP de réinitialisation de mot de passe.
@@ -171,11 +195,39 @@ namespace Idara.API.Controllers
         [ProducesResponseType(StatusCodes.Status401Unauthorized, Type = typeof(ApiResponse<bool>))]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
-            var user = await _context.Users.Include(u => u.School)
-                .FirstOrDefaultAsync(u => u.Email == request.Email && !u.IsDeleted);
+            // Identifiant = email (contient "@") OU numéro de téléphone.
+            var identifier = (request.Email ?? string.Empty).Trim();
+
+            // Rate-limiting anti brute-force (protège notamment le code à 6
+            // chiffres) : 5 tentatives ratées / 15 min par identifiant.
+            var rlKey = $"login-fail:{identifier.ToLowerInvariant()}";
+            if (IsRateLimited(rlKey, 5))
+                return StatusCode(429, ApiResponse<bool>.Fail(
+                    "Trop de tentatives. Réessayez dans quelques minutes."));
+
+            User? user;
+            if (identifier.Contains('@'))
+            {
+                var email = identifier.ToLowerInvariant();
+                user = await _context.Users.Include(u => u.School)
+                    .FirstOrDefaultAsync(u => u.Email != null
+                        && u.Email.ToLower() == email && !u.IsDeleted);
+            }
+            else
+            {
+                var phone = Common.Utilities.SenegalPhone.Normalize(identifier);
+                user = phone == null ? null : await _context.Users.Include(u => u.School)
+                    .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+            }
 
             if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
-                return Unauthorized(ApiResponse<bool>.Fail("Email ou mot de passe incorrect."));
+            {
+                RegisterAttempt(rlKey);
+                return Unauthorized(ApiResponse<bool>.Fail("Identifiant ou mot de passe incorrect."));
+            }
+
+            // Identifiants corrects → on remet le compteur à zéro.
+            ResetAttempts(rlKey);
 
             if (user.AccountStatus == AccountStatus.Suspended)
                 return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu. Contactez l'administration."));
@@ -195,6 +247,87 @@ namespace Idara.API.Controllers
                 KycStatus = user.School?.KycStatus.ToString()
             };
             return Ok(ApiResponse<LoginResponse>.Ok(response));
+        }
+
+        /// <summary>
+        /// Envoie un code par SMS pour activer un compte téléphone ou réinitialiser
+        /// son mot de passe. Réponse TOUJOURS générique (anti-énumération de
+        /// numéros) : on n'indique jamais si un compte existe.
+        /// </summary>
+        [HttpPost("phone/request-code")]
+        [AllowAnonymous]
+        public async Task<IActionResult> RequestPhoneCode([FromBody] PhoneRequestCodeRequest request)
+        {
+            var generic = ApiResponse<bool>.Ok(true,
+                "Si un compte existe pour ce numéro, un code a été envoyé par SMS.");
+
+            var phone = Common.Utilities.SenegalPhone.Normalize(request.Phone);
+            if (phone == null) return Ok(generic);
+
+            // Anti-spam / abus de coût SMS : 3 envois max / 15 min par numéro.
+            var rlKey = $"reqcode:{phone}";
+            if (IsRateLimited(rlKey, 3)) return Ok(generic);
+
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+            if (user == null) return Ok(generic);
+
+            await _otpService.GenerateAndSendSmsOtpAsync(
+                phone, OtpPurpose.ResetPassword, user.Id, user.PreferredLanguage);
+            RegisterAttempt(rlKey);
+            return Ok(generic);
+        }
+
+        /// <summary>
+        /// Définit (ou réinitialise) le mot de passe d'un compte téléphone après
+        /// vérification du code SMS. Auto-login : retourne directement un
+        /// LoginResponse complet.
+        /// </summary>
+        [HttpPost("phone/set-password")]
+        [AllowAnonymous]
+        public async Task<IActionResult> SetPhonePassword([FromBody] PhoneSetPasswordRequest request)
+        {
+            var phone = Common.Utilities.SenegalPhone.Normalize(request.Phone);
+            if (phone == null)
+                return BadRequest(ApiResponse<bool>.Fail("Numéro invalide."));
+
+            // Anti brute-force du code à 6 chiffres : 5 essais ratés / 15 min.
+            var rlKey = $"setpw-fail:{phone}";
+            if (IsRateLimited(rlKey, 5))
+                return StatusCode(429, ApiResponse<bool>.Fail(
+                    "Trop de tentatives. Réessayez dans quelques minutes."));
+
+            if (!await _otpService.VerifyOtpAsync(phone, request.Code, OtpPurpose.ResetPassword))
+            {
+                RegisterAttempt(rlKey);
+                return BadRequest(ApiResponse<bool>.Fail("Code invalide ou expiré."));
+            }
+            ResetAttempts(rlKey);
+
+            var user = await _context.Users.Include(u => u.School)
+                .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+            if (user == null)
+                return BadRequest(ApiResponse<bool>.Fail("Compte introuvable."));
+            if (user.AccountStatus == AccountStatus.Suspended)
+                return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu. Contactez l'administration."));
+
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+            if (user.AccountStatus == AccountStatus.Inactive)
+                user.AccountStatus = AccountStatus.Active;
+            user.LastLoginAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var refreshToken = await _refreshTokens.CreateAsync(user.Id);
+            var response = new LoginResponse
+            {
+                Token = _jwtService.GenerateToken(user),
+                RefreshToken = refreshToken,
+                Role = user.Role,
+                SchoolId = user.SchoolId,
+                AccountStatus = user.AccountStatus.ToString(),
+                KycStatus = user.School?.KycStatus.ToString()
+            };
+            return Ok(ApiResponse<LoginResponse>.Ok(response, "Mot de passe défini avec succès."));
         }
 
         /// <summary>
@@ -339,7 +472,7 @@ namespace Idara.API.Controllers
                 try
                 {
                     await _emailService.SendSchoolValidationEmailAsync(
-                        adminUser.Email, school.Name, true, language: adminUser.PreferredLanguage);
+                        adminUser.Email ?? string.Empty, school.Name, true, language: adminUser.PreferredLanguage);
                 }
                 catch (Exception ex)
                 {
@@ -379,7 +512,7 @@ namespace Idara.API.Controllers
                 try
                 {
                     await _emailService.SendSchoolValidationEmailAsync(
-                        adminUser.Email, school.Name, false, request.RejectionReason, adminUser.PreferredLanguage);
+                        adminUser.Email ?? string.Empty, school.Name, false, request.RejectionReason, adminUser.PreferredLanguage);
                 }
                 catch (Exception ex)
                 {
@@ -541,10 +674,20 @@ namespace Idara.API.Controllers
                     return BadRequest(ApiResponse<bool>.Fail("Élève introuvable dans votre école."));
             }
 
-            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
+            var phone = SenegalPhone.Normalize(request.PhoneNumber);
+            if (phone == null)
+                return BadRequest(ApiResponse<bool>.Fail("Numéro de téléphone invalide."));
+            if (await _context.Users.AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted))
+                return BadRequest(ApiResponse<bool>.Fail("Ce numéro est déjà utilisé."));
+
+            var email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+            if (email != null && await _context.Users.AnyAsync(u => u.Email == email && !u.IsDeleted))
                 return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
 
-            var tempPassword = PasswordGenerator.Generate(12);
+            // Code à 6 chiffres = mot de passe initial (non-expirant), envoyé par
+            // SMS. L'utilisateur se connecte avec son numéro + ce code, puis
+            // pourra le changer dans l'app.
+            var code = SixDigitCode();
 
             var invitedStatus = request.Function == UserRoles.Guardian
                 ? AccountStatus.Active
@@ -555,14 +698,14 @@ namespace Idara.API.Controllers
 
             var newUser = new User
             {
-                Email = request.Email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(tempPassword),
+                Email = email,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(code),
                 Role = request.Function,
                 IsEmailVerified = true,
                 AccountStatus = invitedStatus,
                 SchoolId = newUserSchoolId,
                 FullName = request.FullName,
-                PhoneNumber = request.PhoneNumber,
+                PhoneNumber = phone,
                 CreatedAt = DateTime.UtcNow,
                 // Hérite de la langue de celui qui invite (env. culturellement homogène).
                 PreferredLanguage = currentUser.PreferredLanguage,
@@ -583,15 +726,67 @@ namespace Idara.API.Controllers
                 await _context.SaveChangesAsync();
             }
 
-            await _emailService.SendInvitationEmailAsync(
-                request.Email,
-                request.FullName,
-                currentUser.School.Name ?? "Idara",
-                request.Function,
-                tempPassword,
-                newUser.PreferredLanguage);
+            // Message de bienvenue (numéro + code à 6 chiffres = mot de passe).
+            // Sert au SMS best-effort ET au modal récap côté école (Copier /
+            // WhatsApp / SMS) → onboarding sûr même sans SMS automatique.
+            var platform = await _context.GetPlatformSettingsAsync();
+            var (fonctionFr, fonctionAr) = FunctionLabels(request.Function);
+            var welcome = NotificationTemplates.InviteWelcome(
+                request.FullName, currentUser.School.Name ?? "Idara", fonctionFr, fonctionAr, phone, code);
+            var messageText = welcome.Compose(platform.SmsBilingual, newUser.PreferredLanguage);
 
-            return Ok(ApiResponse<bool>.Ok(true, "Utilisateur invité avec succès. Un email lui a été envoyé."));
+            await _notif.SendSmsAsync(new NotificationSmsRequest(
+                UserId: newUser.Id,
+                RawPhone: phone,
+                PreferredLanguage: newUser.PreferredLanguage,
+                Message: welcome,
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "INVITE",
+                RelatedEntityId: newUser.Id));
+
+            return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
+            {
+                FullName = request.FullName,
+                Phone = phone,
+                Code = code,
+                Message = messageText,
+            }, "Utilisateur ajouté."));
+        }
+
+        /// <summary>Libellés de fonction localisés (FR, AR) pour les SMS.</summary>
+        private static (string Fr, string Ar) FunctionLabels(string role) => role switch
+        {
+            UserRoles.Teacher => ("Enseignant", "معلّم"),
+            UserRoles.SchoolStaff => ("Personnel", "موظف"),
+            UserRoles.Guardian => ("Responsable", "ولي الأمر"),
+            _ => (role, role)
+        };
+
+        /// <summary>Code à 6 chiffres (mot de passe initial des comptes téléphone).</summary>
+        private static string SixDigitCode() =>
+            System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+
+        /// <summary>
+        /// Change le mot de passe de l'utilisateur connecté (vérifie l'ancien).
+        /// Sert notamment aux comptes téléphone pour remplacer leur code initial
+        /// à 6 chiffres par un vrai mot de passe.
+        /// </summary>
+        [HttpPost("change-password")]
+        [Authorize]
+        public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (user == null) return Unauthorized();
+
+            if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+                return BadRequest(ApiResponse<bool>.Fail("Mot de passe actuel incorrect."));
+
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+            await _context.SaveChangesAsync();
+            return Ok(ApiResponse<bool>.Ok(true, "Mot de passe modifié avec succès."));
         }
 
         /// <summary>

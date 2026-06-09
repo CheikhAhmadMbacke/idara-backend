@@ -26,6 +26,7 @@ builder.Services.Configure<SuperAdminSettings>(builder.Configuration.GetSection(
 builder.Services.Configure<OtpSettings>(builder.Configuration.GetSection(OtpSettings.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
 builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
+builder.Services.Configure<AfricasTalkingSettings>(builder.Configuration.GetSection(AfricasTalkingSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException("Section 'Jwt' manquante dans la configuration.");
@@ -101,6 +102,11 @@ builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
+builder.Services.AddScoped<Idara.API.Services.Notifications.INotificationService, Idara.API.Services.Notifications.NotificationService>();
+
+// Cache mémoire : sert au rate-limiting applicatif (anti brute-force login /
+// code à 6 chiffres / abus SMS). Mono-instance → en mémoire suffit.
+builder.Services.AddMemoryCache();
 // Source unique des transitions de solde wallet liées aux payouts (verrou
 // pessimiste, idempotence, webhook correcteur anti double dépense).
 builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
@@ -113,6 +119,10 @@ builder.Services.AddScoped<DbInitializer>();
 // endpoint admin de déclencher RunOnceAsync manuellement pour rejouer un jour.
 builder.Services.AddSingleton<MonthlyInvoiceGenerationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MonthlyInvoiceGenerationJob>());
+
+// Rappel SMS quotidien (09:00 UTC) des factures en retard, 1 seul par facture.
+builder.Services.AddSingleton<OverdueInvoiceReminderJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OverdueInvoiceReminderJob>());
 
 // Vérifie en continu (~60s) les retraits restés en UnderVerification (issue
 // indéterminée) via GET /payouts/{id} autoritatif, avec back-off. Anti double
@@ -139,6 +149,21 @@ builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
     client.DefaultRequestHeaders.Add("X-Api-Key", senepay.ApiKey);
     client.DefaultRequestHeaders.Add("X-Api-Secret", senepay.ApiSecret);
     client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+
+// ---------- Africa's Talking SMS (HttpClient typé) ----------
+// On NE throw PAS si l'ApiKey manque (contrairement à SenePay) : le service
+// no-op proprement tant que la clé n'est pas configurée, pour qu'un déploiement
+// prod avant configuration ne casse pas le démarrage. La clé est ajoutée par
+// requête dans le service (jamais bakée ici), pour rester fraîche.
+builder.Services.AddHttpClient<ISmsService, AfricasTalkingSmsService>((sp, client) =>
+{
+    var at = sp.GetRequiredService<IOptions<AfricasTalkingSettings>>().Value;
+    var baseUrl = string.IsNullOrWhiteSpace(at.BaseUrl)
+        ? "https://api.sandbox.africastalking.com"
+        : at.BaseUrl;
+    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(30);
 });
 
 // ---------- Authentification JWT ----------

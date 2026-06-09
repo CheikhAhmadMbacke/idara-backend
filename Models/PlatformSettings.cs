@@ -30,6 +30,15 @@ namespace Idara.API.Models
         /// <summary>Frais opérateur+taxe au payout (1,77 %), absorbés par la majoration sortante.</summary>
         public double PayoutFeePercent { get; set; } = 1.77;
 
+        /// <summary>
+        /// Mode d'envoi des SMS de notification. <c>true</c> (défaut) : les DEUX
+        /// versions FR + AR dans le même corps (compréhension garantie, mais ~3×
+        /// plus cher car l'arabe force l'UCS-2 = 70 car/segment). <c>false</c> :
+        /// une seule langue selon <c>User.PreferredLanguage</c> (~3× moins cher).
+        /// Bascule à chaud par le SuperAdmin sans redéploiement.
+        /// </summary>
+        public bool SmsBilingual { get; set; } = true;
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>

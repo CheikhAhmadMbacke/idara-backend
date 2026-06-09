@@ -70,14 +70,14 @@ namespace Idara.API.Controllers
             var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
             if (admin == null) return Unauthorized();
 
-            await _otp.GenerateAndSendOtpAsync(admin.Email, OtpPurpose.Withdrawal, admin.PreferredLanguage);
+            await _otp.GenerateAndSendOtpAsync(admin.Email ?? string.Empty, OtpPurpose.Withdrawal, admin.PreferredLanguage);
 
             _logger.LogInformation(
                 "[withdraw] OTP retrait envoyé au SchoolAdmin {UserId} (School {SchoolId})",
                 userId, User.GetSchoolId());
 
             return Ok(ApiResponse<object>.Ok(
-                new { sentTo = MaskEmail(admin.Email) },
+                new { sentTo = MaskEmail(admin.Email ?? string.Empty) },
                 "Un code de validation vous a été envoyé par email."));
         }
 
@@ -188,7 +188,7 @@ namespace Idara.API.Controllers
                         $"Solde insuffisant. Disponible : {wallet.AvailableBalance} FCFA."));
                 }
 
-                var otpOk = await _otp.VerifyOtpAsync(admin.Email, dto.OtpCode, OtpPurpose.Withdrawal);
+                var otpOk = await _otp.VerifyOtpAsync(admin.Email ?? string.Empty, dto.OtpCode, OtpPurpose.Withdrawal);
                 if (!otpOk)
                 {
                     await tx.RollbackAsync(ct);

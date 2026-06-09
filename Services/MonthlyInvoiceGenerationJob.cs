@@ -1,6 +1,8 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 namespace Idara.API.Services
@@ -95,6 +97,12 @@ namespace Idara.API.Services
 
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var notif = scope.ServiceProvider.GetRequiredService<INotificationService>();
+
+            // Mode SMS (bilingue ou non) — lu une seule fois pour tout le batch.
+            var platform = await db.GetPlatformSettingsAsync(ct);
+            var bilingual = platform.SmsBilingual;
+            var periodeLabel = FrenchMonthYear(new DateTime(today.Year, today.Month, 1));
 
             // 1) Écoles éligibles : FixedAmount + Monthly + MonthlyDueDay == today.Day.
             //    On filtre côté SQL pour ne charger que ce qu'on traite.
@@ -130,7 +138,7 @@ namespace Idara.API.Services
                 {
                     var perSchool = await GenerateForSchoolAsync(
                         db, settings.SchoolId, settings.GeneralMonthlyFeeFcfa,
-                        periodStart, periodEnd, dueDate, today, ct);
+                        periodStart, periodEnd, dueDate, today, notif, bilingual, periodeLabel, ct);
                     report.SchoolsProcessed++;
                     report.InvoicesCreated += perSchool.Created;
                     report.InvoicesSkipped += perSchool.Skipped;
@@ -165,6 +173,9 @@ namespace Idara.API.Services
             DateTime periodEnd,
             DateTime dueDate,
             DateTime today,
+            INotificationService notif,
+            bool bilingual,
+            string periodeLabel,
             CancellationToken ct)
         {
             var stats = new PerSchoolStats();
@@ -179,6 +190,23 @@ namespace Idara.API.Services
 
             // 3) Tous les overrides étudiants de cette école en une requête.
             var studentIds = students.Select(s => s.Id).ToList();
+
+            // 3-bis) Responsables (Guardian) joignables par SMS, groupés par élève.
+            //        Sert à envoyer le SMS « facture due » après création.
+            var guardiansByStudent = (await db.StudentGuardians
+                    .Where(sg => studentIds.Contains(sg.StudentId)
+                                 && !sg.Guardian.IsDeleted
+                                 && sg.Guardian.PhoneNumber != null)
+                    .Select(sg => new
+                    {
+                        sg.StudentId,
+                        sg.GuardianId,
+                        sg.Guardian.PhoneNumber,
+                        sg.Guardian.PreferredLanguage
+                    })
+                    .ToListAsync(ct))
+                .GroupBy(g => g.StudentId)
+                .ToDictionary(g => g.Key, g => g.ToList());
             var overrides = await db.StudentFeeOverrides
                 .Where(o => studentIds.Contains(o.StudentId))
                 .ToDictionaryAsync(o => o.StudentId, o => o.AmountFcfa, ct);
@@ -258,6 +286,26 @@ namespace Idara.API.Services
                 {
                     await db.SaveChangesAsync(ct);
                     stats.Created++;
+
+                    // SMS « facture due » aux responsables joignables (best-effort,
+                    // post-commit). Uniquement sur facture NOUVELLEMENT créée — pas
+                    // sur un re-run du cron (AlreadyExisting) → pas de spam.
+                    if (guardiansByStudent.TryGetValue(s.Id, out var guardians))
+                    {
+                        var eleve = $"{s.FirstName} {s.LastName}".Trim();
+                        var msg = NotificationTemplates.InvoiceDue(eleve, amount.Value, periodeLabel);
+                        foreach (var g in guardians)
+                        {
+                            await notif.SendSmsAsync(new NotificationSmsRequest(
+                                UserId: g.GuardianId,
+                                RawPhone: g.PhoneNumber,
+                                PreferredLanguage: g.PreferredLanguage ?? "fr",
+                                Message: msg,
+                                Bilingual: bilingual,
+                                TemplateCode: "INVOICE_DUE",
+                                RelatedEntityId: invoice.Id), ct);
+                        }
+                    }
                 }
                 catch (DbUpdateException dbex) when (IsUniqueViolation(dbex))
                 {
@@ -292,6 +340,15 @@ namespace Idara.API.Services
         {
             return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
         }
+
+        private static readonly string[] FrMonths =
+        {
+            "janvier", "fevrier", "mars", "avril", "mai", "juin",
+            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+        };
+
+        /// <summary>"juin 2026" — sans accent (GSM-7) ni dépendance culture.</summary>
+        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
 
         private record struct PerSchoolStats(
             int Created,

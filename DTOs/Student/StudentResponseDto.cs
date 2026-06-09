@@ -53,5 +53,12 @@ namespace Idara.API.DTOs.Student
 
         public List<GuardianResponseDto> Guardians { get; set; } = new();
         public List<StudentDocumentResponseDto> Documents { get; set; } = new();
+
+        /// <summary>
+        /// Identifiants des responsables NOUVELLEMENT créés lors de ce
+        /// create/update (numéro + code + message à partager). Vide en lecture
+        /// (GET/list). Sert au modal récap côté école.
+        /// </summary>
+        public List<Common.UserCredentialDto> NewGuardianCredentials { get; set; } = new();
     }
 }

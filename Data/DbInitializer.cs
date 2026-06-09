@@ -1,3 +1,4 @@
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -29,6 +30,43 @@ namespace Idara.API.Data
             await SeedSuperAdminAsync();
             await SeedPaymentFoundationsAsync();
             await SeedPlatformSettingsAsync();
+            await NormalizeUserPhonesAsync();
+        }
+
+        /// <summary>
+        /// Normalise les numéros de téléphone existants en E.164 (+221…) pour
+        /// qu'ils soient envoyables par SMS. Idempotent : ne touche que les
+        /// numéros qui ne commencent pas déjà par "+221" et que
+        /// <see cref="SenegalPhone"/> sait convertir (les autres restent en
+        /// l'état, à corriger manuellement par l'école). N'INVENTE aucun numéro.
+        /// </summary>
+        private async Task NormalizeUserPhonesAsync()
+        {
+            var users = await _context.Users
+                .Where(u => u.PhoneNumber != null
+                            && u.PhoneNumber != ""
+                            && !u.PhoneNumber.StartsWith("+221"))
+                .ToListAsync();
+            if (users.Count == 0) return;
+
+            int fixedCount = 0;
+            foreach (var u in users)
+            {
+                var norm = SenegalPhone.Normalize(u.PhoneNumber);
+                if (norm != null && norm != u.PhoneNumber)
+                {
+                    u.PhoneNumber = norm;
+                    fixedCount++;
+                }
+            }
+
+            if (fixedCount > 0)
+            {
+                await _context.SaveChangesAsync();
+                _logger.LogInformation(
+                    "Normalisation téléphones : {Count} numéro(s) convertis en E.164 (+221).",
+                    fixedCount);
+            }
         }
 
         /// <summary>

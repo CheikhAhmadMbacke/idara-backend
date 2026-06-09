@@ -43,6 +43,9 @@ namespace Idara.API.Data
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
         public DbSet<PayoutAlert> PayoutAlerts { get; set; }
 
+        // ----- Notifications (Phase 2) -----
+        public DbSet<NotificationLog> NotificationLogs { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -51,6 +54,14 @@ namespace Idara.API.Data
             modelBuilder.Entity<PlatformSettings>()
                 .Property(p => p.Id)
                 .ValueGeneratedNever();
+
+            // --- NotificationLog : index pour déduplication des rappels ---
+            // (TemplateCode, RelatedEntityId) : « a-t-on déjà envoyé un rappel
+            // OVERDUE pour cette facture ? ». + index temporel pour l'audit.
+            modelBuilder.Entity<NotificationLog>()
+                .HasIndex(n => new { n.TemplateCode, n.RelatedEntityId });
+            modelBuilder.Entity<NotificationLog>()
+                .HasIndex(n => n.CreatedAt);
 
             modelBuilder.Entity<User>()
                 .HasOne(u => u.School)

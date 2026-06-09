@@ -9,6 +9,7 @@ using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
 using Idara.API.Services;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -31,6 +32,7 @@ namespace Idara.API.Controllers
         private readonly SenePaySettings _senepay;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IPayoutSettlementService _settlement;
+        private readonly Services.Notifications.INotificationService _notif;
         private readonly ILogger<WebhooksController> _logger;
 
         // Constantes du provider — figées dans le code pour empêcher une typo
@@ -50,12 +52,14 @@ namespace Idara.API.Controllers
             IOptions<SenePaySettings> senepay,
             IReceiptPdfService receiptPdf,
             IPayoutSettlementService settlement,
+            Services.Notifications.INotificationService notif,
             ILogger<WebhooksController> logger)
         {
             _context = context;
             _senepay = senepay.Value;
             _receiptPdf = receiptPdf;
             _settlement = settlement;
+            _notif = notif;
             _logger = logger;
         }
 
@@ -261,6 +265,46 @@ namespace Idara.API.Controllers
                 {
                     _logger.LogError(ex,
                         "[webhook/payin] Échec génération reçu PDF Payment.Id={Id} — pas bloquant",
+                        completedPayment.Id);
+                }
+            }
+
+            // -------- 8) SMS « paiement reçu » au responsable (best-effort) --------
+            // Bloc séparé du PDF : un échec PDF ne doit pas priver le parent du
+            // SMS, et inversement. NotificationService ne lève jamais, mais on
+            // enveloppe quand même par principe (lecture DB du guardian/élève).
+            if (completedPayment != null
+                && completedPayment.Status == PaymentStatus.Completed
+                && completedPayment.GuardianId.HasValue)
+            {
+                try
+                {
+                    var guardian = await _context.Users.FirstOrDefaultAsync(
+                        u => u.Id == completedPayment.GuardianId.Value && !u.IsDeleted);
+                    if (guardian?.PhoneNumber != null)
+                    {
+                        var student = completedPayment.StudentId.HasValue
+                            ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
+                            : null;
+                        var eleve = student != null
+                            ? $"{student.FirstName} {student.LastName}".Trim()
+                            : "votre enfant";
+                        var platform = await _context.GetPlatformSettingsAsync();
+                        var msg = NotificationTemplates.PaymentReceived(eleve, completedPayment.AmountFcfa);
+                        await _notif.SendSmsAsync(new NotificationSmsRequest(
+                            UserId: guardian.Id,
+                            RawPhone: guardian.PhoneNumber,
+                            PreferredLanguage: guardian.PreferredLanguage ?? "fr",
+                            Message: msg,
+                            Bilingual: platform.SmsBilingual,
+                            TemplateCode: "PAYMENT_RECEIVED",
+                            RelatedEntityId: completedPayment.Id));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[webhook/payin] Échec SMS paiement reçu Payment.Id={Id} — pas bloquant",
                         completedPayment.Id);
                 }
             }
