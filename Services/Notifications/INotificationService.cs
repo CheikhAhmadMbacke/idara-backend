@@ -28,10 +28,11 @@ namespace Idara.API.Services.Notifications
         Task SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default);
 
         /// <summary>
-        /// Vrai si un SMS de ce template a DÉJÀ été envoyé avec succès pour cette
-        /// entité (dédup des rappels — ex. ne pas renvoyer 2× le rappel retard
-        /// de la même facture).
+        /// Vrai si un SMS de ce template a déjà été TENTÉ (log présent, succès ou
+        /// non) pour cette entité. Dédup des rappels : une seule tentative par
+        /// entité — évite à la fois le double-envoi et la re-tentative quotidienne
+        /// sans plafond quand l'envoi échoue (provider no-op ou rejet opérateur).
         /// </summary>
-        Task<bool> HasSentSuccessfullyAsync(string templateCode, int relatedEntityId, CancellationToken ct = default);
+        Task<bool> HasAttemptedAsync(string templateCode, int relatedEntityId, CancellationToken ct = default);
     }
 }

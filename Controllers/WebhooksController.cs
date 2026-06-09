@@ -290,7 +290,13 @@ namespace Idara.API.Controllers
                             ? $"{student.FirstName} {student.LastName}".Trim()
                             : "votre enfant";
                         var platform = await _context.GetPlatformSettingsAsync();
-                        var msg = NotificationTemplates.PaymentReceived(eleve, completedPayment.AmountFcfa);
+                        // Montant CIBLE (ce que la facture considère payé), pas le
+                        // débité parent (cible×1,08) — cohérent avec le reçu/facture
+                        // (§82). Fallback AmountFcfa pour les anciens Payments.
+                        var shownAmount = completedPayment.TargetAmountFcfa > 0
+                            ? completedPayment.TargetAmountFcfa
+                            : completedPayment.AmountFcfa;
+                        var msg = NotificationTemplates.PaymentReceived(eleve, shownAmount);
                         await _notif.SendSmsAsync(new NotificationSmsRequest(
                             UserId: guardian.Id,
                             RawPhone: guardian.PhoneNumber,

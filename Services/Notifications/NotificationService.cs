@@ -61,7 +61,7 @@ namespace Idara.API.Services.Notifications
             }
         }
 
-        public async Task<bool> HasSentSuccessfullyAsync(
+        public async Task<bool> HasAttemptedAsync(
             string templateCode, int relatedEntityId, CancellationToken ct = default)
         {
             try
@@ -70,8 +70,7 @@ namespace Idara.API.Services.Notifications
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 return await db.NotificationLogs.AnyAsync(
                     n => n.TemplateCode == templateCode
-                         && n.RelatedEntityId == relatedEntityId
-                         && n.Success, ct);
+                         && n.RelatedEntityId == relatedEntityId, ct);
             }
             catch (Exception ex)
             {

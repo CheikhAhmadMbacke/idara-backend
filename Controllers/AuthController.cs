@@ -196,29 +196,32 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             // Identifiant = email (contient "@") OU numéro de téléphone.
-            var identifier = (request.Email ?? string.Empty).Trim();
+            var raw = (request.Email ?? string.Empty).Trim();
+            var isEmail = raw.Contains('@');
+            var emailKey = raw.ToLowerInvariant();
+            var phone = isEmail ? null : SenegalPhone.Normalize(raw);
 
-            // Rate-limiting anti brute-force (protège notamment le code à 6
-            // chiffres) : 5 tentatives ratées / 15 min par identifiant.
-            var rlKey = $"login-fail:{identifier.ToLowerInvariant()}";
+            // Rate-limiting anti brute-force : 5 tentatives ratées / 15 min. La
+            // clé est l'identifiant NORMALISÉ (email minuscule / numéro E.164)
+            // pour qu'on ne puisse pas réinitialiser le compteur en variant le
+            // format de saisie (ex. "77…" vs "+221 77…" vs "00221…").
+            var normId = isEmail ? emailKey : (phone ?? emailKey);
+            var rlKey = $"login-fail:{normId}";
             if (IsRateLimited(rlKey, 5))
                 return StatusCode(429, ApiResponse<bool>.Fail(
                     "Trop de tentatives. Réessayez dans quelques minutes."));
 
+            // OrderBy(Id) : résolution déterministe si jamais un numéro/email était
+            // partagé (le plus ancien compte gagne, jamais un ordre aléatoire).
             User? user;
-            if (identifier.Contains('@'))
-            {
-                var email = identifier.ToLowerInvariant();
+            if (isEmail)
                 user = await _context.Users.Include(u => u.School)
-                    .FirstOrDefaultAsync(u => u.Email != null
-                        && u.Email.ToLower() == email && !u.IsDeleted);
-            }
+                    .Where(u => u.Email != null && u.Email.ToLower() == emailKey && !u.IsDeleted)
+                    .OrderBy(u => u.Id).FirstOrDefaultAsync();
             else
-            {
-                var phone = Common.Utilities.SenegalPhone.Normalize(identifier);
                 user = phone == null ? null : await _context.Users.Include(u => u.School)
-                    .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
-            }
+                    .Where(u => u.PhoneNumber == phone && !u.IsDeleted)
+                    .OrderBy(u => u.Id).FirstOrDefaultAsync();
 
             if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
             {
@@ -269,7 +272,8 @@ namespace Idara.API.Controllers
             if (IsRateLimited(rlKey, 3)) return Ok(generic);
 
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+                .Where(u => u.PhoneNumber == phone && !u.IsDeleted)
+                .OrderBy(u => u.Id).FirstOrDefaultAsync();
             if (user == null) return Ok(generic);
 
             await _otpService.GenerateAndSendSmsOtpAsync(
@@ -305,7 +309,8 @@ namespace Idara.API.Controllers
             ResetAttempts(rlKey);
 
             var user = await _context.Users.Include(u => u.School)
-                .FirstOrDefaultAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+                .Where(u => u.PhoneNumber == phone && !u.IsDeleted)
+                .OrderBy(u => u.Id).FirstOrDefaultAsync();
             if (user == null)
                 return BadRequest(ApiResponse<bool>.Fail("Compte introuvable."));
             if (user.AccountStatus == AccountStatus.Suspended)
@@ -680,7 +685,7 @@ namespace Idara.API.Controllers
             if (await _context.Users.AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted))
                 return BadRequest(ApiResponse<bool>.Fail("Ce numéro est déjà utilisé."));
 
-            var email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+            var email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim().ToLowerInvariant();
             if (email != null && await _context.Users.AnyAsync(u => u.Email == email && !u.IsDeleted))
                 return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
 

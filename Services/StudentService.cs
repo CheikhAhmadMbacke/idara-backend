@@ -178,13 +178,13 @@ namespace Idara.API.Services
                 await _context.SaveChangesAsync();
             }
 
-            // Liens responsables. On collecte les identifiants des responsables
-            // NOUVELLEMENT créés (numéro + code) pour les afficher à l'école.
-            var newCredentials = new List<DTOs.Common.UserCredentialDto>();
+            // Liens responsables. On collecte les NOUVEAUX responsables (code +
+            // requête SMS) pour l'affichage à l'école ET l'envoi POST-COMMIT.
+            var newGuardians = new List<NewGuardianResult>();
             foreach (var guardianDto in dto.Guardians)
             {
-                var (guardian, cred) = await GetOrCreateGuardianAsync(guardianDto, schoolId, school.Name ?? "Idara");
-                if (cred != null) newCredentials.Add(cred);
+                var (guardian, newG) = await GetOrCreateGuardianAsync(guardianDto, schoolId, school.Name ?? "Idara");
+                if (newG != null) newGuardians.Add(newG);
                 _context.StudentGuardians.Add(new StudentGuardian
                 {
                     StudentId = student.Id,
@@ -216,8 +216,13 @@ namespace Idara.API.Services
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
 
+            // POST-COMMIT : envoi SMS de bienvenue best-effort. Si la tx avait
+            // rollback, aucun SMS ne serait parti (plus de compte fantôme).
+            foreach (var g in newGuardians)
+                await _notif.SendSmsAsync(g.Sms);
+
             var created = await GetStudentByIdAsync(student.Id, schoolId);
-            created!.NewGuardianCredentials = newCredentials;
+            created!.NewGuardianCredentials = newGuardians.Select(g => g.Credential).ToList();
             return created;
         }
 
@@ -295,7 +300,7 @@ namespace Idara.API.Services
             }
 
             // Guardians : si null, on ne touche pas. Si fourni (même vide), on remplace.
-            var newCredentials = new List<DTOs.Common.UserCredentialDto>();
+            var newGuardians = new List<NewGuardianResult>();
             if (dto.Guardians != null)
             {
                 var existingLinks = _context.StudentGuardians.Where(sg => sg.StudentId == student.Id);
@@ -306,8 +311,8 @@ namespace Idara.API.Services
 
                 foreach (var guardianDto in dto.Guardians)
                 {
-                    var (guardian, cred) = await GetOrCreateGuardianAsync(guardianDto, schoolId, schoolName);
-                    if (cred != null) newCredentials.Add(cred);
+                    var (guardian, created) = await GetOrCreateGuardianAsync(guardianDto, schoolId, schoolName);
+                    if (created != null) newGuardians.Add(created);
                     _context.StudentGuardians.Add(new StudentGuardian
                     {
                         StudentId = student.Id,
@@ -321,8 +326,13 @@ namespace Idara.API.Services
             student.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
+            // POST-COMMIT : envoi SMS de bienvenue best-effort des nouveaux responsables.
+            foreach (var g in newGuardians)
+                await _notif.SendSmsAsync(g.Sms);
+
             var updated = await GetStudentByIdAsync(student.Id, schoolId);
-            if (updated != null) updated.NewGuardianCredentials = newCredentials;
+            if (updated != null)
+                updated.NewGuardianCredentials = newGuardians.Select(g => g.Credential).ToList();
             return updated;
         }
 
@@ -559,23 +569,31 @@ namespace Idara.API.Services
         ///   ses données personnelles (FirstName/LastName/PhoneNumber) pour éviter qu'une école A
         ///   modifie les infos d'un parent connu d'une école B.
         /// </summary>
-        private async Task<(User user, DTOs.Common.UserCredentialDto? credential)> GetOrCreateGuardianAsync(
+        /// <summary>Responsable nouvellement créé : son identifiant à afficher
+        /// + la requête SMS à envoyer APRÈS le commit (best-effort).</summary>
+        private sealed record NewGuardianResult(
+            DTOs.Common.UserCredentialDto Credential, NotificationSmsRequest Sms);
+
+        private async Task<(User user, NewGuardianResult? created)> GetOrCreateGuardianAsync(
             GuardianInputDto dto,
             int schoolId,
             string schoolName,
             string adminLanguage = "fr")
         {
-            // Identité = TÉLÉPHONE (incrément 2). Email facultatif.
+            // Identité = TÉLÉPHONE (incrément 2). Email facultatif (normalisé minuscules).
             var phone = SenegalPhone.Normalize(dto.PhoneNumber);
             if (phone == null)
                 throw new InvalidOperationException(
                     $"Numéro de téléphone du responsable invalide : '{dto.PhoneNumber}'.");
-            var email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
+            var email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim().ToLowerInvariant();
 
+            // OrderBy(Id) : lookup déterministe (le numéro sert d'identité de login).
             var existing = await _context.Users
-                .FirstOrDefaultAsync(u => u.PhoneNumber == phone
-                                          && u.Role == UserRoles.Guardian
-                                          && !u.IsDeleted);
+                .Where(u => u.PhoneNumber == phone
+                            && u.Role == UserRoles.Guardian
+                            && !u.IsDeleted)
+                .OrderBy(u => u.Id)
+                .FirstOrDefaultAsync();
 
             if (existing != null)
             {
@@ -599,8 +617,17 @@ namespace Idara.API.Services
                 return (existing, null);
             }
 
-            // Nouveau responsable : code à 6 chiffres = mot de passe initial
-            // (non-expirant), envoyé par SMS. Modifiable ensuite dans l'app.
+            // Le numéro est une identité UNIQUE de login. Aucun Guardian ne l'a
+            // (existing == null) ; s'il appartient à un AUTRE compte (enseignant/
+            // personnel), on refuse de créer un doublon ambigu (sinon login non
+            // déterministe) plutôt que de casser silencieusement l'auth.
+            var phoneTakenByOther = await _context.Users
+                .AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
+            if (phoneTakenByOther)
+                throw new InvalidOperationException(
+                    $"Le numéro {phone} est déjà utilisé par un autre compte. Utilisez un autre numéro pour ce responsable.");
+
+            // Nouveau responsable : code à 6 chiffres = mot de passe initial.
             var code = SixDigitCode();
             var newGuardian = new User
             {
@@ -622,22 +649,14 @@ namespace Idara.API.Services
             _context.Users.Add(newGuardian);
             await _context.SaveChangesAsync();
 
-            // Message de bienvenue (numéro + code). Sert au SMS best-effort ET au
-            // modal récap côté école (Copier / WhatsApp / SMS) → onboarding sûr
-            // même si le SMS automatique n'est pas (encore) actif.
+            // Message de bienvenue (numéro + code). ⚠️ L'ENVOI SMS est fait en
+            // POST-COMMIT par l'appelant (CreateStudent/UpdateStudent) : on ne
+            // doit pas envoyer un SMS si la transaction est ensuite rollback
+            // (cf. §42/§57). Ici on prépare juste le message + le code.
             var platform = await _context.GetPlatformSettingsAsync();
             var welcome = NotificationTemplates.InviteWelcome(
                 dto.FirstName, schoolName, "Responsable", "ولي الأمر", phone, code);
             var messageText = welcome.Compose(platform.SmsBilingual, adminLanguage);
-
-            await _notif.SendSmsAsync(new NotificationSmsRequest(
-                UserId: newGuardian.Id,
-                RawPhone: phone,
-                PreferredLanguage: adminLanguage,
-                Message: welcome,
-                Bilingual: platform.SmsBilingual,
-                TemplateCode: "INVITE",
-                RelatedEntityId: newGuardian.Id));
 
             var credential = new DTOs.Common.UserCredentialDto
             {
@@ -646,7 +665,15 @@ namespace Idara.API.Services
                 Code = code,
                 Message = messageText,
             };
-            return (newGuardian, credential);
+            var sms = new NotificationSmsRequest(
+                UserId: newGuardian.Id,
+                RawPhone: phone,
+                PreferredLanguage: adminLanguage,
+                Message: welcome,
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "INVITE",
+                RelatedEntityId: newGuardian.Id);
+            return (newGuardian, new NewGuardianResult(credential, sms));
         }
 
         private static string SixDigitCode() =>

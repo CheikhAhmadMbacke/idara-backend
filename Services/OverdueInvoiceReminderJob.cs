@@ -110,8 +110,9 @@ namespace Idara.API.Services
                         .ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, InvoiceStatus.Overdue), ct);
                 }
 
-                // Dédup : un seul rappel par facture.
-                if (await notif.HasSentSuccessfullyAsync("INVOICE_OVERDUE", inv.Id, ct))
+                // Dédup : une seule tentative de rappel par facture (évite la
+                // re-tentative quotidienne sans plafond si l'envoi échoue).
+                if (await notif.HasAttemptedAsync("INVOICE_OVERDUE", inv.Id, ct))
                     continue;
 
                 if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians))
