@@ -118,13 +118,25 @@ namespace Idara.API.Services.Push
                             : GoogleCredential.FromJson(_settings.ServiceAccountJson);
 #pragma warning restore CS0618
 
-                    // App nommée (pas la default) pour éviter tout conflit + idempotence.
-                    // GetInstance LÈVE si l'app n'existe pas encore → on la crée alors.
-                    FirebaseApp app;
+                    // App nommée (pas la default) pour éviter tout conflit.
+                    // ⚠️ FirebaseApp.GetInstance(name) RENVOIE null si l'app n'existe
+                    // pas encore (il ne lève PAS) — d'où la création explicite quand
+                    // c'est le cas. Le try/catch couvre les variantes de version.
+                    FirebaseApp? app;
                     try { app = FirebaseApp.GetInstance(AppName); }
-                    catch (ArgumentException)
+                    catch { app = null; }
+
+                    if (app == null)
                     {
-                        app = FirebaseApp.Create(new AppOptions { Credential = credential }, AppName);
+                        try
+                        {
+                            app = FirebaseApp.Create(new AppOptions { Credential = credential }, AppName);
+                        }
+                        catch
+                        {
+                            // Course rare (app créée entre-temps) : on la récupère.
+                            app = FirebaseApp.GetInstance(AppName);
+                        }
                     }
 
                     _messaging = FirebaseMessaging.GetMessaging(app);
