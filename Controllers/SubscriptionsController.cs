@@ -5,6 +5,7 @@ using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Subscription;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -23,12 +24,27 @@ namespace Idara.API.Controllers
     public class SubscriptionsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly SubscriptionBillingJob _billingJob;
         private readonly ILogger<SubscriptionsController> _logger;
 
-        public SubscriptionsController(AppDbContext context, ILogger<SubscriptionsController> logger)
+        public SubscriptionsController(
+            AppDbContext context, SubscriptionBillingJob billingJob, ILogger<SubscriptionsController> logger)
         {
             _context = context;
+            _billingJob = billingJob;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// `POST /api/subscriptions/cron/run` — déclenche manuellement le cycle de
+        /// facturation (SuperAdmin). Pour rejouer / tester sans attendre 02:15 UTC.
+        /// </summary>
+        [HttpPost("cron/run")]
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        public async Task<ActionResult<ApiResponse<SubscriptionBillingReport>>> RunBilling(CancellationToken ct)
+        {
+            var report = await _billingJob.RunOnceAsync(DateTime.UtcNow, ct);
+            return Ok(ApiResponse<SubscriptionBillingReport>.Ok(report, "Cycle de facturation exécuté."));
         }
 
         /// <summary>Liste tous les abonnements (SuperAdmin).</summary>

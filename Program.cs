@@ -136,6 +136,12 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutVerification
 builder.Services.AddSingleton<PayoutReconciliationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliationJob>());
 
+// Facturation des abonnements plateforme (Phase 4) : moteur scoped (réutilisé
+// par le cron ET le retry post-crédit-wallet) + cron quotidien 02:15 UTC.
+builder.Services.AddScoped<ISubscriptionBillingService, SubscriptionBillingService>();
+builder.Services.AddSingleton<SubscriptionBillingJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionBillingJob>());
+
 // ---------- SenePay (HttpClient typé) ----------
 builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
 {
@@ -245,6 +251,12 @@ app.UseHttpsRedirection();
 app.UseCors(CorsPolicy);
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Machine à états d'abonnement (Phase 4) : bloque ReadOnly/Suspended avec 402.
+// APRÈS l'auth (besoin des claims rôle/école), AVANT les controllers. No-op tant
+// que PlatformSettings.SubscriptionEnforcementEnabled est OFF (défaut).
+app.UseMiddleware<Idara.API.Common.Middleware.SubscriptionEnforcementMiddleware>();
+
 app.MapControllers();
 
 app.Run();
