@@ -89,6 +89,32 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Plan assigné."));
         }
 
+        /// <summary>Plans publics actifs (pour l'écran « changer de plan » côté école).</summary>
+        [HttpGet("available-plans")]
+        [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
+        public async Task<ActionResult<ApiResponse<List<SubscriptionPlanDto>>>> AvailablePlans(CancellationToken ct)
+        {
+            var plans = await _context.SubscriptionPlans
+                .Where(p => p.IsActive && !p.IsCustom)
+                .OrderBy(p => p.MonthlyPriceFcfa)
+                .Select(p => new SubscriptionPlanDto
+                {
+                    Id = p.Id,
+                    Code = p.Code,
+                    Name = p.Name,
+                    StudentMin = p.StudentMin,
+                    StudentMax = p.StudentMax,
+                    MonthlyPriceFcfa = p.MonthlyPriceFcfa,
+                    AnnualPriceFcfa = p.AnnualPriceFcfa,
+                    NotificationQuota = p.NotificationQuota,
+                    IsActive = p.IsActive,
+                    IsCustom = p.IsCustom,
+                    SchoolId = p.SchoolId
+                })
+                .ToListAsync(ct);
+            return Ok(ApiResponse<List<SubscriptionPlanDto>>.Ok(plans));
+        }
+
         /// <summary>Abonnement de l'école connectée (SchoolAdmin / SchoolStaff).</summary>
         [HttpGet("me")]
         [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
