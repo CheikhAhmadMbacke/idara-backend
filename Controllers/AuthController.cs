@@ -466,6 +466,10 @@ namespace Idara.API.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Abonnement plateforme : démarre l'essai gratuit de 30 jours dès la
+            // validation (idempotent — ne recrée pas si l'école en a déjà un).
+            await _context.EnsureSubscriptionAsync(school.Id);
+
             var adminUser = school.Users
                 .Where(u => u.Role == UserRoles.SchoolAdmin && !u.IsDeleted)
                 .OrderBy(u => u.CreatedAt)

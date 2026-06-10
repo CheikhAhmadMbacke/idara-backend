@@ -43,6 +43,11 @@ namespace Idara.API.Data
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
         public DbSet<PayoutAlert> PayoutAlerts { get; set; }
 
+        // ----- Abonnement plateforme (Phase 4) -----
+        public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
+        public DbSet<Subscription> Subscriptions { get; set; }
+        public DbSet<SubscriptionInvoice> SubscriptionInvoices { get; set; }
+
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
@@ -607,6 +612,60 @@ namespace Idara.API.Data
             // StuckUnderVerification dans PayoutVerificationJob).
             modelBuilder.Entity<PayoutAlert>()
                 .HasIndex(a => a.WithdrawalId);
+
+            // ===== Abonnement plateforme (Phase 4) =====
+
+            // Plan public : Code unique parmi les plans NON custom (les deals
+            // custom peuvent réutiliser n'importe quel code, on filtre dessus).
+            modelBuilder.Entity<SubscriptionPlan>()
+                .HasIndex(p => p.Code)
+                .IsUnique()
+                .HasFilter("\"IsCustom\" = FALSE");
+
+            modelBuilder.Entity<SubscriptionPlan>()
+                .HasOne(p => p.School)
+                .WithMany()
+                .HasForeignKey(p => p.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // 1 abonnement par école.
+            modelBuilder.Entity<Subscription>()
+                .HasIndex(s => s.SchoolId)
+                .IsUnique();
+
+            modelBuilder.Entity<Subscription>()
+                .HasOne(s => s.School)
+                .WithMany()
+                .HasForeignKey(s => s.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict : ne pas supprimer un plan référencé par un abo (le
+            // snapshot reste autoritatif, mais on garde le lien pour l'affichage).
+            modelBuilder.Entity<Subscription>()
+                .HasOne(s => s.Plan)
+                .WithMany()
+                .HasForeignKey(s => s.PlanId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Cron de facturation : prélever les abos échus.
+            modelBuilder.Entity<Subscription>()
+                .HasIndex(s => new { s.Status, s.NextBillingAt });
+
+            modelBuilder.Entity<SubscriptionInvoice>()
+                .HasOne(i => i.Subscription)
+                .WithMany()
+                .HasForeignKey(i => i.SubscriptionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Idempotence du cron : une seule facture par abo et par période
+            // (hors annulées). Évite les doublons sur re-run du billing.
+            modelBuilder.Entity<SubscriptionInvoice>()
+                .HasIndex(i => new { i.SubscriptionId, i.PeriodStart })
+                .IsUnique()
+                .HasFilter("\"Status\" <> 3");
+
+            modelBuilder.Entity<SubscriptionInvoice>()
+                .HasIndex(i => i.SchoolId);
         }
     }
 }

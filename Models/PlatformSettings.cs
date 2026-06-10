@@ -39,6 +39,17 @@ namespace Idara.API.Models
         /// </summary>
         public bool SmsBilingual { get; set; } = true;
 
+        /// <summary>
+        /// Active l'application de la machine à états d'abonnement (Phase 4) : si
+        /// <c>true</c>, le middleware bloque réellement les écoles en ReadOnly
+        /// (écritures interdites) / Suspended (tout interdit) avec un 402. Si
+        /// <c>false</c> (défaut), tout le code de facturation tourne (génération
+        /// de factures, transitions d'état) mais AUCUNE école n'est bloquée —
+        /// permet de déployer et d'observer avant d'activer le verrou. Bascule à
+        /// chaud par le SuperAdmin (Réglages plateforme).
+        /// </summary>
+        public bool SubscriptionEnforcementEnabled { get; set; } = false;
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>

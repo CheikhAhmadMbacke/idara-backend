@@ -30,7 +30,99 @@ namespace Idara.API.Data
             await SeedSuperAdminAsync();
             await SeedPaymentFoundationsAsync();
             await SeedPlatformSettingsAsync();
+            await SeedSubscriptionPlansAsync();
+            await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
+        }
+
+        /// <summary>
+        /// Seed des 4 plans d'abonnement publics (spec §2.2). Idempotent par
+        /// Code : n'ajoute que les plans manquants, ne touche pas aux prix déjà
+        /// édités par le SuperAdmin.
+        /// </summary>
+        private async Task SeedSubscriptionPlansAsync()
+        {
+            // (code, nom, élèves min, élèves max, mensuel, annuel, quota notif)
+            var defaults = new (string Code, string Name, int Min, int? Max, long Monthly, long Annual, int Quota)[]
+            {
+                ("daara",    "Daara",    1,   30,   5000,  50000,  150),
+                ("standard", "Standard", 31,  100,  12000, 120000, 500),
+                ("pro",      "Pro",      101, 300,  25000, 250000, 1500),
+                ("grand",    "Grand",    301, null, 50000, 500000, 3000),
+            };
+
+            var existingCodes = await _context.SubscriptionPlans
+                .Where(p => !p.IsCustom)
+                .Select(p => p.Code)
+                .ToListAsync();
+
+            var now = DateTime.UtcNow;
+            var toAdd = defaults
+                .Where(d => !existingCodes.Contains(d.Code))
+                .Select(d => new SubscriptionPlan
+                {
+                    Code = d.Code,
+                    Name = d.Name,
+                    StudentMin = d.Min,
+                    StudentMax = d.Max,
+                    MonthlyPriceFcfa = d.Monthly,
+                    AnnualPriceFcfa = d.Annual,
+                    NotificationQuota = d.Quota,
+                    IsActive = true,
+                    IsCustom = false,
+                    CreatedAt = now
+                })
+                .ToList();
+
+            if (toAdd.Count > 0)
+            {
+                _context.SubscriptionPlans.AddRange(toAdd);
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("Seed abonnement : {Count} plan(s) public(s) créé(s).", toAdd.Count);
+            }
+        }
+
+        /// <summary>
+        /// Backfill : crée un abonnement Trial 30j pour chaque école qui n'en a
+        /// pas encore (écoles validées avant le déploiement de la Phase 4).
+        /// Idempotent — n'invente rien pour les écoles déjà abonnées.
+        /// </summary>
+        private async Task SeedSubscriptionsAsync()
+        {
+            var schoolIds = await _context.Schools.Select(s => s.Id).ToListAsync();
+            if (schoolIds.Count == 0) return;
+
+            var subscribedIds = await _context.Subscriptions
+                .Select(s => s.SchoolId)
+                .ToListAsync();
+
+            var missing = schoolIds.Except(subscribedIds).ToList();
+            if (missing.Count == 0) return;
+
+            var plan = await _context.SubscriptionPlans
+                .FirstOrDefaultAsync(p => p.Code == Common.Extensions.SubscriptionExtensions.DefaultPlanCode && !p.IsCustom);
+
+            var now = DateTime.UtcNow;
+            var trialEnd = now.AddDays(Common.Extensions.SubscriptionExtensions.TrialDays);
+
+            var toAdd = missing.Select(id => new Subscription
+            {
+                SchoolId = id,
+                PlanId = plan?.Id,
+                BillingCycle = BillingCycle.Monthly,
+                Status = SubscriptionStatus.Trial,
+                AmountFcfa = plan?.MonthlyPriceFcfa ?? 5000,
+                NotificationQuota = plan?.NotificationQuota ?? 150,
+                NotificationUsedThisCycle = 0,
+                TrialEndsAt = trialEnd,
+                NextBillingAt = trialEnd,
+                CreatedAt = now,
+                UpdatedAt = now
+            }).ToList();
+
+            _context.Subscriptions.AddRange(toAdd);
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("Seed abonnement : {Count} abonnement(s) Trial 30j créé(s) (backfill).", toAdd.Count);
         }
 
         /// <summary>
