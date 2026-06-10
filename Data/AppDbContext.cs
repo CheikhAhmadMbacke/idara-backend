@@ -82,6 +82,26 @@ namespace Idara.API.Data
                 .HasForeignKey(u => u.SchoolId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            // Unicité email/téléphone durcie de l'applicatif (cf. gotcha §91/§95)
+            // vers une contrainte DB (Phase 2, post-lancement). Index UNIQUES FILTRÉS :
+            //  - NULL multiples autorisés : SuperAdmin/SchoolAdmin sans téléphone,
+            //    comptes école (Teacher/Staff/Guardian) sans email.
+            //  - IsDeleted = FALSE : un compte anonymisé (email/tél scrubé en
+            //    deleted-{id}@… ) ne bloque pas la réinscription au même identifiant.
+            // L'email est normalisé en lowercase à l'écriture (register/invite/guardian,
+            // §95) ET par une normalisation one-shot dans le Up() de la migration, donc
+            // l'index sur la colonne brute garantit l'unicité insensible à la casse
+            // sans recourir à un index fonctionnel lower() (hors snapshot EF).
+            modelBuilder.Entity<User>()
+                .HasIndex(u => u.Email)
+                .IsUnique()
+                .HasFilter("\"Email\" IS NOT NULL AND \"IsDeleted\" = FALSE");
+
+            modelBuilder.Entity<User>()
+                .HasIndex(u => u.PhoneNumber)
+                .IsUnique()
+                .HasFilter("\"PhoneNumber\" IS NOT NULL AND \"IsDeleted\" = FALSE");
+
             modelBuilder.Entity<Student>()
                 .HasIndex(s => new { s.SchoolId, s.IsDeleted });
 
