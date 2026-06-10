@@ -129,7 +129,8 @@ namespace Idara.API.Services
                         Message: msg,
                         Bilingual: bilingual,
                         TemplateCode: "INVOICE_OVERDUE",
-                        RelatedEntityId: inv.Id), ct);
+                        RelatedEntityId: inv.Id,
+                        PushRoute: "/guardian/invoices"), ct);
                     sent++;
                 }
             }

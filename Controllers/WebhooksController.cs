@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Idara.API.Common.Extensions;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Senepay;
 using Idara.API.Enums;
@@ -304,13 +305,59 @@ namespace Idara.API.Controllers
                             Message: msg,
                             Bilingual: platform.SmsBilingual,
                             TemplateCode: "PAYMENT_RECEIVED",
-                            RelatedEntityId: completedPayment.Id));
+                            RelatedEntityId: completedPayment.Id,
+                            PushRoute: "/guardian/invoices"));
                     }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex,
                         "[webhook/payin] Échec SMS paiement reçu Payment.Id={Id} — pas bloquant",
+                        completedPayment.Id);
+                }
+            }
+
+            // -------- 9) Push « paiement reçu » à l'ÉCOLE (admin + personnel) --------
+            // Push uniquement (pas de SMS : l'école recevrait trop de SMS payants).
+            // Clic → page solde/wallet. Idempotent via le webhook (1 traitement/payment).
+            if (completedPayment != null
+                && completedPayment.Status == PaymentStatus.Completed
+                && completedPayment.SchoolId > 0)
+            {
+                try
+                {
+                    var schoolUserIds = await _context.Users
+                        .Where(u => u.SchoolId == completedPayment.SchoolId
+                                    && !u.IsDeleted
+                                    && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                        .Select(u => new { u.Id, u.PreferredLanguage })
+                        .ToListAsync();
+                    if (schoolUserIds.Count > 0)
+                    {
+                        var student = completedPayment.StudentId.HasValue
+                            ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
+                            : null;
+                        var eleve = student != null ? $"{student.FirstName} {student.LastName}".Trim() : "un eleve";
+                        var shownAmount = completedPayment.TargetAmountFcfa > 0
+                            ? completedPayment.TargetAmountFcfa
+                            : completedPayment.AmountFcfa;
+                        var msg = NotificationTemplates.PaymentReceivedSchool(eleve, shownAmount);
+                        foreach (var su in schoolUserIds)
+                        {
+                            await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                                UserId: su.Id,
+                                PreferredLanguage: su.PreferredLanguage ?? "fr",
+                                Message: msg,
+                                TemplateCode: "SCHOOL_PAYMENT_RECEIVED",
+                                RelatedEntityId: completedPayment.Id,
+                                PushRoute: "/payments/overview"));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[webhook/payin] Échec push école Payment.Id={Id} — pas bloquant",
                         completedPayment.Id);
                 }
             }

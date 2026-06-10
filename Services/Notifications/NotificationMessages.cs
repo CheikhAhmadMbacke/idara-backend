@@ -67,5 +67,34 @@ namespace Idara.API.Services.Notifications
         public static BilingualMessage OtpCode(string code) => new(
             Fr: $"Idara : votre code est {code}. Il expire dans 10 minutes. Ne le partagez avec personne.",
             Ar: $"Idara: رمزك هو {code}. ينتهي خلال 10 دقائق. لا تشاركه مع أحد.");
+
+        // ===== Notifications ÉCOLE (push uniquement) =====
+        // Paiement reçu côté école : prévient l'admin + le personnel.
+        public static BilingualMessage PaymentReceivedSchool(string eleve, long montantFcfa) => new(
+            Fr: $"Idara : paiement de {montantFcfa} FCFA recu pour {eleve}. Votre solde a ete credite.",
+            Ar: $"Idara: تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. تم إضافة المبلغ إلى رصيدك.");
+
+        // Retrait/transfert effectué : prévient l'admin uniquement.
+        public static BilingualMessage WithdrawalDone(long montantFcfa) => new(
+            Fr: $"Idara : votre retrait de {montantFcfa} FCFA a ete effectue avec succes.",
+            Ar: $"Idara: تم تنفيذ سحبك بمبلغ {montantFcfa} FCFA بنجاح.");
+
+        // Retrait échoué (fonds restitués) : prévient l'admin uniquement.
+        public static BilingualMessage WithdrawalFailed(long montantFcfa) => new(
+            Fr: $"Idara : votre retrait de {montantFcfa} FCFA n'a pas abouti. Les fonds ont ete restitues a votre solde.",
+            Ar: $"Idara: لم يكتمل سحبك بمبلغ {montantFcfa} FCFA. تمت إعادة المبلغ إلى رصيدك.");
+
+        // ===== Suivi de l'enfant (push uniquement, vers les parents) =====
+        public static BilingualMessage ChildJournalUpdated(string eleve) => new(
+            Fr: $"Idara : le journal du jour de {eleve} est disponible dans l'application.",
+            Ar: $"Idara: يومية {eleve} لهذا اليوم متاحة في التطبيق.");
+
+        public static BilingualMessage ChildReportCardReady(string eleve) => new(
+            Fr: $"Idara : le bulletin de {eleve} est disponible dans l'application.",
+            Ar: $"Idara: كشف نقاط {eleve} متاح في التطبيق.");
+
+        public static BilingualMessage ChildAbsent(string eleve) => new(
+            Fr: $"Idara : {eleve} a ete marque(e) absent(e) aujourd'hui.",
+            Ar: $"Idara: تم تسجيل غياب {eleve} اليوم.");
     }
 }

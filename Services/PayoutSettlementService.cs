@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Idara.API.Common.Extensions;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 namespace Idara.API.Services
@@ -11,12 +13,45 @@ namespace Idara.API.Services
     public class PayoutSettlementService : IPayoutSettlementService
     {
         private readonly AppDbContext _context;
+        private readonly INotificationService _notif;
         private readonly ILogger<PayoutSettlementService> _logger;
 
-        public PayoutSettlementService(AppDbContext context, ILogger<PayoutSettlementService> logger)
+        public PayoutSettlementService(
+            AppDbContext context, INotificationService notif, ILogger<PayoutSettlementService> logger)
         {
             _context = context;
+            _notif = notif;
             _logger = logger;
+        }
+
+        /// <summary>Notifie (push uniquement) les SchoolAdmin de l'école après une
+        /// transition de retrait. Best-effort, post-commit, ne lève jamais. Clic →
+        /// page solde/wallet.</summary>
+        private async Task NotifyAdminsAsync(
+            int schoolId, BilingualMessage msg, string templateCode, int withdrawalId)
+        {
+            try
+            {
+                var admins = await _context.Users
+                    .Where(u => u.SchoolId == schoolId && !u.IsDeleted && u.Role == UserRoles.SchoolAdmin)
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync();
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: templateCode,
+                        RelatedEntityId: withdrawalId,
+                        PushRoute: "/payments/overview"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[payout-settle] Échec notif admins withdrawal {Id} — pas bloquant", withdrawalId);
+            }
         }
 
         public async Task<PayoutSettlementOutcome> SettleCompletedAsync(
@@ -70,6 +105,9 @@ namespace Idara.API.Services
                     _logger.LogInformation(
                         "[payout-settle] Withdrawal {Id} → Completed (source={Source}, {Amount} FCFA)",
                         withdrawal.Id, source, withdrawal.AmountFcfa);
+                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                        NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
+                        "WITHDRAWAL_DONE", withdrawal.Id);
                     return PayoutSettlementOutcome.SettledCompleted;
                 }
 
@@ -145,6 +183,9 @@ namespace Idara.API.Services
                     _logger.LogCritical(
                         "[ALERT][payout] DOUBLE-SPEND CORRECTED Withdrawal {Id} (School {SchoolId}, {Amount} FCFA) — restitution annulée par re-débit (source={Source})",
                         withdrawal.Id, withdrawal.SchoolId, withdrawal.AmountFcfa, source);
+                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                        NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
+                        "WITHDRAWAL_DONE", withdrawal.Id);
                     return PayoutSettlementOutcome.Corrected;
                 }
 
@@ -202,6 +243,9 @@ namespace Idara.API.Services
                     _logger.LogInformation(
                         "[payout-settle] Withdrawal {Id} → Failed + restitué (source={Source}, raison={Reason})",
                         withdrawal.Id, source, Truncate(reason, 120));
+                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                        NotificationTemplates.WithdrawalFailed(withdrawal.AmountFcfa),
+                        "WITHDRAWAL_FAILED", withdrawal.Id);
                     return PayoutSettlementOutcome.Restituted;
                 }
 

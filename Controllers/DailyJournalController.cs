@@ -4,6 +4,7 @@ using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Operations;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,31 @@ namespace Idara.API.Controllers
     public class DailyJournalController : ControllerBase
     {
         private readonly AppDbContext _context;
-        public DailyJournalController(AppDbContext context) => _context = context;
+        private readonly INotificationService _notif;
+        public DailyJournalController(AppDbContext context, INotificationService notif)
+        {
+            _context = context;
+            _notif = notif;
+        }
+
+        /// <summary>Notifie (push) les parents des élèves dont le journal du jour a
+        /// été renseigné. Best-effort post-commit, 1 push/élève/jour (anti-spam).
+        /// Clic → fiche de l'enfant.</summary>
+        private async Task NotifyJournalAsync(IReadOnlyCollection<int> studentIds)
+        {
+            if (studentIds.Count == 0) return;
+            var names = await _context.Students
+                .Where(s => studentIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.FirstName, s.LastName })
+                .ToListAsync();
+            foreach (var s in names)
+            {
+                var eleve = $"{s.FirstName} {s.LastName}".Trim();
+                await _notif.NotifyGuardiansOfStudentAsync(
+                    s.Id, NotificationTemplates.ChildJournalUpdated(eleve),
+                    "CHILD_JOURNAL", $"/guardian/children/{s.Id}", oncePerDay: true);
+            }
+        }
 
         [HttpGet]
         public async Task<IActionResult> Get(
@@ -142,6 +167,7 @@ namespace Idara.API.Controllers
 
             var saved = 0;
             var deleted = 0;
+            var notifyStudents = new HashSet<int>();
             foreach (var entry in dto.Entries.Where(e => validIds.Contains(e.StudentId)))
             {
                 var hasContent = !string.IsNullOrWhiteSpace(entry.LearnedToday)
@@ -178,6 +204,7 @@ namespace Idara.API.Controllers
                             rec.DeletedById = null;
                         }
                         saved++;
+                        notifyStudents.Add(entry.StudentId);
                     }
                 }
                 else if (hasContent)
@@ -195,10 +222,14 @@ namespace Idara.API.Controllers
                         CreatedAt = DateTime.UtcNow
                     });
                     saved++;
+                    notifyStudents.Add(entry.StudentId);
                 }
                 // sinon (pas d'entrée existante + pas de contenu) : on ignore silencieusement.
             }
             await _context.SaveChangesAsync();
+
+            // Notif parents (push, post-commit, best-effort, 1/élève/jour).
+            await NotifyJournalAsync(notifyStudents);
 
             var msg = deleted > 0
                 ? $"{saved} rapport(s) enregistré(s), {deleted} supprimé(s)."

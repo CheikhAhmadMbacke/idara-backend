@@ -4,6 +4,7 @@ using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Operations;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,30 @@ namespace Idara.API.Controllers
     public class AttendancesController : ControllerBase
     {
         private readonly AppDbContext _context;
-        public AttendancesController(AppDbContext context) => _context = context;
+        private readonly INotificationService _notif;
+        public AttendancesController(AppDbContext context, INotificationService notif)
+        {
+            _context = context;
+            _notif = notif;
+        }
+
+        /// <summary>Notifie (push) les parents des élèves marqués absents. Best-effort
+        /// post-commit, 1 push/élève/jour. Clic → fiche de l'enfant.</summary>
+        private async Task NotifyAbsencesAsync(IReadOnlyCollection<int> absentStudentIds)
+        {
+            if (absentStudentIds.Count == 0) return;
+            var names = await _context.Students
+                .Where(s => absentStudentIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.FirstName, s.LastName })
+                .ToListAsync();
+            foreach (var s in names)
+            {
+                var eleve = $"{s.FirstName} {s.LastName}".Trim();
+                await _notif.NotifyGuardiansOfStudentAsync(
+                    s.Id, NotificationTemplates.ChildAbsent(eleve),
+                    "CHILD_ABSENCE", $"/guardian/children/{s.Id}", oncePerDay: true);
+            }
+        }
 
         [HttpGet]
         public async Task<IActionResult> Get([FromQuery] AttendanceQueryDto q)
@@ -72,8 +96,11 @@ namespace Idara.API.Controllers
                 .ToDictionaryAsync(a => a.StudentId);
 
             var saved = 0;
+            var absentStudents = new HashSet<int>();
             foreach (var entry in dto.Entries.Where(e => validStudentIds.Contains(e.StudentId)))
             {
+                if (entry.Status == Enums.AttendanceStatus.Absent)
+                    absentStudents.Add(entry.StudentId);
                 if (existing.TryGetValue(entry.StudentId, out var rec))
                 {
                     rec.Status = entry.Status;
@@ -105,6 +132,10 @@ namespace Idara.API.Controllers
             }
 
             await _context.SaveChangesAsync();
+
+            // Notif parents des absents (push, post-commit, best-effort, 1/élève/jour).
+            await NotifyAbsencesAsync(absentStudents);
+
             return Ok(ApiResponse<bool>.Ok(true, $"{saved} pointage(s) enregistré(s)."));
         }
 

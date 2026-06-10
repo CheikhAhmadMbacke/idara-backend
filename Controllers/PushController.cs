@@ -1,8 +1,10 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Push;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Idara.API.Services.Push;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -23,12 +25,16 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IPushService _push;
+        private readonly INotificationService _notif;
         private readonly ILogger<PushController> _logger;
 
-        public PushController(AppDbContext context, IPushService push, ILogger<PushController> logger)
+        public PushController(
+            AppDbContext context, IPushService push,
+            INotificationService notif, ILogger<PushController> logger)
         {
             _context = context;
             _push = push;
+            _notif = notif;
             _logger = logger;
         }
 
@@ -125,6 +131,59 @@ namespace Idara.API.Controllers
             return ok > 0
                 ? Ok(ApiResponse<object?>.Ok(null, $"Notification de test envoyée vers {ok} appareil(s)."))
                 : Ok(ApiResponse<object?>.Fail("Aucun appareil n'a pu être notifié (jetons expirés ?)."));
+        }
+
+        /// <summary>
+        /// Notification personnalisée (broadcast) — SuperAdmin uniquement.
+        /// Cible « all » (tous), « role » (un rôle) ou « school » (une école :
+        /// son personnel + les parents de ses élèves). Lien externe optionnel.
+        /// </summary>
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        [HttpPost("broadcast")]
+        public async Task<IActionResult> Broadcast([FromBody] BroadcastPushDto dto, CancellationToken ct)
+        {
+            List<int> userIds;
+            switch ((dto.Target ?? "all").Trim().ToLowerInvariant())
+            {
+                case "role":
+                    if (string.IsNullOrWhiteSpace(dto.Role))
+                        return BadRequest(ApiResponse<object?>.Fail("Rôle requis pour une cible par rôle."));
+                    userIds = await _context.Users
+                        .Where(u => !u.IsDeleted && u.Role == dto.Role)
+                        .Select(u => u.Id).ToListAsync(ct);
+                    break;
+
+                case "school":
+                    if (dto.SchoolId == null)
+                        return BadRequest(ApiResponse<object?>.Fail("École requise pour une cible par école."));
+                    var sid = dto.SchoolId.Value;
+                    var staffIds = await _context.Users
+                        .Where(u => !u.IsDeleted && u.SchoolId == sid)
+                        .Select(u => u.Id).ToListAsync(ct);
+                    var guardianIds = await _context.StudentGuardians
+                        .Where(sg => sg.Student.SchoolId == sid && !sg.Guardian.IsDeleted)
+                        .Select(sg => sg.GuardianId).Distinct().ToListAsync(ct);
+                    userIds = staffIds.Concat(guardianIds).Distinct().ToList();
+                    break;
+
+                default: // all
+                    userIds = await _context.Users
+                        .Where(u => !u.IsDeleted)
+                        .Select(u => u.Id).ToListAsync(ct);
+                    break;
+            }
+
+            var content = new BroadcastContent(
+                Title: string.IsNullOrWhiteSpace(dto.Title) ? "Idara" : dto.Title!.Trim(),
+                Body: dto.Body.Trim(),
+                Url: string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url!.Trim());
+
+            var ok = await _notif.SendBroadcastAsync(userIds, content, ct);
+            _logger.LogInformation("[push] broadcast SuperAdmin : cible={Target} destinataires={Recipients} appareils={Ok}",
+                dto.Target, userIds.Count, ok);
+
+            return Ok(ApiResponse<object?>.Ok(null,
+                $"Notification envoyée à {ok} appareil(s) sur {userIds.Count} destinataire(s) ciblé(s)."));
         }
 
         /// <summary>Désenregistre le jeton de l'appareil courant (au logout).</summary>

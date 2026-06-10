@@ -5,6 +5,7 @@ using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Operations;
 using Idara.API.Models;
 using Idara.API.Services;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,17 +20,20 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly IReportCardPdfService _pdfService;
         private readonly IWebHostEnvironment _env;
+        private readonly INotificationService _notif;
         private readonly ILogger<ReportCardsController> _logger;
 
         public ReportCardsController(
             AppDbContext context,
             IReportCardPdfService pdfService,
             IWebHostEnvironment env,
+            INotificationService notif,
             ILogger<ReportCardsController> logger)
         {
             _context = context;
             _pdfService = pdfService;
             _env = env;
+            _notif = notif;
             _logger = logger;
         }
 
@@ -263,6 +267,14 @@ namespace Idara.API.Controllers
             {
                 _logger.LogError(ex, "Génération PDF échouée pour bulletin {Id}", saved.Id);
             }
+
+            // Notif parents : bulletin disponible (push, best-effort, 1/élève/jour).
+            var eleve = saved.Student != null
+                ? $"{saved.Student.FirstName} {saved.Student.LastName}".Trim()
+                : "votre enfant";
+            await _notif.NotifyGuardiansOfStudentAsync(
+                saved.StudentId, NotificationTemplates.ChildReportCardReady(eleve),
+                "CHILD_REPORTCARD", $"/guardian/children/{saved.StudentId}", oncePerDay: true);
 
             return Ok(Map(saved));
         }

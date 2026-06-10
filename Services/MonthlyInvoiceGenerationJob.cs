@@ -303,7 +303,8 @@ namespace Idara.API.Services
                                 Message: msg,
                                 Bilingual: bilingual,
                                 TemplateCode: "INVOICE_DUE",
-                                RelatedEntityId: invoice.Id), ct);
+                                RelatedEntityId: invoice.Id,
+                                PushRoute: "/guardian/invoices"), ct);
                         }
                     }
                 }
