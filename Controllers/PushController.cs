@@ -3,6 +3,7 @@ using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Push;
 using Idara.API.Models;
+using Idara.API.Services.Push;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -21,11 +22,13 @@ namespace Idara.API.Controllers
     public class PushController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IPushService _push;
         private readonly ILogger<PushController> _logger;
 
-        public PushController(AppDbContext context, ILogger<PushController> logger)
+        public PushController(AppDbContext context, IPushService push, ILogger<PushController> logger)
         {
             _context = context;
+            _push = push;
             _logger = logger;
         }
 
@@ -74,6 +77,54 @@ namespace Idara.API.Controllers
             }
 
             return Ok(ApiResponse<object?>.Ok(null, "Appareil enregistré."));
+        }
+
+        /// <summary>
+        /// Envoie une notification de TEST aux appareils de l'utilisateur connecté.
+        /// Sert à vérifier en un clic que le push fonctionne pour ce compte (test
+        /// E2E + diagnostic support), sans devoir déclencher un vrai paiement.
+        /// Purge les tokens morts au passage.
+        /// </summary>
+        [HttpPost("test")]
+        public async Task<IActionResult> SendTest(CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            if (!_push.IsConfigured)
+                return Ok(ApiResponse<object?>.Fail("Le push n'est pas encore configuré côté serveur."));
+
+            var tokens = await _context.PushDeviceTokens
+                .Where(t => t.UserId == userId.Value)
+                .ToListAsync(ct);
+            if (tokens.Count == 0)
+                return Ok(ApiResponse<object?>.Fail(
+                    "Aucun appareil enregistré. Ouvrez l'app et acceptez les notifications, puis réessayez."));
+
+            var data = new Dictionary<string, string> { ["templateCode"] = "TEST" };
+            var ok = 0;
+            var stale = new List<PushDeviceToken>();
+            foreach (var t in tokens)
+            {
+                var r = await _push.SendAsync(
+                    t.Token, "Idara",
+                    "Test de notification — tout fonctionne !",
+                    data, link: "https://idara.sn", ct);
+                if (r.Success) ok++;
+                else if (r.TokenInvalid) stale.Add(t);
+            }
+            if (stale.Count > 0)
+            {
+                _context.PushDeviceTokens.RemoveRange(stale);
+                await _context.SaveChangesAsync(ct);
+            }
+
+            _logger.LogInformation("[push] test envoyé : {Ok}/{Total} appareil(s) pour user {UserId}",
+                ok, tokens.Count, userId);
+
+            return ok > 0
+                ? Ok(ApiResponse<object?>.Ok(null, $"Notification de test envoyée vers {ok} appareil(s)."))
+                : Ok(ApiResponse<object?>.Fail("Aucun appareil n'a pu être notifié (jetons expirés ?)."));
         }
 
         /// <summary>Désenregistre le jeton de l'appareil courant (au logout).</summary>
