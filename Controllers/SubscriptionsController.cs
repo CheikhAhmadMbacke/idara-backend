@@ -152,6 +152,16 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(p => p.Id == dto.PlanId && p.IsActive && !p.IsCustom, ct);
             if (plan == null) return NotFound(ApiResponse<SubscriptionDto>.Fail("Plan indisponible."));
 
+            // Garde-fou palier (décision produit 2026-06-11) : une école ne peut pas
+            // choisir elle-même un plan dont le plafond d'élèves est dépassé par son
+            // effectif réel (anti-downgrade abusif). Le SuperAdmin, lui, reste libre
+            // (AssignPlan) pour gérer les exceptions / deals custom.
+            var studentCount = await _context.Students
+                .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted, ct);
+            if (plan.StudentMax.HasValue && studentCount > plan.StudentMax.Value)
+                return BadRequest(ApiResponse<SubscriptionDto>.Fail(
+                    $"Le plan « {plan.Name} » est limité à {plan.StudentMax} élèves, or votre école en compte {studentCount}. Choisissez un plan adapté à votre effectif."));
+
             ApplyPlan(sub, plan, dto.BillingCycle);
             await _context.SaveChangesAsync(ct);
             await _context.Entry(sub).Reference(s => s.Plan).LoadAsync(ct);
