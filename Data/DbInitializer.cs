@@ -33,6 +33,153 @@ namespace Idara.API.Data
             await SeedSubscriptionPlansAsync();
             await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
+            await SeedDemoSchoolAsync();
+        }
+
+        // Identifiants du compte de DÉMONSTRATION fournis à Google Play (App access).
+        // Le reviewer s'en sert pour ouvrir l'app ; sans login fonctionnel = rejet.
+        // Ne JAMAIS supprimer ces comptes tant que l'app est publiée (re-review à
+        // chaque mise à jour). Données 100 % fictives.
+        private const string DemoSchoolAdminEmail = "demo.ecole@idara.sn";
+        private const string DemoSchoolAdminPassword = "DemoIdara2026!";
+        private const string DemoGuardianPhone = "+221770000000";
+        private const string DemoGuardianCode = "123456";
+
+        /// <summary>
+        /// Seed d'une école de démonstration complète (école validée + SchoolAdmin
+        /// + classes + élèves fictifs + un parent lié) destinée au reviewer Google
+        /// Play (section « App access », login obligatoire). Idempotent : ne fait
+        /// rien si le compte admin de démo existe déjà. Autonome : crée aussi
+        /// settings/wallet/abonnement pour ne dépendre d'aucun ordre de seed, et
+        /// l'abonnement est posé en Active avec échéance lointaine pour que la démo
+        /// ne soit jamais dégradée (Trial→ReadOnly) même des mois plus tard.
+        /// </summary>
+        private async Task SeedDemoSchoolAsync()
+        {
+            var exists = await _context.Users.AnyAsync(u => u.Email == DemoSchoolAdminEmail);
+            if (exists) return;
+
+            var now = DateTime.UtcNow;
+
+            // 1) École validée
+            var school = new School
+            {
+                Name = "École de démonstration",
+                Address = "Dakar, Sénégal",
+                PhoneNumber = "+221770000000",
+                KycStatus = KycStatus.Validated,
+                RepresentativeFirstName = "Directeur",
+                RepresentativeLastName = "Démo",
+                RepresentativePhone = "+221770000000",
+                SubmittedAt = now,
+                ValidatedAt = now,
+                CreatedAt = now
+            };
+            _context.Schools.Add(school);
+            await _context.SaveChangesAsync();
+
+            // 2) SchoolAdmin actif (login email + mot de passe)
+            _context.Users.Add(new User
+            {
+                Email = DemoSchoolAdminEmail,
+                FullName = "Directeur Démo",
+                FirstName = "Directeur",
+                LastName = "Démo",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(DemoSchoolAdminPassword),
+                Role = UserRoles.SchoolAdmin,
+                IsEmailVerified = true,
+                AccountStatus = AccountStatus.Active,
+                SchoolId = school.Id,
+                PreferredLanguage = "fr",
+                CreatedAt = now
+            });
+
+            // Fondations paiement + abonnement Active à échéance lointaine (jamais dégradé)
+            _context.SchoolPaymentSettings.Add(new SchoolPaymentSettings
+            {
+                SchoolId = school.Id,
+                BillingMode = BillingMode.FixedAmount,
+                FeesPayer = FeesPayer.Parent,
+                MonthlyDueDay = 5,
+                BillingPeriod = BillingPeriod.Monthly,
+                GeneralMonthlyFeeFcfa = 5000,
+                CreatedAt = now
+            });
+            _context.SchoolWallets.Add(new SchoolWallet
+            {
+                SchoolId = school.Id,
+                AvailableBalance = 0,
+                PendingBalance = 0,
+                TotalCreditedLifetime = 0,
+                TotalWithdrawnLifetime = 0,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+
+            var daara = await _context.SubscriptionPlans
+                .FirstOrDefaultAsync(p => p.Code == "daara" && !p.IsCustom);
+            _context.Subscriptions.Add(new Subscription
+            {
+                SchoolId = school.Id,
+                PlanId = daara?.Id,
+                BillingCycle = BillingCycle.Monthly,
+                Status = SubscriptionStatus.Active,
+                AmountFcfa = daara?.MonthlyPriceFcfa ?? 5000,
+                NotificationQuota = daara?.NotificationQuota ?? 150,
+                NotificationUsedThisCycle = 0,
+                TrialEndsAt = now,
+                NextBillingAt = now.AddYears(50),
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            await _context.SaveChangesAsync();
+
+            // 3) Deux classes
+            var classA = new Class { Name = "Halaqa A", Level = "Débutant", Capacity = 30, SchoolId = school.Id, CreatedAt = now };
+            var classB = new Class { Name = "Halaqa B", Level = "Intermédiaire", Capacity = 30, SchoolId = school.Id, CreatedAt = now };
+            _context.Classes.AddRange(classA, classB);
+            await _context.SaveChangesAsync();
+
+            // 4) Quelques élèves fictifs
+            var dob = new DateTime(2015, 5, 10, 0, 0, 0, DateTimeKind.Utc);
+            var students = new List<Student>
+            {
+                new() { FirstName = "Aïcha", LastName = "Ndiaye", Gender = Gender.Female, DateOfBirth = dob, ClassId = classA.Id, SchoolId = school.Id, EnrollmentDate = now, CreatedAt = now },
+                new() { FirstName = "Moussa", LastName = "Diop",  Gender = Gender.Male,   DateOfBirth = dob, ClassId = classA.Id, SchoolId = school.Id, EnrollmentDate = now, CreatedAt = now },
+                new() { FirstName = "Fatou",  LastName = "Fall",  Gender = Gender.Female, DateOfBirth = dob, ClassId = classB.Id, SchoolId = school.Id, EnrollmentDate = now, CreatedAt = now },
+            };
+            _context.Students.AddRange(students);
+            await _context.SaveChangesAsync();
+
+            foreach (var s in students)
+                s.StudentNumber = $"E{school.Id:D3}-{s.Id:D5}";
+            await _context.SaveChangesAsync();
+
+            // 5) Parent de démo (login téléphone + code) lié à 2 élèves
+            var guardian = new User
+            {
+                FullName = "Parent Démo",
+                FirstName = "Parent",
+                LastName = "Démo",
+                PhoneNumber = DemoGuardianPhone,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(DemoGuardianCode),
+                Role = UserRoles.Guardian,
+                IsEmailVerified = false,
+                AccountStatus = AccountStatus.Active,
+                PreferredLanguage = "fr",
+                CreatedAt = now
+            };
+            _context.Users.Add(guardian);
+            await _context.SaveChangesAsync();
+
+            _context.StudentGuardians.AddRange(
+                new StudentGuardian { StudentId = students[0].Id, GuardianId = guardian.Id, Relationship = "Père", IsPrimaryGuardian = true },
+                new StudentGuardian { StudentId = students[1].Id, GuardianId = guardian.Id, Relationship = "Père", IsPrimaryGuardian = true });
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Seed démo : école '{School}' (id {Id}) + SchoolAdmin {Email} + parent {Phone} créés pour la review Play Store.",
+                school.Name, school.Id, DemoSchoolAdminEmail, DemoGuardianPhone);
         }
 
         /// <summary>
