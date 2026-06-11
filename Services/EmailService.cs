@@ -192,6 +192,26 @@ namespace Idara.API.Services
             return _supported.Contains(lower) ? lower : "fr";
         }
 
+        public Task SendSubscriptionInvoiceEmailAsync(
+            string toEmail, string schoolName, long amountFcfa,
+            DateTime periodStart, DateTime periodEnd, string language = "fr")
+        {
+            var subject = $"Idara — Facture d'abonnement {amountFcfa:N0} FCFA";
+            var body =
+                "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:auto;color:#0F172A\">" +
+                "<h2 style=\"color:#0B744D\">Idara — Abonnement réglé</h2>" +
+                $"<p>Bonjour,</p>" +
+                $"<p>L'abonnement de votre école <b>{System.Net.WebUtility.HtmlEncode(schoolName)}</b> a été prélevé avec succès depuis votre wallet.</p>" +
+                "<table style=\"border-collapse:collapse;width:100%;margin:16px 0\">" +
+                $"<tr><td style=\"padding:8px;border-bottom:1px solid #E2E8F0;color:#475569\">Montant</td><td style=\"padding:8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:bold\">{amountFcfa:N0} FCFA</td></tr>" +
+                $"<tr><td style=\"padding:8px;border-bottom:1px solid #E2E8F0;color:#475569\">Période</td><td style=\"padding:8px;border-bottom:1px solid #E2E8F0;text-align:right\">{periodStart:dd/MM/yyyy} → {periodEnd:dd/MM/yyyy}</td></tr>" +
+                "</table>" +
+                "<p style=\"color:#475569;font-size:13px\">Votre abonnement est actif. La facture détaillée est disponible dans l'application.</p>" +
+                "<p style=\"color:#94A3B8;font-size:12px\">— L'équipe Idara</p>" +
+                "</div>";
+            return SendAsync(toEmail, subject, body, isHtml: true);
+        }
+
         private async Task SendAsync(string toEmail, string subject, string body, bool isHtml)
         {
             try

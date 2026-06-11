@@ -1,4 +1,5 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -42,11 +43,19 @@ namespace Idara.API.Services
     public class SubscriptionBillingService : ISubscriptionBillingService
     {
         private readonly AppDbContext _db;
+        private readonly ISubscriptionInvoicePdfService _pdf;
+        private readonly IEmailService _email;
         private readonly ILogger<SubscriptionBillingService> _logger;
 
-        public SubscriptionBillingService(AppDbContext db, ILogger<SubscriptionBillingService> logger)
+        public SubscriptionBillingService(
+            AppDbContext db,
+            ISubscriptionInvoicePdfService pdf,
+            IEmailService email,
+            ILogger<SubscriptionBillingService> logger)
         {
             _db = db;
+            _pdf = pdf;
+            _email = email;
             _logger = logger;
         }
 
@@ -176,6 +185,10 @@ namespace Idara.API.Services
                 _logger.LogInformation(
                     "[subscription-billing] École {SchoolId} prélevée {Amount} FCFA → Active (next {Next:yyyy-MM-dd})",
                     sub.SchoolId, amount, sub.NextBillingAt);
+
+                // Facture PDF + email SchoolAdmin — best-effort, HORS transaction
+                // (un échec PDF/SMTP ne doit jamais annuler un prélèvement encaissé).
+                await EmitInvoiceDocsAsync(invoice, sub, ct);
                 return BillingOutcome.Paid;
             }
 
@@ -242,6 +255,62 @@ namespace Idara.API.Services
             };
             _db.SubscriptionInvoices.Add(inv);
             return inv;
+        }
+
+        /// <summary>
+        /// Génère le PDF de facture + envoie l'email au SchoolAdmin. Best-effort
+        /// absolu : chaque étape est isolée dans son try/catch et la méthode ne
+        /// lève JAMAIS (un échec disque/SMTP ne doit pas impacter le prélèvement).
+        /// </summary>
+        private async Task EmitInvoiceDocsAsync(SubscriptionInvoice invoice, Subscription sub, CancellationToken ct)
+        {
+            try
+            {
+                var school = await _db.Schools.FirstOrDefaultAsync(s => s.Id == sub.SchoolId, ct);
+                if (school == null) return;
+
+                string? planName = sub.PlanId.HasValue
+                    ? await _db.SubscriptionPlans.Where(p => p.Id == sub.PlanId.Value)
+                        .Select(p => p.Name).FirstOrDefaultAsync(ct)
+                    : null;
+
+                // PDF
+                try
+                {
+                    var path = await _pdf.GenerateAsync(invoice, school, planName);
+                    await _db.SubscriptionInvoices.Where(i => i.Id == invoice.Id)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.PdfPath, path), ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[subscription-billing] PDF facture {Id} échoué — pas bloquant", invoice.Id);
+                }
+
+                // Email SchoolAdmin (le SEUL email côté école)
+                try
+                {
+                    var adminEmail = await _db.Users
+                        .Where(u => u.SchoolId == sub.SchoolId && !u.IsDeleted
+                                    && u.Role == UserRoles.SchoolAdmin && u.Email != null)
+                        .OrderBy(u => u.Id)
+                        .Select(u => u.Email)
+                        .FirstOrDefaultAsync(ct);
+                    if (!string.IsNullOrWhiteSpace(adminEmail))
+                    {
+                        await _email.SendSubscriptionInvoiceEmailAsync(
+                            adminEmail!, school.Name ?? "votre école",
+                            invoice.AmountFcfa, invoice.PeriodStart, invoice.PeriodEnd);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[subscription-billing] Email facture {Id} échoué — pas bloquant", invoice.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[subscription-billing] Docs facture {Id} — échec global, ignoré", invoice.Id);
+            }
         }
 
         private static DateTime AdvanceCycle(DateTime from, BillingCycle cycle) =>

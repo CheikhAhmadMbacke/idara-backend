@@ -34,6 +34,7 @@ namespace Idara.API.Controllers
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IPayoutSettlementService _settlement;
         private readonly Services.Notifications.INotificationService _notif;
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<WebhooksController> _logger;
 
         // Constantes du provider — figées dans le code pour empêcher une typo
@@ -54,6 +55,7 @@ namespace Idara.API.Controllers
             IReceiptPdfService receiptPdf,
             IPayoutSettlementService settlement,
             Services.Notifications.INotificationService notif,
+            IServiceScopeFactory scopeFactory,
             ILogger<WebhooksController> logger)
         {
             _context = context;
@@ -61,6 +63,7 @@ namespace Idara.API.Controllers
             _receiptPdf = receiptPdf;
             _settlement = settlement;
             _notif = notif;
+            _scopeFactory = scopeFactory;
             _logger = logger;
         }
 
@@ -359,6 +362,38 @@ namespace Idara.API.Controllers
                     _logger.LogError(ex,
                         "[webhook/payin] Échec push école Payment.Id={Id} — pas bloquant",
                         completedPayment.Id);
+                }
+            }
+
+            // -------- 10) Retry abonnement plateforme (best-effort, post-commit) --------
+            // Ce crédit wallet (topup OU paiement parent) peut suffire à régler un
+            // abonnement impayé : on re-tente le prélèvement IMMÉDIATEMENT pour
+            // débloquer l'école sans attendre le cron du lendemain. Scope DI séparé
+            // (DbContext frais) → n'interfère pas avec le change tracker du webhook.
+            // Sous verrou wallet + idempotent (no-op si l'abo n'est pas en impayé).
+            // Ne lève jamais (un échec ici ne doit pas faire échouer le webhook).
+            if (completedPayment != null
+                && completedPayment.Status == PaymentStatus.Completed
+                && completedPayment.SchoolId > 0)
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var billing = scope.ServiceProvider.GetRequiredService<ISubscriptionBillingService>();
+                    var outcome = await billing.RetryForSchoolAsync(
+                        completedPayment.SchoolId, DateTime.UtcNow, HttpContext.RequestAborted);
+                    if (outcome == BillingOutcome.Paid)
+                    {
+                        _logger.LogInformation(
+                            "[webhook/payin] Abonnement École {SchoolId} débloqué après crédit (Payment {Id})",
+                            completedPayment.SchoolId, completedPayment.Id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[webhook/payin] Retry abonnement École {SchoolId} échoué — pas bloquant",
+                        completedPayment.SchoolId);
                 }
             }
 

@@ -10,6 +10,7 @@ namespace Idara.API.DTOs.Platform
         public double ParentFeePercent { get; set; }
         public double PayoutFeePercent { get; set; }
         public bool SmsBilingual { get; set; }
+        public bool SubscriptionEnforcementEnabled { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }
 
@@ -33,5 +34,8 @@ namespace Idara.API.DTOs.Platform
 
         /// <summary>Envoyer les SMS en FR+AR (true) ou une seule langue par utilisateur (false).</summary>
         public bool SmsBilingual { get; set; } = true;
+
+        /// <summary>Active le blocage 402 des écoles en ReadOnly/Suspended (machine à états abonnement). Défaut false.</summary>
+        public bool SubscriptionEnforcementEnabled { get; set; } = false;
     }
 }

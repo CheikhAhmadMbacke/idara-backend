@@ -53,6 +53,7 @@ namespace Idara.API.Controllers
             s.ParentFeePercent = dto.ParentFeePercent;
             s.PayoutFeePercent = dto.PayoutFeePercent;
             s.SmsBilingual = dto.SmsBilingual;
+            s.SubscriptionEnforcementEnabled = dto.SubscriptionEnforcementEnabled;
             s.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
@@ -71,6 +72,7 @@ namespace Idara.API.Controllers
             ParentFeePercent = s.ParentFeePercent,
             PayoutFeePercent = s.PayoutFeePercent,
             SmsBilingual = s.SmsBilingual,
+            SubscriptionEnforcementEnabled = s.SubscriptionEnforcementEnabled,
             UpdatedAt = s.UpdatedAt
         };
     }

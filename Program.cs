@@ -138,6 +138,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliati
 
 // Facturation des abonnements plateforme (Phase 4) : moteur scoped (réutilisé
 // par le cron ET le retry post-crédit-wallet) + cron quotidien 02:15 UTC.
+builder.Services.AddScoped<ISubscriptionInvoicePdfService, SubscriptionInvoicePdfService>();
 builder.Services.AddScoped<ISubscriptionBillingService, SubscriptionBillingService>();
 builder.Services.AddSingleton<SubscriptionBillingJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionBillingJob>());
