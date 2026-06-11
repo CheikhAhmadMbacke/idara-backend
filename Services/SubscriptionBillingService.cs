@@ -64,13 +64,16 @@ namespace Idara.API.Services
             var report = new SubscriptionBillingReport { RunAtUtc = nowUtc };
 
             // Échus (Trial/Active dont NextBillingAt passé) OU déjà en impayé
-            // (PendingPayment/ReadOnly à re-tenter / faire avancer dans la SM).
+            // (PendingPayment/ReadOnly/Suspended à re-tenter). Suspended est INCLUS
+            // pour qu'un rechargement de wallet ramène l'école à Active (sinon une
+            // école suspendue resterait piégée à vie malgré un paiement).
             var ids = await _db.Subscriptions
                 .Where(s =>
                     ((s.Status == SubscriptionStatus.Trial || s.Status == SubscriptionStatus.Active)
                         && s.NextBillingAt <= nowUtc)
                     || s.Status == SubscriptionStatus.PendingPayment
-                    || s.Status == SubscriptionStatus.ReadOnly)
+                    || s.Status == SubscriptionStatus.ReadOnly
+                    || s.Status == SubscriptionStatus.Suspended)
                 .Select(s => s.Id)
                 .ToListAsync(ct);
 
@@ -104,7 +107,9 @@ namespace Idara.API.Services
         {
             var sub = await _db.Subscriptions
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId
-                    && (s.Status == SubscriptionStatus.PendingPayment || s.Status == SubscriptionStatus.ReadOnly), ct);
+                    && (s.Status == SubscriptionStatus.PendingPayment
+                        || s.Status == SubscriptionStatus.ReadOnly
+                        || s.Status == SubscriptionStatus.Suspended), ct);
             if (sub == null) return BillingOutcome.NoAction;
             return await ProcessAsync(sub.Id, nowUtc, ct);
         }
@@ -130,7 +135,9 @@ namespace Idara.API.Services
 
             var dueNow = (sub.Status == SubscriptionStatus.Trial || sub.Status == SubscriptionStatus.Active)
                 && sub.NextBillingAt <= nowUtc;
-            var inArrears = sub.Status == SubscriptionStatus.PendingPayment || sub.Status == SubscriptionStatus.ReadOnly;
+            var inArrears = sub.Status == SubscriptionStatus.PendingPayment
+                || sub.Status == SubscriptionStatus.ReadOnly
+                || sub.Status == SubscriptionStatus.Suspended;
 
             if (!dueNow && !inArrears)
             {
@@ -175,6 +182,7 @@ namespace Idara.API.Services
                 sub.NotificationUsedThisCycle = 0;
                 sub.GracePeriodEndsAt = null;
                 sub.ReadOnlyEndsAt = null;
+                sub.SuspendedAt = null; // réactivation : on efface la trace de suspension
                 sub.UpdatedAt = nowUtc;
 
                 await _db.SaveChangesAsync(ct);

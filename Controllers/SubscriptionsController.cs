@@ -157,7 +157,7 @@ namespace Idara.API.Controllers
             await _context.Entry(sub).Reference(s => s.Plan).LoadAsync(ct);
 
             _logger.LogInformation("[subscription] École {SchoolId} a choisi le plan {PlanId} ({Cycle}).", schoolId.Value, plan.Id, dto.BillingCycle);
-            return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Plan mis à jour. Effet au prochain renouvellement."));
+            return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Plan mis à jour. Le nouveau tarif s'applique dès le prochain prélèvement."));
         }
 
         /// <summary>

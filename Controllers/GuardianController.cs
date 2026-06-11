@@ -425,8 +425,13 @@ namespace Idara.API.Controllers
         {
             var userId = User.GetUserId();
             if (userId == null) return false;
+            // Filtre !IsDeleted : un enfant supprimé par l'école ne doit plus être
+            // consultable par le parent (notes/coran/bulletins…), même si le lien
+            // StudentGuardian subsiste (review §F3).
             return await _context.StudentGuardians
-                .AnyAsync(sg => sg.GuardianId == userId.Value && sg.StudentId == studentId);
+                .AnyAsync(sg => sg.GuardianId == userId.Value
+                                && sg.StudentId == studentId
+                                && !sg.Student.IsDeleted);
         }
     }
 

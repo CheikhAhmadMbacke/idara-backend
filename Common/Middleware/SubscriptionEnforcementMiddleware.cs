@@ -4,6 +4,7 @@ using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Idara.API.Common.Middleware
 {
@@ -23,6 +24,7 @@ namespace Idara.API.Common.Middleware
     public class SubscriptionEnforcementMiddleware
     {
         private readonly RequestDelegate _next;
+        private readonly IMemoryCache _cache;
         private readonly ILogger<SubscriptionEnforcementMiddleware> _logger;
 
         // Chemins toujours autorisés, même en ReadOnly/Suspended.
@@ -39,9 +41,10 @@ namespace Idara.API.Common.Middleware
         };
 
         public SubscriptionEnforcementMiddleware(
-            RequestDelegate next, ILogger<SubscriptionEnforcementMiddleware> logger)
+            RequestDelegate next, IMemoryCache cache, ILogger<SubscriptionEnforcementMiddleware> logger)
         {
             _next = next;
+            _cache = cache;
             _logger = logger;
         }
 
@@ -52,7 +55,9 @@ namespace Idara.API.Common.Middleware
 
             var role = ctx.User.GetRole();
             // SuperAdmin gère la plateforme ; Guardian (parent) doit pouvoir payer.
-            if (role == UserRoles.SuperAdmin || role == UserRoles.Guardian || string.IsNullOrEmpty(role))
+            // Un rôle vide n'est PAS exempté (fail-closed) : s'il porte un SchoolId
+            // il sera évalué, sinon le check SchoolId==null l'exempte juste après.
+            if (role == UserRoles.SuperAdmin || role == UserRoles.Guardian)
             {
                 await _next(ctx); return;
             }
@@ -63,10 +68,16 @@ namespace Idara.API.Common.Middleware
             var path = ctx.Request.Path;
             if (IsWhitelisted(path)) { await _next(ctx); return; }
 
-            // Flag global : si OFF, aucun blocage (mais on évite la requête DB
-            // dans ce cas → lecture du flag d'abord, peu coûteuse et cacheable).
-            var platform = await db.GetPlatformSettingsAsync(ctx.RequestAborted);
-            if (!platform.SubscriptionEnforcementEnabled) { await _next(ctx); return; }
+            // Flag global mis en cache 30s (change rarement) → on évite une requête
+            // DB sur le chemin chaud à chaque requête, surtout quand le flag est OFF
+            // (cas par défaut). GetOrCreateAsync recharge à l'expiration.
+            var enforcementOn = await _cache.GetOrCreateAsync("sub_enforce_flag", async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30);
+                var p = await db.GetPlatformSettingsAsync(ctx.RequestAborted);
+                return p.SubscriptionEnforcementEnabled;
+            });
+            if (!enforcementOn) { await _next(ctx); return; }
 
             var sub = await db.Subscriptions
                 .AsNoTracking()
@@ -114,8 +125,28 @@ namespace Idara.API.Common.Middleware
             await ctx.Response.WriteAsync(JsonSerializer.Serialize(payload), ctx.RequestAborted);
         }
 
+        // Écritures d'onboarding NON exemptées malgré le préfixe /api/auth : une
+        // école ReadOnly/Suspended ne doit PLUS pouvoir inviter du personnel,
+        // re-soumettre un KYC, ni régénérer des codes d'accès (sinon le blocage
+        // d'abonnement perd son levier — cf. review §E2).
+        private static readonly string[] AuthWriteBlocked =
+        {
+            "/api/auth/invite-user",
+            "/api/auth/submit-kyc"
+        };
+
         private static bool IsWhitelisted(PathString path)
         {
+            // Ces écritures d'auth restent soumises au blocage (priment sur la whitelist).
+            foreach (var blocked in AuthWriteBlocked)
+            {
+                if (path.StartsWithSegments(blocked, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            if (path.Value != null
+                && path.Value.Contains("regenerate-code", StringComparison.OrdinalIgnoreCase))
+                return false;
+
             foreach (var prefix in WhitelistPrefixes)
             {
                 if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase))

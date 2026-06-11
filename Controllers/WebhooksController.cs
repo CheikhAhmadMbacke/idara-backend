@@ -380,8 +380,11 @@ namespace Idara.API.Controllers
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var billing = scope.ServiceProvider.GetRequiredService<ISubscriptionBillingService>();
+                    // CancellationToken.None : le webhook répond 200 quoi qu'il
+                    // arrive ; on ne veut pas que le retry de réactivation soit
+                    // coupé en plein milieu si SenePay abandonne la connexion.
                     var outcome = await billing.RetryForSchoolAsync(
-                        completedPayment.SchoolId, DateTime.UtcNow, HttpContext.RequestAborted);
+                        completedPayment.SchoolId, DateTime.UtcNow, CancellationToken.None);
                     if (outcome == BillingOutcome.Paid)
                     {
                         _logger.LogInformation(

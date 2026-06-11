@@ -173,10 +173,16 @@ namespace Idara.API.Controllers
                     break;
             }
 
+            // Le lien poussé à tous les appareils doit être https (anti-phishing /
+            // anti-schéma dangereux comme javascript:), cf. review §M2.
+            var url = string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url!.Trim();
+            if (url != null && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(ApiResponse<object?>.Fail("Le lien doit commencer par https://."));
+
             var content = new BroadcastContent(
                 Title: string.IsNullOrWhiteSpace(dto.Title) ? "Idara" : dto.Title!.Trim(),
                 Body: dto.Body.Trim(),
-                Url: string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url!.Trim());
+                Url: url);
 
             var ok = await _notif.SendBroadcastAsync(userIds, content, ct);
             _logger.LogInformation("[push] broadcast SuperAdmin : cible={Target} destinataires={Recipients} appareils={Ok}",

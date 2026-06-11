@@ -56,6 +56,13 @@ namespace Idara.API.Controllers
             if (schoolId == null)
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail("École introuvable."));
 
+            // Valide l'opérateur AVANT ParseOperator (qui lèverait sinon une
+            // ArgumentOutOfRangeException → 500). Réponse 400 propre.
+            var opNorm = dto.Operator?.Trim().ToLowerInvariant();
+            if (opNorm != "wave" && opNorm != "orange")
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Opérateur non supporté. Choisissez Wave ou Orange Money."));
+
             if (string.Equals(dto.Operator, "orange", StringComparison.OrdinalIgnoreCase)
                 && string.IsNullOrWhiteSpace(dto.OtpCode))
             {
@@ -73,7 +80,7 @@ namespace Idara.API.Controllers
             // Garantit le wallet (filet, comme pour un paiement parent).
             await _context.EnsurePaymentFoundationsAsync(schoolId.Value, ct);
 
-            var operatorEnum = ParseOperator(dto.Operator);
+            var operatorEnum = ParseOperator(opNorm!); // opNorm validé "wave"/"orange" ci-dessus
 
             // FeesPayer=School : l'école absorbe les frais, le wallet est crédité
             // du net. AmountFcfa = montant débité du payeur = ce qu'il saisit.

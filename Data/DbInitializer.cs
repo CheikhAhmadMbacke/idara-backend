@@ -121,8 +121,17 @@ namespace Idara.API.Data
             }).ToList();
 
             _context.Subscriptions.AddRange(toAdd);
-            await _context.SaveChangesAsync();
-            _logger.LogInformation("Seed abonnement : {Count} abonnement(s) Trial 30j créé(s) (backfill).", toAdd.Count);
+            try
+            {
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("Seed abonnement : {Count} abonnement(s) Trial 30j créé(s) (backfill).", toAdd.Count);
+            }
+            catch (DbUpdateException ex)
+            {
+                // Boot multi-instance simultané : une autre instance a déjà inséré
+                // (unique violation sur SchoolId). Idempotent → on ignore.
+                _logger.LogWarning(ex, "Seed abonnement : conflit concurrent ignoré (backfill déjà fait ailleurs).");
+            }
         }
 
         /// <summary>
