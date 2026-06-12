@@ -879,25 +879,41 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
-        /// Recherche d'un Guardian existant par email (pour pouvoir le lier à un élève).
-        /// Restreint aux Guardians ayant au moins un enfant rattaché à l'école courante.
+        /// Recherche d'un Guardian existant par numéro de téléphone (chemin
+        /// principal depuis Phase 2 — l'identité parent est le numéro) ou par
+        /// email (rétro-compatibilité). Restreint aux Guardians ayant au moins
+        /// un enfant rattaché à l'école courante (anti cross-tenant).
         /// </summary>
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         [HttpGet("search-guardian")]
-        public async Task<IActionResult> SearchGuardian([FromQuery] string email)
+        public async Task<IActionResult> SearchGuardian(
+            [FromQuery] string? email = null,
+            [FromQuery] string? phone = null)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            // Recherche par numéro normalisé E.164 en priorité, sinon par email.
+            var normalizedPhone = SenegalPhone.Normalize(phone);
+            var normalizedEmail = string.IsNullOrWhiteSpace(email)
+                ? null
+                : email.Trim().ToLowerInvariant();
+
+            if (normalizedPhone == null && normalizedEmail == null)
+                return NotFound();
+
             // Un Guardian est visible si l'un de ses enfants appartient à l'école courante.
             var guardian = await _context.Users
                 .Where(u => u.Role == UserRoles.Guardian
-                    && u.Email == email
                     && !u.IsDeleted
+                    && (normalizedPhone != null
+                            ? u.PhoneNumber == normalizedPhone
+                            : u.Email != null && u.Email.ToLower() == normalizedEmail)
                     && _context.StudentGuardians.Any(sg =>
                         sg.GuardianId == u.Id
                         && sg.Student.SchoolId == schoolId.Value
                         && !sg.Student.IsDeleted))
+                .OrderBy(u => u.Id)
                 .Select(u => new { u.Id, u.Email, u.FullName, u.PhoneNumber })
                 .FirstOrDefaultAsync();
 
