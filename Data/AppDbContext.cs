@@ -29,6 +29,7 @@ namespace Idara.API.Data
         public DbSet<ReportCardLine> ReportCardLines { get; set; }
         public DbSet<DailyJournalEntry> DailyJournalEntries { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
+        public DbSet<TrustedSchool> TrustedSchools { get; set; }
 
         // ----- Paiement (Phase 1) -----
         public DbSet<SchoolPaymentSettings> SchoolPaymentSettings { get; set; }
