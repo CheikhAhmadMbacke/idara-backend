@@ -414,6 +414,116 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Roster « cahier d'appel des paiements » pour un mois donné : la liste
+        /// de TOUS les élèves actifs de l'école avec leur statut de paiement
+        /// (À jour / En attente / En retard / Sans facture) pour la période
+        /// <c>year-month-01</c>. Compteurs par statut inclus.
+        /// </summary>
+        [HttpGet("roster")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<ActionResult<PaymentRosterResponseDto>> GetPaymentRoster(
+            [FromQuery] int year,
+            [FromQuery] int month,
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+            if (month < 1 || month > 12 || year < 2020 || year > 2100)
+                return BadRequest(ApiResponse<bool>.Fail("Mois ou année invalide."));
+
+            var periodStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
+            var todayUtc = DateTime.UtcNow.Date;
+
+            var students = await _context.Students
+                .Where(s => s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Select(s => new
+                {
+                    s.Id,
+                    s.FirstName,
+                    s.LastName,
+                    s.StudentNumber,
+                    ClassName = s.Class != null ? s.Class.Name : null
+                })
+                .ToListAsync(ct);
+
+            // Factures du mois (hors annulées) — matérialisées pour faire la
+            // comparaison d'échéance en mémoire (évite tout souci de traduction).
+            var invoices = await _context.Invoices
+                .Where(i => i.SchoolId == schoolId.Value
+                    && i.PeriodStart == periodStart
+                    && i.Status != InvoiceStatus.Cancelled)
+                .Select(i => new
+                {
+                    i.Id,
+                    i.StudentId,
+                    i.AmountDueFcfa,
+                    i.AmountPaidFcfa,
+                    i.Status,
+                    i.DueDate
+                })
+                .ToListAsync(ct);
+
+            var byStudent = invoices
+                .GroupBy(i => i.StudentId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var entries = new List<PaymentRosterEntryDto>(students.Count);
+            foreach (var s in students)
+            {
+                byStudent.TryGetValue(s.Id, out var inv);
+                RosterPaymentStatus status;
+                if (inv == null)
+                    status = RosterPaymentStatus.NoInvoice;
+                else if (inv.Status == InvoiceStatus.Paid || inv.AmountPaidFcfa >= inv.AmountDueFcfa)
+                    status = RosterPaymentStatus.Paid;
+                else if (inv.Status == InvoiceStatus.Overdue || todayUtc > inv.DueDate.Date)
+                    status = RosterPaymentStatus.Overdue;
+                else
+                    status = RosterPaymentStatus.Pending;
+
+                entries.Add(new PaymentRosterEntryDto
+                {
+                    StudentId = s.Id,
+                    StudentFirstName = s.FirstName,
+                    StudentLastName = s.LastName,
+                    StudentNumber = s.StudentNumber,
+                    ClassName = s.ClassName,
+                    Status = status,
+                    AmountDueFcfa = inv?.AmountDueFcfa ?? 0,
+                    AmountPaidFcfa = inv?.AmountPaidFcfa ?? 0,
+                    InvoiceId = inv?.Id,
+                    DueDate = inv?.DueDate
+                });
+            }
+
+            // Tri : en retard d'abord (à traiter en priorité), puis en attente,
+            // puis à jour, puis sans facture ; ensuite par nom.
+            static int Rank(RosterPaymentStatus s) => s switch
+            {
+                RosterPaymentStatus.Overdue => 0,
+                RosterPaymentStatus.Pending => 1,
+                RosterPaymentStatus.Paid => 2,
+                _ => 3
+            };
+            entries = entries
+                .OrderBy(e => Rank(e.Status))
+                .ThenBy(e => e.StudentLastName)
+                .ThenBy(e => e.StudentFirstName)
+                .ToList();
+
+            return Ok(new PaymentRosterResponseDto
+            {
+                Year = year,
+                Month = month,
+                PaidCount = entries.Count(e => e.Status == RosterPaymentStatus.Paid),
+                PendingCount = entries.Count(e => e.Status == RosterPaymentStatus.Pending),
+                OverdueCount = entries.Count(e => e.Status == RosterPaymentStatus.Overdue),
+                NoInvoiceCount = entries.Count(e => e.Status == RosterPaymentStatus.NoInvoice),
+                Entries = entries
+            });
+        }
+
+        /// <summary>
         /// Annule une facture (passe son Status à <see cref="InvoiceStatus.Cancelled"/>).
         /// SchoolAdmin uniquement.
         ///
@@ -555,7 +665,15 @@ namespace Idara.API.Controllers
             var query = _context.Payments
                 .Where(p => p.SchoolId == schoolId.Value);
 
-            if (status.HasValue) query = query.Where(p => p.Status == status.Value);
+            if (status.HasValue)
+                query = query.Where(p => p.Status == status.Value);
+            else
+                // Par défaut : on masque les paiements échoués / annulés / expirés
+                // (bruit déroutant pour le public non-tech) — uniquement réussis +
+                // en cours. Un statut explicite reste possible pour le debug.
+                query = query.Where(p =>
+                    p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.Pending);
+
             if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcSafe());
             if (to.HasValue) query = query.Where(p => p.InitiatedAt <= to.Value.ToUtcSafe());
 

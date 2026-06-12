@@ -389,7 +389,14 @@ namespace Idara.API.Controllers
             var query = _context.Payments
                 .Include(p => p.Student)
                 .Where(p => p.GuardianId == userId.Value);
-            if (status.HasValue) query = query.Where(p => p.Status == status.Value);
+            if (status.HasValue)
+                query = query.Where(p => p.Status == status.Value);
+            else
+                // Par défaut : masquer les paiements échoués / annulés / expirés
+                // (un essai Wave raté puis réessayé affiche un « ÉCHEC » anxiogène
+                // au parent) — uniquement réussis + en cours.
+                query = query.Where(p =>
+                    p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.Pending);
 
             var items = await query
                 .OrderByDescending(p => p.InitiatedAt)
