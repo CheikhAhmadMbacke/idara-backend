@@ -77,6 +77,10 @@ namespace Idara.API.Controllers
                 : null;
             var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
 
+            // Topup = rechargement du wallet école (FeesPayer=School, sans élève) —
+            // distinct d'un paiement de scolarité (FeesPayer=Parent, avec élève).
+            var isTopup = payment.FeesPayer == FeesPayer.School && payment.StudentId == null;
+
             return Ok(new
             {
                 paymentId = payment.Id,
@@ -90,6 +94,7 @@ namespace Idara.API.Controllers
                 hasReceipt = payment.Status == PaymentStatus.Completed,
                 schoolName = school?.Name,
                 studentName = student != null ? $"{student.FirstName} {student.LastName}" : null,
+                isTopup,
             });
         }
 

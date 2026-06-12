@@ -120,13 +120,22 @@
     .summary-row {
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: baseline;
+      gap: 12px;
       padding: 6px 0;
       font-size: 13px;
     }
     .summary-row + .summary-row { border-top: 1px solid var(--border); }
-    .summary-label { color: var(--text-secondary); }
-    .summary-value { color: var(--text-primary); font-weight: 600; }
+    .summary-label { color: var(--text-secondary); flex-shrink: 0; }
+    /* La valeur (réf SenePay longue) doit pouvoir se couper au lieu de déborder. */
+    .summary-value {
+      color: var(--text-primary);
+      font-weight: 600;
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .summary-value.big {
       font-size: 22px;
       font-weight: 800;
@@ -246,7 +255,11 @@
 
     function renderSummary(data) {
       const rows = [
-        { label: 'Montant payé', value: fmt(data.amountChargedFcfa) + ' FCFA', big: true },
+        {
+          label: data.isTopup ? 'Montant rechargé' : 'Montant payé',
+          value: fmt(data.amountChargedFcfa) + ' FCFA',
+          big: true,
+        },
       ];
       if (data.studentName) rows.push({ label: 'Élève', value: data.studentName });
       if (data.schoolName) rows.push({ label: 'École', value: data.schoolName });
@@ -287,9 +300,12 @@
           </a>
         `);
       }
-      // Bouton retour app (lien web public de l'app — futur Universal Link).
+      // Bouton retour app : /app est revendiqué par l'app Android via App Links
+      // (autoVerify). Sur un appareil où l'app est installée et vérifiée, le lien
+      // ouvre directement l'app ; sinon le site web sert /app et redirige vers
+      // l'accueil. Web fallback systématique → jamais cassé.
       items.push(`
-        <a class="btn btn-ghost" href="https://idara.sn">
+        <a class="btn btn-ghost" href="https://idara.sn/app">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>
           Retour à Idara
         </a>
@@ -332,8 +348,10 @@
 
           if (s === 'completed') {
             setState('success', '✓',
-              'Paiement confirmé',
-              'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
+              data.isTopup ? 'Recharge confirmée' : 'Paiement confirmé',
+              data.isTopup
+                ? 'Le solde de votre école a bien été crédité. Le reçu est ci-dessous.'
+                : 'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
             // Affiche le PDF en iframe.
             pdfFrame.src = `/pay/${paymentId}/${token}/receipt.pdf`;
             pdfFrame.style.display = 'block';

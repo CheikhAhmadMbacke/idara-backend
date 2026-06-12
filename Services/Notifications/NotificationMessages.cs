@@ -74,6 +74,12 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : paiement de {montantFcfa} FCFA recu pour {eleve}. Votre solde a ete credite.",
             Ar: $"Idara: تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. تم إضافة المبلغ إلى رصيدك.");
 
+        // Rechargement du wallet école (topup) : pas d'élève, c'est l'école qui
+        // alimente son propre solde.
+        public static BilingualMessage WalletTopupReceived(long montantFcfa) => new(
+            Fr: $"Idara : recharge de {montantFcfa} FCFA recue. Votre solde a ete credite.",
+            Ar: $"Idara: تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك.");
+
         // Retrait/transfert effectué : prévient l'admin uniquement.
         public static BilingualMessage WithdrawalDone(long montantFcfa) => new(
             Fr: $"Idara : votre retrait de {montantFcfa} FCFA a ete effectue avec succes.",

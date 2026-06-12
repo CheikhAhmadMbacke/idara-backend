@@ -340,11 +340,18 @@ namespace Idara.API.Controllers
                         var student = completedPayment.StudentId.HasValue
                             ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
                             : null;
-                        var eleve = student != null ? $"{student.FirstName} {student.LastName}".Trim() : "un eleve";
                         var shownAmount = completedPayment.TargetAmountFcfa > 0
                             ? completedPayment.TargetAmountFcfa
                             : completedPayment.AmountFcfa;
-                        var msg = NotificationTemplates.PaymentReceivedSchool(eleve, shownAmount);
+                        // Topup wallet école (FeesPayer=School, sans élève) → message
+                        // « recharge » au lieu de « paiement pour un élève ».
+                        var isTopup = completedPayment.FeesPayer == FeesPayer.School
+                                      && completedPayment.StudentId == null;
+                        var msg = isTopup
+                            ? NotificationTemplates.WalletTopupReceived(shownAmount)
+                            : NotificationTemplates.PaymentReceivedSchool(
+                                student != null ? $"{student.FirstName} {student.LastName}".Trim() : "un eleve",
+                                shownAmount);
                         foreach (var su in schoolUserIds)
                         {
                             await _notif.SendPushOnlyAsync(new PushOnlyRequest(

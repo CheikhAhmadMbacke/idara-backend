@@ -135,7 +135,10 @@ namespace Idara.API.Services
                         c.Item().Text(t =>
                         {
                             t.Span("Type : ").SemiBold().FontColor(TextSecondary);
-                            t.Span("Paiement libre");
+                            // Topup wallet école = pas d'élève + pas de facture.
+                            t.Span(student == null
+                                ? "Recharge du wallet école"
+                                : "Paiement libre");
                         });
                     }
                 });
