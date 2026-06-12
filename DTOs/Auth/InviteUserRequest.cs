@@ -18,8 +18,8 @@ namespace Idara.API.DTOs.Auth
         public string FullName { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "La fonction est requise.")]
-        [RegularExpression("^(Teacher|SchoolStaff|Guardian)$",
-            ErrorMessage = "Fonction invalide. Valeurs autorisées : Teacher, SchoolStaff, Guardian.")]
+        [RegularExpression("^(Teacher|SchoolStaff|Guardian|Surveillant)$",
+            ErrorMessage = "Fonction invalide. Valeurs autorisées : Teacher, SchoolStaff, Guardian, Surveillant.")]
         public string Function { get; set; } = string.Empty;
 
         // ----- Champs spécifiques à Guardian -----

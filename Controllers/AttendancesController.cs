@@ -74,7 +74,7 @@ namespace Idara.API.Controllers
         /// pour (student, date), elle est mise à jour ; sinon elle est créée.
         /// </summary>
         [HttpPost("bulk")]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant}")]
         public async Task<IActionResult> Bulk([FromBody] AttendanceBulkDto dto)
         {
             var schoolId = User.GetSchoolId();

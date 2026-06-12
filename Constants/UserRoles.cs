@@ -7,5 +7,6 @@
         public const string SchoolStaff = "SchoolStaff";
         public const string Teacher = "Teacher";
         public const string Guardian = "Guardian";
+        public const string Surveillant = "Surveillant";
     }
 }

@@ -848,6 +848,7 @@ namespace Idara.API.Controllers
             UserRoles.Teacher => ("Enseignant", "معلّم"),
             UserRoles.SchoolStaff => ("Personnel", "موظف"),
             UserRoles.Guardian => ("Responsable", "ولي الأمر"),
+            UserRoles.Surveillant => ("Surveillant", "مراقب"),
             _ => (role, role)
         };
 

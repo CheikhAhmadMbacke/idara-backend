@@ -26,7 +26,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant}")]
         public async Task<IActionResult> GetStudents([FromQuery] StudentPaginationDto pagination)
         {
             var schoolId = User.GetSchoolId();
@@ -37,7 +37,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet("{id}")]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant}")]
         public async Task<IActionResult> GetStudent(int id)
         {
             var schoolId = User.GetSchoolId();

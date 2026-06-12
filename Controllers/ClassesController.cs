@@ -23,7 +23,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant}")]
         public async Task<ActionResult<IEnumerable<ClassDto>>> GetClasses()
         {
             var schoolId = User.GetSchoolId();
@@ -59,7 +59,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet("{id}")]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant}")]
         public async Task<ActionResult<ClassDto>> GetClass(int id)
         {
             var schoolId = User.GetSchoolId();

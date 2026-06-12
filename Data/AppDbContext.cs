@@ -20,6 +20,7 @@ namespace Idara.API.Data
         public DbSet<Subject> Subjects { get; set; }
         public DbSet<ClassSubjectTeacher> ClassSubjectTeachers { get; set; }
         public DbSet<Attendance> Attendances { get; set; }
+        public DbSet<StaffAttendance> StaffAttendances { get; set; }
         public DbSet<Grade> Grades { get; set; }
         public DbSet<CoranProgress> CoranProgresses { get; set; }
         public DbSet<CoranSession> CoranSessions { get; set; }
@@ -245,6 +246,25 @@ namespace Idara.API.Data
             // Soft-delete : les requêtes ignorent les Attendances supprimées
             // (utiliser .IgnoreQueryFilters() côté API pour l'audit).
             modelBuilder.Entity<Attendance>()
+                .HasQueryFilter(a => !a.IsDeleted);
+
+            // ----- Présence du personnel / enseignants (rôle Surveillant) -----
+            modelBuilder.Entity<StaffAttendance>()
+                .HasOne(a => a.Staff)
+                .WithMany()
+                .HasForeignKey(a => a.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<StaffAttendance>()
+                .HasIndex(a => new { a.SchoolId, a.Date });
+
+            // Un seul pointage actif par (membre du personnel, jour).
+            modelBuilder.Entity<StaffAttendance>()
+                .HasIndex(a => new { a.StaffId, a.Date })
+                .IsUnique()
+                .HasFilter("\"IsDeleted\" = FALSE");
+
+            modelBuilder.Entity<StaffAttendance>()
                 .HasQueryFilter(a => !a.IsDeleted);
 
             modelBuilder.Entity<Grade>()
