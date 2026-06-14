@@ -120,4 +120,21 @@ namespace Idara.API.DTOs.Subscription
         public long NetCreditedFcfa { get; set; }
         public string? FailureReason { get; set; }
     }
+
+    /// <summary>
+    /// Adéquation effectif ↔ plan d'abonnement (pour prévenir l'école sans la
+    /// bloquer quand elle dépasse le plafond de son plan).
+    /// </summary>
+    public class SubscriptionCapacityDto
+    {
+        public int StudentCount { get; set; }
+        public string? PlanName { get; set; }
+        /// <summary>Plafond d'élèves du plan courant (null = illimité).</summary>
+        public int? StudentMax { get; set; }
+        /// <summary>True si l'effectif dépasse le plafond d'un plan public borné.</summary>
+        public bool ExceedsCap { get; set; }
+        /// <summary>Plan vers lequel l'école sera auto-remontée au prochain prélèvement.</summary>
+        public string? SuggestedPlanName { get; set; }
+        public long? SuggestedPlanMonthlyFcfa { get; set; }
+    }
 }

@@ -132,6 +132,51 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub)));
         }
 
+        /// <summary>
+        /// Adéquation effectif ↔ plan (pour prévenir l'école quand elle dépasse
+        /// le plafond de son plan, sans la bloquer — appelé après ajout d'élève).
+        /// </summary>
+        [HttpGet("me/capacity")]
+        [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
+        public async Task<ActionResult<ApiResponse<SubscriptionCapacityDto>>> MyCapacity(CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return BadRequest(ApiResponse<SubscriptionCapacityDto>.Fail("École introuvable."));
+
+            await _context.EnsureSubscriptionAsync(schoolId.Value, ct);
+            var sub = await _context.Subscriptions
+                .Include(s => s.Plan)
+                .FirstOrDefaultAsync(s => s.SchoolId == schoolId.Value, ct);
+            var studentCount = await _context.Students
+                .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted, ct);
+
+            var dto = new SubscriptionCapacityDto { StudentCount = studentCount };
+            var plan = sub?.Plan;
+            if (plan != null)
+            {
+                dto.PlanName = plan.Name;
+                dto.StudentMax = plan.StudentMax;
+                // Dépassement uniquement sur un plan PUBLIC borné (les deals custom
+                // ne sont jamais auto-ajustés — cf. §101).
+                if (!plan.IsCustom && plan.StudentMax.HasValue && studentCount > plan.StudentMax.Value)
+                {
+                    dto.ExceedsCap = true;
+                    var publicPlans = await _context.SubscriptionPlans
+                        .Where(p => p.IsActive && !p.IsCustom)
+                        .OrderBy(p => p.MonthlyPriceFcfa)
+                        .ToListAsync(ct);
+                    var correct = publicPlans.FirstOrDefault(
+                        p => !p.StudentMax.HasValue || studentCount <= p.StudentMax.Value);
+                    if (correct != null && correct.Id != plan.Id)
+                    {
+                        dto.SuggestedPlanName = correct.Name;
+                        dto.SuggestedPlanMonthlyFcfa = correct.MonthlyPriceFcfa;
+                    }
+                }
+            }
+            return Ok(ApiResponse<SubscriptionCapacityDto>.Ok(dto));
+        }
+
         /// <summary>L'école change elle-même de plan (plans PUBLICS actifs uniquement). SchoolAdmin.</summary>
         [HttpPost("me/change-plan")]
         [Authorize(Roles = UserRoles.SchoolAdmin)]
