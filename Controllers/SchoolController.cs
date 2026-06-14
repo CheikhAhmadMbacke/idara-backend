@@ -86,18 +86,49 @@ namespace Idara.API.Controllers
             if (school == null)
                 return NotFound(ApiResponse<bool>.Fail("École non trouvée."));
 
+            ApplySchoolFields(school, dto);
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("[school] École {SchoolId} éditée par SuperAdmin {AdminId}", id, User.GetUserId());
+
+            var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == id);
+            return Ok(MapToSchoolInfoResponse(reloaded));
+        }
+
+        /// <summary>
+        /// Édition de SA PROPRE école par le SchoolAdmin. L'adresse email de
+        /// connexion (portée par le compte User, PAS par l'entité School) n'est
+        /// VOLONTAIREMENT pas modifiable ici — sinon une école pourrait changer
+        /// d'email pour tenter de recréer un compte/essai. Mêmes champs que
+        /// l'édition SuperAdmin (nom, adresse, téléphone, représentant).
+        /// </summary>
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        [HttpPut("my-info")]
+        public async Task<IActionResult> UpdateMySchool([FromBody] UpdateSchoolDto dto)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == schoolId.Value);
+            if (school == null)
+                return NotFound(ApiResponse<bool>.Fail("Aucune école associée à cet utilisateur."));
+
+            ApplySchoolFields(school, dto);
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("[school] École {SchoolId} éditée par son SchoolAdmin {AdminId}", schoolId, User.GetUserId());
+
+            var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == schoolId.Value);
+            return Ok(MapToSchoolInfoResponse(reloaded));
+        }
+
+        /// <summary>Applique les champs éditables d'une école depuis le DTO (jamais l'email).</summary>
+        private static void ApplySchoolFields(SchoolModel school, UpdateSchoolDto dto)
+        {
             school.Name = dto.Name.Trim();
             school.Address = string.IsNullOrWhiteSpace(dto.Address) ? null : dto.Address.Trim();
             school.PhoneNumber = string.IsNullOrWhiteSpace(dto.PhoneNumber) ? null : dto.PhoneNumber.Trim();
             school.RepresentativeFirstName = string.IsNullOrWhiteSpace(dto.RepresentativeFirstName) ? null : dto.RepresentativeFirstName.Trim();
             school.RepresentativeLastName = string.IsNullOrWhiteSpace(dto.RepresentativeLastName) ? null : dto.RepresentativeLastName.Trim();
             school.RepresentativePhone = string.IsNullOrWhiteSpace(dto.RepresentativePhone) ? null : dto.RepresentativePhone.Trim();
-
-            await _context.SaveChangesAsync();
-            _logger.LogInformation("[school] École {SchoolId} éditée par SuperAdmin {AdminId}", id, User.GetUserId());
-
-            var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == id);
-            return Ok(MapToSchoolInfoResponse(reloaded));
         }
 
         /// <summary>
@@ -251,10 +282,35 @@ namespace Idara.API.Controllers
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
+            return Ok(await BuildSchoolUsersAsync(schoolId.Value, ct));
+        }
 
+        /// <summary>
+        /// Liste les utilisateurs d'une école donnée (SuperAdmin). Même contenu
+        /// que <see cref="GetSchoolUsers"/> mais scopé par le paramètre
+        /// <paramref name="schoolId"/> au lieu du JWT (le SuperAdmin a l'autorité
+        /// globale, il n'est rattaché à aucune école).
+        /// </summary>
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        [HttpGet("{schoolId:int}/users")]
+        public async Task<ActionResult<IEnumerable<SchoolUserDto>>> GetSchoolUsersBySuperAdmin(
+            int schoolId, CancellationToken ct)
+        {
+            var exists = await _context.Schools.AnyAsync(s => s.Id == schoolId, ct);
+            if (!exists) return NotFound(ApiResponse<bool>.Fail("École non trouvée."));
+            return Ok(await BuildSchoolUsersAsync(schoolId, ct));
+        }
+
+        /// <summary>
+        /// Construit la liste des utilisateurs d'une école : enseignants +
+        /// personnel + admin (via SchoolId) ET parents (via StudentGuardian →
+        /// élèves de l'école, dédupliqués, avec enfants liés).
+        /// </summary>
+        private async Task<List<SchoolUserDto>> BuildSchoolUsersAsync(int schoolId, CancellationToken ct)
+        {
             // Enseignants + personnel + admin (SchoolId direct, hors supprimés).
             var staff = await _context.Users
-                .Where(u => u.SchoolId == schoolId.Value && !u.IsDeleted)
+                .Where(u => u.SchoolId == schoolId && !u.IsDeleted)
                 .Select(u => new SchoolUserDto
                 {
                     Id = u.Id,
@@ -268,7 +324,7 @@ namespace Idara.API.Controllers
 
             // Parents liés via leurs enfants de cette école.
             var guardianLinks = await _context.StudentGuardians
-                .Where(sg => sg.Student.SchoolId == schoolId.Value && !sg.Guardian.IsDeleted)
+                .Where(sg => sg.Student.SchoolId == schoolId && !sg.Guardian.IsDeleted)
                 .Select(sg => new
                 {
                     sg.GuardianId,
@@ -305,7 +361,7 @@ namespace Idara.API.Controllers
                 })
                 .ToList();
 
-            return Ok(staff.Concat(guardians).OrderBy(u => u.Role).ThenBy(u => u.FullName));
+            return staff.Concat(guardians).OrderBy(u => u.Role).ThenBy(u => u.FullName).ToList();
         }
 
         /// <summary>

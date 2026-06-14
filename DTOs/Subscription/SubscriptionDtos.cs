@@ -44,6 +44,32 @@ namespace Idara.API.DTOs.Subscription
         public int? StudentMax { get; set; }
     }
 
+    /// <summary>Création d'un plan PUBLIC (visible/choisissable par toutes les écoles).</summary>
+    public class CreateSubscriptionPlanDto
+    {
+        [Required, StringLength(60, MinimumLength = 1)]
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>Code unique (slug). Optionnel : auto-généré depuis le nom si vide.</summary>
+        [StringLength(40)]
+        public string? Code { get; set; }
+
+        [Range(0, 100_000_000)]
+        public long MonthlyPriceFcfa { get; set; }
+
+        [Range(0, 1_000_000_000)]
+        public long AnnualPriceFcfa { get; set; }
+
+        [Range(0, 1_000_000)]
+        public int NotificationQuota { get; set; }
+
+        [Range(0, 100000)]
+        public int? StudentMin { get; set; }
+
+        [Range(0, 100000)]
+        public int? StudentMax { get; set; }
+    }
+
     /// <summary>Création d'un deal custom pour une école précise.</summary>
     public class CreateCustomPlanDto
     {

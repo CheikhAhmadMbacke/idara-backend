@@ -148,6 +148,37 @@ namespace Idara.API.Services
                 return BillingOutcome.NoAction; // déjà à jour / pas encore échu
             }
 
+            // ----- Re-snapshot du prix/quota au RENOUVELLEMENT -----
+            // Une modif de plan public par le SuperAdmin doit s'appliquer « au
+            // prochain prélèvement » (décision produit + spec §6.1). On relit donc
+            // le prix/quota du plan public courant à l'échéance et on les re-snapshote
+            // dans l'abo AVANT de prélever. Jamais sur une période déjà payée.
+            // Exclusions : deals custom (prix négocié, intouchable) et plan
+            // désactivé (on garde le dernier prix snapshoté). Le garde-fou palier
+            // ci-dessous peut ensuite remonter à un plan supérieur si l'effectif
+            // dépasse le plafond.
+            if (dueNow && sub.PlanId.HasValue)
+            {
+                var planForSnapshot = await _db.SubscriptionPlans
+                    .FirstOrDefaultAsync(p => p.Id == sub.PlanId.Value, ct);
+                if (planForSnapshot != null && !planForSnapshot.IsCustom && planForSnapshot.IsActive)
+                {
+                    var planAmount = sub.BillingCycle == BillingCycle.Annual
+                        ? planForSnapshot.AnnualPriceFcfa
+                        : planForSnapshot.MonthlyPriceFcfa;
+                    if (planAmount != sub.AmountFcfa || planForSnapshot.NotificationQuota != sub.NotificationQuota)
+                    {
+                        _logger.LogInformation(
+                            "[subscription-billing] École {SchoolId} re-snapshot prix {Old}→{New} / quota {OldQ}→{NewQ} (plan {Plan}).",
+                            sub.SchoolId, sub.AmountFcfa, planAmount, sub.NotificationQuota,
+                            planForSnapshot.NotificationQuota, planForSnapshot.Name);
+                        sub.AmountFcfa = planAmount;
+                        sub.NotificationQuota = planForSnapshot.NotificationQuota;
+                        sub.UpdatedAt = nowUtc;
+                    }
+                }
+            }
+
             // ----- Garde-fou palier : auto-ajustement AVANT le prélèvement -----
             // Si l'effectif réel de l'école dépasse le plafond de son plan, on la
             // remonte au plus petit plan public qui le couvre et on re-snapshote

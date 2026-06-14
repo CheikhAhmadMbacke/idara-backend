@@ -67,6 +67,83 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<SubscriptionPlanDto>.Ok(Map(plan), "Plan mis à jour."));
         }
 
+        /// <summary>Crée un plan PUBLIC (choisissable par toutes les écoles).</summary>
+        [HttpPost]
+        public async Task<ActionResult<ApiResponse<SubscriptionPlanDto>>> Create(
+            [FromBody] CreateSubscriptionPlanDto dto, CancellationToken ct)
+        {
+            // Code unique parmi les plans publics (l'index DB ne couvre que les
+            // non-custom). On génère un slug depuis le nom si absent, puis on
+            // dé-doublonne en suffixant.
+            var baseCode = string.IsNullOrWhiteSpace(dto.Code) ? Slugify(dto.Name) : Slugify(dto.Code);
+            if (string.IsNullOrEmpty(baseCode)) baseCode = "plan";
+
+            var existingCodes = await _context.SubscriptionPlans
+                .Where(p => !p.IsCustom)
+                .Select(p => p.Code)
+                .ToListAsync(ct);
+            var code = baseCode;
+            var i = 2;
+            while (existingCodes.Contains(code))
+                code = $"{baseCode}-{i++}";
+
+            var plan = new SubscriptionPlan
+            {
+                Code = code,
+                Name = dto.Name.Trim(),
+                StudentMin = dto.StudentMin,
+                StudentMax = dto.StudentMax,
+                MonthlyPriceFcfa = dto.MonthlyPriceFcfa,
+                AnnualPriceFcfa = dto.AnnualPriceFcfa,
+                NotificationQuota = dto.NotificationQuota,
+                IsActive = true,
+                IsCustom = false,
+                SchoolId = null,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.SubscriptionPlans.Add(plan);
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation("[subscription] Plan public « {Code} » créé par SuperAdmin.", code);
+            return Ok(ApiResponse<SubscriptionPlanDto>.Ok(Map(plan), "Plan créé."));
+        }
+
+        /// <summary>
+        /// « Supprime » un plan = soft-delete (IsActive=false). On ne hard-delete
+        /// JAMAIS : des Subscription référencent PlanId, et le prix est snapshoté
+        /// dans l'abo (un abo en cours continue donc de fonctionner). Désactiver
+        /// masque simplement le plan des nouveaux choix.
+        /// </summary>
+        [HttpDelete("{id:int}")]
+        public async Task<ActionResult<ApiResponse<bool>>> Delete(int id, CancellationToken ct)
+        {
+            var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == id, ct);
+            if (plan == null) return NotFound(ApiResponse<bool>.Fail("Plan introuvable."));
+
+            if (!plan.IsActive)
+                return Ok(ApiResponse<bool>.Ok(true, "Plan déjà désactivé."));
+
+            plan.IsActive = false;
+            plan.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation("[subscription] Plan {Id} désactivé (soft-delete) par SuperAdmin.", id);
+            return Ok(ApiResponse<bool>.Ok(true, "Plan désactivé. Les abonnements en cours ne sont pas affectés."));
+        }
+
+        /// <summary>Transforme un texte en slug ASCII minuscule (a-z0-9-).</summary>
+        private static string Slugify(string input)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var ch in input.Trim().ToLowerInvariant())
+            {
+                if (ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9') sb.Append(ch);
+                else if (ch == ' ' || ch == '-' || ch == '_') sb.Append('-');
+                // les autres caractères (accents, ponctuation) sont ignorés
+            }
+            return sb.ToString().Trim('-');
+        }
+
         /// <summary>Crée un deal custom rattaché à une école précise.</summary>
         [HttpPost("custom")]
         public async Task<ActionResult<ApiResponse<SubscriptionPlanDto>>> CreateCustom(

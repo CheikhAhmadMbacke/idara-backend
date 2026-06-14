@@ -9,17 +9,21 @@ using Microsoft.Extensions.Caching.Memory;
 namespace Idara.API.Common.Middleware
 {
     /// <summary>
-    /// Applique la machine à états d'abonnement (Phase 4) : bloque les écoles
-    /// dont l'abonnement est <see cref="SubscriptionStatus.ReadOnly"/> (écritures
-    /// interdites) ou <see cref="SubscriptionStatus.Suspended"/> (tout interdit),
-    /// avec un 402 Payment Required. NE FAIT RIEN tant que le SuperAdmin n'a pas
+    /// Applique la machine à états d'abonnement (Phase 4) : dès qu'un abonnement
+    /// est impayé (PendingPayment / ReadOnly / Suspended), l'école passe en
+    /// LECTURE SEULE — les écritures (POST/PUT/PATCH/DELETE) renvoient 402, mais
+    /// les lectures (GET) restent TOUJOURS autorisées : l'école doit pouvoir se
+    /// connecter et naviguer partout. NE FAIT RIEN tant que le SuperAdmin n'a pas
     /// activé <c>PlatformSettings.SubscriptionEnforcementEnabled</c> (OFF par
     /// défaut) → on peut déployer et observer la facturation avant de verrouiller.
     ///
     /// Exemptés : SuperAdmin, Guardian (les parents doivent pouvoir payer), et
     /// une whitelist de chemins (login, recharge wallet, webhooks, gestion de
-    /// son propre abonnement, page de paiement publique). En grâce
-    /// (PendingPayment) l'école n'est PAS bloquée — seulement avertie.
+    /// son propre abonnement, page de paiement publique). Dès le 1er échec de
+    /// prélèvement (PendingPayment), l'école passe en LECTURE SEULE : ses seules
+    /// actions possibles restent se connecter + recharger le wallet / payer
+    /// l'abonnement. La fenêtre de grâce ne fait plus que retarder l'escalade
+    /// vers ReadOnly puis Suspended (blocage total), pas le blocage des écritures.
     /// </summary>
     public class SubscriptionEnforcementMiddleware
     {
@@ -89,13 +93,20 @@ namespace Idara.API.Common.Middleware
                 || HttpMethods.IsPatch(ctx.Request.Method)
                 || HttpMethods.IsDelete(ctx.Request.Method);
 
+            // Décision produit : un abonnement impayé met l'école en LECTURE
+            // SEULE — JAMAIS de blocage des lectures. Elle doit toujours pouvoir
+            // se connecter et naviguer entre tous les écrans ; seules les
+            // ÉCRITURES sont bloquées (hors recharge wallet, déjà en whitelist).
+            // Les 3 états impayés bloquent donc uniquement les écritures, dès le
+            // 1er échec de prélèvement (plus de fenêtre de grâce « accès complet »).
+            // Suspended ne diffère de ReadOnly que par l'ancienneté de l'impayé
+            // (escalade temporelle), pas par le périmètre du blocage.
             var blocked = sub.Status switch
             {
-                // ReadOnly : lecture OK, écritures bloquées.
+                SubscriptionStatus.PendingPayment => isWrite,
                 SubscriptionStatus.ReadOnly => isWrite,
-                // Suspended : tout bloqué (hors whitelist déjà filtrée).
-                SubscriptionStatus.Suspended => true,
-                _ => false // Trial / Active / PendingPayment (grâce) : on laisse passer.
+                SubscriptionStatus.Suspended => isWrite,
+                _ => false // Trial / Active : accès complet.
             };
 
             if (!blocked) { await _next(ctx); return; }
