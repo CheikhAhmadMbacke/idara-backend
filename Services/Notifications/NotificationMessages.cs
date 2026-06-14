@@ -80,6 +80,13 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : recharge de {montantFcfa} FCFA recue. Votre solde a ete credite.",
             Ar: $"Idara: تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك.");
 
+        // Auto-ajustement de palier à la facturation : l'effectif de l'école a
+        // dépassé le plafond de son plan, on l'a remontée au plan adapté.
+        public static BilingualMessage SubscriptionPlanUpgraded(
+            string nouveauPlan, int effectif, long montantFcfa) => new(
+            Fr: $"Idara : votre effectif ({effectif} eleves) depasse votre ancien plan. Vous etes passe au plan {nouveauPlan} ({montantFcfa} FCFA).",
+            Ar: $"Idara: عدد تلاميذكم ({effectif}) تجاوز خطتكم السابقة. تم ترقيتكم إلى خطة {nouveauPlan} ({montantFcfa} FCFA).");
+
         // Retrait/transfert effectué : prévient l'admin uniquement.
         public static BilingualMessage WithdrawalDone(long montantFcfa) => new(
             Fr: $"Idara : votre retrait de {montantFcfa} FCFA a ete effectue avec succes.",

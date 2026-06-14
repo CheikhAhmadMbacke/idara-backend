@@ -45,17 +45,20 @@ namespace Idara.API.Services
         private readonly AppDbContext _db;
         private readonly ISubscriptionInvoicePdfService _pdf;
         private readonly IEmailService _email;
+        private readonly Notifications.INotificationService _notif;
         private readonly ILogger<SubscriptionBillingService> _logger;
 
         public SubscriptionBillingService(
             AppDbContext db,
             ISubscriptionInvoicePdfService pdf,
             IEmailService email,
+            Notifications.INotificationService notif,
             ILogger<SubscriptionBillingService> logger)
         {
             _db = db;
             _pdf = pdf;
             _email = email;
+            _notif = notif;
             _logger = logger;
         }
 
@@ -145,6 +148,53 @@ namespace Idara.API.Services
                 return BillingOutcome.NoAction; // déjà à jour / pas encore échu
             }
 
+            // ----- Garde-fou palier : auto-ajustement AVANT le prélèvement -----
+            // Si l'effectif réel de l'école dépasse le plafond de son plan, on la
+            // remonte au plus petit plan public qui le couvre et on re-snapshote
+            // le montant — sinon on facturerait en-dessous de l'effectif (perte).
+            // On ne descend JAMAIS (l'école garde le choix de réduire via
+            // change-plan) et on NE touche PAS aux deals custom (prix négocié).
+            SubscriptionPlan? autoUpgradedTo = null;
+            var studentCountForUpgrade = 0;
+            {
+                var currentPlan = sub.PlanId.HasValue
+                    ? await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == sub.PlanId.Value, ct)
+                    : null;
+                if (currentPlan != null && !currentPlan.IsCustom && currentPlan.StudentMax.HasValue)
+                {
+                    var studentCount = await _db.Students
+                        .CountAsync(s => s.SchoolId == sub.SchoolId && !s.IsDeleted, ct);
+                    if (studentCount > currentPlan.StudentMax.Value)
+                    {
+                        var publicPlans = await _db.SubscriptionPlans
+                            .Where(p => p.IsActive && !p.IsCustom)
+                            .OrderBy(p => p.MonthlyPriceFcfa)
+                            .ToListAsync(ct);
+                        var correct = publicPlans.FirstOrDefault(
+                            p => !p.StudentMax.HasValue || studentCount <= p.StudentMax.Value);
+                        var correctAmount = correct == null
+                            ? 0L
+                            : (sub.BillingCycle == BillingCycle.Annual
+                                ? correct.AnnualPriceFcfa
+                                : correct.MonthlyPriceFcfa);
+                        // Uniquement un vrai upgrade (prix supérieur au snapshot courant).
+                        if (correct != null && correct.Id != sub.PlanId && correctAmount > sub.AmountFcfa)
+                        {
+                            sub.PlanId = correct.Id;
+                            sub.AmountFcfa = correctAmount;
+                            sub.NotificationQuota = correct.NotificationQuota;
+                            sub.UpdatedAt = nowUtc;
+                            autoUpgradedTo = correct;
+                            studentCountForUpgrade = studentCount;
+                            _logger.LogInformation(
+                                "[subscription-billing] École {SchoolId} auto-ajustée {Old}→{New} (effectif {Count} > plafond {Max}) → montant {Amount}.",
+                                sub.SchoolId, currentPlan.Name, correct.Name, studentCount,
+                                currentPlan.StudentMax, correctAmount);
+                        }
+                    }
+                }
+            }
+
             BillingOutcome outcome;
 
             if (wallet.AvailableBalance >= sub.AmountFcfa)
@@ -197,6 +247,8 @@ namespace Idara.API.Services
                 // Facture PDF + email SchoolAdmin — best-effort, HORS transaction
                 // (un échec PDF/SMTP ne doit jamais annuler un prélèvement encaissé).
                 await EmitInvoiceDocsAsync(invoice, sub, ct);
+                if (autoUpgradedTo != null)
+                    await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
                 return BillingOutcome.Paid;
             }
 
@@ -234,7 +286,45 @@ namespace Idara.API.Services
             sub.UpdatedAt = nowUtc;
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+            if (autoUpgradedTo != null)
+                await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
             return outcome;
+        }
+
+        /// <summary>
+        /// Notifie (push, best-effort) le SchoolAdmin + personnel que l'abonnement
+        /// a été auto-ajusté à un palier supérieur (effectif dépassant l'ancien
+        /// plan). Ne lève jamais : un échec notif ne doit pas casser la facturation.
+        /// </summary>
+        private async Task NotifyAutoUpgradeAsync(
+            Subscription sub, SubscriptionPlan newPlan, int studentCount, CancellationToken ct)
+        {
+            try
+            {
+                var admins = await _db.Users
+                    .Where(u => u.SchoolId == sub.SchoolId && !u.IsDeleted
+                        && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync(ct);
+                var msg = Notifications.NotificationTemplates.SubscriptionPlanUpgraded(
+                    newPlan.Name, studentCount, sub.AmountFcfa);
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new Notifications.PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: "SUBSCRIPTION_AUTO_UPGRADE",
+                        RelatedEntityId: sub.Id,
+                        PushRoute: "/school/subscription"), ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[subscription-billing] Notif auto-upgrade échouée École {SchoolId} (non bloquant)",
+                    sub.SchoolId);
+            }
         }
 
         /// <summary>
