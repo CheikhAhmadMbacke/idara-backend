@@ -19,9 +19,10 @@ namespace Idara.API.Controllers
     /// <summary>
     /// Recharge du wallet école par le SchoolAdmin (« Recharger mon wallet »,
     /// spec §5.2). Réutilise la mécanique payin SenePay (Phase 1.4) mais sans
-    /// Student/Guardian/Invoice : c'est l'école qui paie son propre wallet, en
-    /// <see cref="FeesPayer.School"/> → le webhook crédite le NET après frais
-    /// SenePay (aucune modification du webhook nécessaire). Cas d'usage clé :
+    /// Student/Guardian/Invoice : c'est l'école qui paie son propre wallet.
+    /// Majoration +8 % (<see cref="FeesPayer.Parent"/>) : l'école est débitée de
+    /// target×1,08 et le wallet est crédité du target EXACT (§82) → recharger
+    /// 5000 coûte 5400 mais crédite bien 5000. Cas d'usage clé :
     /// une école qui termine son essai 30j sans paiement parent encaissé →
     /// wallet à 0 → impossible de prélever l'abo → ce flux débloque.
     /// </summary>
@@ -82,20 +83,25 @@ namespace Idara.API.Controllers
 
             var operatorEnum = ParseOperator(opNorm!); // opNorm validé "wave"/"orange" ci-dessus
 
-            // FeesPayer=School : l'école absorbe les frais, le wallet est crédité
-            // du net. AmountFcfa = montant débité du payeur = ce qu'il saisit.
+            // Majoration +8 % (comme un paiement parent, FeesPayer=Parent) : l'école
+            // veut recevoir EXACTEMENT dto.Amount dans son wallet, donc on la débite
+            // de target×1,08 et le webhook crédite le wallet du TargetAmountFcfa
+            // (§82). TargetAmountFcfa = ce qui atterrit dans le wallet (5000),
+            // AmountFcfa = ce qui est débité du payeur (5400).
+            var targetAmount = dto.Amount;
+            var amountToCharge = (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier);
             var payment = new Payment
             {
                 SchoolId = schoolId.Value,
                 StudentId = null,
                 GuardianId = null,
                 InvoiceId = null,
-                AmountFcfa = dto.Amount,
-                TargetAmountFcfa = dto.Amount,
+                AmountFcfa = amountToCharge,
+                TargetAmountFcfa = targetAmount,
                 FeesFcfa = 0,
                 NetCreditedFcfa = 0,
                 Operator = operatorEnum,
-                FeesPayer = FeesPayer.School,
+                FeesPayer = FeesPayer.Parent,
                 Status = PaymentStatus.Pending,
                 InitiatedAt = DateTime.UtcNow,
                 PublicResultToken = Guid.NewGuid().ToString("N")
@@ -159,6 +165,11 @@ namespace Idara.API.Controllers
                 Status = p.Status,
                 AmountFcfa = p.AmountFcfa,
                 NetCreditedFcfa = p.NetCreditedFcfa,
+                // Montant réellement crédité au wallet = la cible (§82), pas le net
+                // SenePay. Fallback net pour d'anciens topups (FeesPayer=School).
+                CreditedFcfa = p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0
+                    ? p.TargetAmountFcfa
+                    : p.NetCreditedFcfa,
                 FailureReason = p.FailureReason
             }));
         }

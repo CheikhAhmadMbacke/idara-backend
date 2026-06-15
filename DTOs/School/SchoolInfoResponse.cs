@@ -17,6 +17,7 @@ namespace Idara.API.DTOs.School
         public string RepresentativeLastName { get; set; } = string.Empty;
         public string RepresentativePhone { get; set; } = string.Empty;
         public List<string> RepresentativeIdDocumentUrls { get; set; } = new();
+        public QuranRiwaya QuranRiwaya { get; set; }
         public List<UserInfoDto> Users { get; set; } = new();
     }
 }

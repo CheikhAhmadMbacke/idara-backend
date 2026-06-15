@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Enums;
 
 namespace Idara.API.DTOs.School
 {
@@ -27,5 +28,8 @@ namespace Idara.API.DTOs.School
 
         [StringLength(30)]
         public string? RepresentativePhone { get; set; }
+
+        /// <summary>Lecture (riwâya) du Coran. Optionnel : si null, inchangé.</summary>
+        public QuranRiwaya? QuranRiwaya { get; set; }
     }
 }

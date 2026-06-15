@@ -742,7 +742,9 @@ namespace Idara.API.Controllers
             var (fonctionFr, fonctionAr) = FunctionLabels(request.Function);
             var welcome = NotificationTemplates.InviteWelcome(
                 request.FullName, currentUser.School.Name ?? "Idara", fonctionFr, fonctionAr, phone, code);
-            var messageText = welcome.Compose(platform.SmsBilingual, newUser.PreferredLanguage);
+            // Message PARTAGÉ manuellement (modal récap) = FR simple ; le SMS auto
+            // garde le template bilingue `welcome` ci-dessous.
+            var messageText = NotificationTemplates.CredentialShare(request.FullName, phone, code);
 
             await _notif.SendSmsAsync(new NotificationSmsRequest(
                 UserId: newUser.Id,
@@ -818,7 +820,8 @@ namespace Idara.API.Controllers
             var platform = await _context.GetPlatformSettingsAsync();
             var msg = NotificationTemplates.AccessCodeReset(
                 fullName, currentUser.School.Name ?? "Idara", phone, code);
-            var messageText = msg.Compose(platform.SmsBilingual, target.PreferredLanguage);
+            // Message PARTAGÉ manuellement = FR simple ; le SMS auto garde `msg` bilingue.
+            var messageText = NotificationTemplates.CredentialShare(fullName, phone, code);
 
             await _notif.SendSmsAsync(new NotificationSmsRequest(
                 UserId: target.Id,

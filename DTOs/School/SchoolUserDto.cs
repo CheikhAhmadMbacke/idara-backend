@@ -16,6 +16,16 @@ namespace Idara.API.DTOs.School
         public string Role { get; set; } = string.Empty;
         public AccountStatus AccountStatus { get; set; }
         public string? PhoneNumber { get; set; }
+
+        /// <summary>Date de création du compte (= date d'invitation pour les
+        /// comptes ajoutés par l'école). Sert à contextualiser une relance
+        /// (« invité il y a 5 j, jamais connecté »).</summary>
+        public DateTime CreatedAt { get; set; }
+
+        /// <summary>Dernière connexion. <c>null</c> = ne s'est JAMAIS connecté
+        /// (les comptes invités sont créés sans LastLoginAt) → cible de relance.</summary>
+        public DateTime? LastLoginAt { get; set; }
+
         public List<SchoolUserChildDto> Children { get; set; } = new();
     }
 

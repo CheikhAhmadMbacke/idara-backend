@@ -301,7 +301,8 @@ namespace Idara.API.Controllers
             if (role == UserRoles.Guardian)
             {
                 var isLinked = await _context.StudentGuardians
-                    .AnyAsync(sg => sg.StudentId == card.StudentId && sg.GuardianId == userId.Value);
+                    .AnyAsync(sg => sg.StudentId == card.StudentId && sg.GuardianId == userId.Value
+                                    && !sg.Student.IsDeleted);
                 if (!isLinked) return Forbid();
             }
             else

@@ -199,6 +199,89 @@ namespace Idara.API.Controllers
             });
         }
 
+        /// <summary>
+        /// Récapitulatif du suivi quotidien Coran pour le parent : UNIQUEMENT les
+        /// cycles de 22 jours TERMINÉS (le parent ne voit pas le suivi en cours
+        /// ni les évaluations qualité — décision produit). Du plus récent au plus
+        /// ancien.
+        /// </summary>
+        [HttpGet("students/{studentId}/coran-cycles")]
+        public async Task<IActionResult> GetChildCoranCycles(int studentId)
+        {
+            if (!await IsLinked(studentId)) return Forbid();
+
+            var cycles = await _context.CoranCycles
+                .Where(c => c.StudentId == studentId && c.IsComplete)
+                .OrderByDescending(c => c.Number)
+                .Select(c => new CoranCycleDto
+                {
+                    Id = c.Id,
+                    StudentId = c.StudentId,
+                    Number = c.Number,
+                    StartDate = c.StartDate,
+                    CompletedDate = c.CompletedDate,
+                    IsComplete = c.IsComplete,
+                    DayCount = c.Records.Count
+                })
+                .ToListAsync();
+            return Ok(cycles);
+        }
+
+        /// <summary>Détail d'un cycle TERMINÉ (les 22 jours) pour le parent.</summary>
+        [HttpGet("students/{studentId}/coran-cycles/{cycleId}")]
+        public async Task<IActionResult> GetChildCoranCycleDetail(int studentId, int cycleId)
+        {
+            if (!await IsLinked(studentId)) return Forbid();
+
+            var cycle = await _context.CoranCycles
+                .FirstOrDefaultAsync(c => c.Id == cycleId && c.StudentId == studentId && c.IsComplete);
+            if (cycle == null) return NotFound();
+
+            var records = await _context.CoranDailyRecords
+                .Include(r => r.Portions)
+                .Where(r => r.CycleId == cycleId)
+                .OrderBy(r => r.Date)
+                .ToListAsync();
+
+            var dto = new CoranCycleDetailDto
+            {
+                Cycle = new CoranCycleDto
+                {
+                    Id = cycle.Id,
+                    StudentId = cycle.StudentId,
+                    Number = cycle.Number,
+                    StartDate = cycle.StartDate,
+                    CompletedDate = cycle.CompletedDate,
+                    IsComplete = cycle.IsComplete,
+                    DayCount = records.Count
+                },
+                Records = records.Select((r, i) => new CoranDailyRecordDto
+                {
+                    Id = r.Id,
+                    StudentId = r.StudentId,
+                    CycleId = r.CycleId,
+                    CycleNumber = cycle.Number,
+                    DayIndex = i + 1,
+                    Date = r.Date,
+                    Remarks = r.Remarks,
+                    Portions = r.Portions.OrderBy(p => p.Kind).Select(p => new CoranDailyPortionDto
+                    {
+                        Kind = p.Kind,
+                        FromSurah = p.FromSurah,
+                        FromAyah = p.FromAyah,
+                        FromWordIndex = p.FromWordIndex,
+                        FromWordText = p.FromWordText,
+                        ToSurah = p.ToSurah,
+                        ToAyah = p.ToAyah,
+                        ToWordIndex = p.ToWordIndex,
+                        ToWordText = p.ToWordText,
+                        Status = p.Status
+                    }).ToList()
+                }).ToList()
+            };
+            return Ok(dto);
+        }
+
         [HttpGet("students/{studentId}/journal")]
         public async Task<IActionResult> GetChildJournal(int studentId, [FromQuery] DateTime? from, [FromQuery] DateTime? to)
         {

@@ -63,6 +63,32 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : {prenom}, {ecole} a regenere votre code d'acces. Connectez-vous sur idara.sn avec votre numero {phone} et le nouveau code {code}. Vous pourrez le changer dans l'app.",
             Ar: $"Idara: {prenom}، أعادت {ecole} إنشاء رمز دخولك. سجّل الدخول على idara.sn برقمك {phone} والرمز الجديد {code}. يمكنك تغييره لاحقا في التطبيق.");
 
+        // ===== Message d'identifiants PARTAGÉ MANUELLEMENT (WhatsApp/SMS/Copier) =====
+        // Volontairement court et EN FRANÇAIS UNIQUEMENT : c'est le texte que
+        // l'école copie-colle à ses parents/enseignants (modal récap, §94). Les
+        // retours terrain ont jugé l'ancien message bilingue trop chargé. Le SMS
+        // automatique (dormant) garde, lui, le template bilingue InviteWelcome.
+        // Le numéro est affiché « sans indicatif » (forme locale, plus familière —
+        // le login accepte de toute façon les deux formes).
+        public static string CredentialShare(string fullName, string phone, string code)
+        {
+            var local = LocalPhone(phone);
+            var nom = string.IsNullOrWhiteSpace(fullName) ? "" : " " + fullName.Trim();
+            return $"Salam{nom}, voici vos identifiants pour vous connecter à l'application Idara :\n\n"
+                 + $"Numéro de téléphone : {local}\n"
+                 + $"Code : {code}";
+        }
+
+        /// <summary>Retire l'indicatif +221 / 221 d'un numéro E.164 pour un
+        /// affichage local (771234567). Renvoie l'entrée telle quelle sinon.</summary>
+        private static string LocalPhone(string phone)
+        {
+            var p = (phone ?? "").Trim();
+            if (p.StartsWith("+221")) return p.Substring(4);
+            if (p.StartsWith("221") && p.Length > 9) return p.Substring(3);
+            return p;
+        }
+
         // ===== Code OTP (activation / réinitialisation par SMS) =====
         public static BilingualMessage OtpCode(string code) => new(
             Fr: $"Idara : votre code est {code}. Il expire dans 10 minutes. Ne le partagez avec personne.",
@@ -109,5 +135,10 @@ namespace Idara.API.Services.Notifications
         public static BilingualMessage ChildAbsent(string eleve) => new(
             Fr: $"Idara : {eleve} a ete marque(e) absent(e) aujourd'hui.",
             Ar: $"Idara: تم تسجيل غياب {eleve} اليوم.");
+
+        // Fin d'un cycle de 22 jours de suivi Coran : le récapitulatif est dispo.
+        public static BilingualMessage ChildCoranCycleReady(string eleve) => new(
+            Fr: $"Idara : le suivi Coran de {eleve} (cycle termine) est disponible dans l'application.",
+            Ar: $"Idara: متابعة القرآن لـ {eleve} (انتهت الدورة) متاحة في التطبيق.");
     }
 }

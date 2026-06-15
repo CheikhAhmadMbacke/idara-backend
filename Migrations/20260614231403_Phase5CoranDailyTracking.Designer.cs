@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260614231403_Phase5CoranDailyTracking")]
+    partial class Phase5CoranDailyTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -385,116 +388,6 @@ namespace Idara.API.Migrations
                         .IsUnique();
 
                     b.ToTable("CoranDailyRecords");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.CoranEvaluation", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Comment")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("Date")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("EvaluatorId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("FromAyah")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("FromSurah")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("FromWordIndex")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("FromWordText")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("HizbNumber")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("MemorizationScore")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("RecitationScore")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("SchoolId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("StudentId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("TajwidScore")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("ToAyah")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("ToSurah")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("ToWordIndex")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ToWordText")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EvaluatorId");
-
-                    b.HasIndex("StudentId", "Date");
-
-                    b.ToTable("CoranEvaluations");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.CoranEvaluationIncident", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int?>("Ayah")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Detail")
-                        .HasColumnType("text");
-
-                    b.Property<int>("EvaluationId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("FaultType")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Kind")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("Surah")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("WordIndex")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("WordText")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EvaluationId");
-
-                    b.ToTable("CoranEvaluationIncidents");
                 });
 
             modelBuilder.Entity("Idara.API.Models.CoranProgress", b =>
@@ -2346,35 +2239,6 @@ namespace Idara.API.Migrations
                     b.Navigation("Student");
                 });
 
-            modelBuilder.Entity("Idara.API.Models.CoranEvaluation", b =>
-                {
-                    b.HasOne("Idara.API.Models.User", "Evaluator")
-                        .WithMany()
-                        .HasForeignKey("EvaluatorId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Idara.API.Models.Student", "Student")
-                        .WithMany()
-                        .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Evaluator");
-
-                    b.Navigation("Student");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.CoranEvaluationIncident", b =>
-                {
-                    b.HasOne("Idara.API.Models.CoranEvaluation", "Evaluation")
-                        .WithMany("Incidents")
-                        .HasForeignKey("EvaluationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Evaluation");
-                });
-
             modelBuilder.Entity("Idara.API.Models.CoranProgress", b =>
                 {
                     b.HasOne("Idara.API.Models.Student", "Student")
@@ -2801,11 +2665,6 @@ namespace Idara.API.Migrations
             modelBuilder.Entity("Idara.API.Models.CoranDailyRecord", b =>
                 {
                     b.Navigation("Portions");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.CoranEvaluation", b =>
-                {
-                    b.Navigation("Incidents");
                 });
 
             modelBuilder.Entity("Idara.API.Models.ReportCard", b =>

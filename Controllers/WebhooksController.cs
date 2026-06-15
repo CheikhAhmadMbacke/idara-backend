@@ -244,7 +244,10 @@ namespace Idara.API.Controllers
             // QuestPDF...) ne doit PAS rollback le crédit wallet ni faire
             // remonter en erreur le webhook. Le PDF peut toujours être
             // regénéré à la demande via GET /api/payments/{id}/receipt.
-            if (completedPayment != null && completedPayment.Status == PaymentStatus.Completed)
+            // Garde processingError==null : si le COMMIT métier a échoué (rollback),
+            // l'objet en mémoire garde Status=Completed alors que rien n'est en base
+            // → ne RIEN notifier/générer (sinon fausse confirmation de paiement).
+            if (processingError == null && completedPayment != null && completedPayment.Status == PaymentStatus.Completed)
             {
                 try
                 {
@@ -277,7 +280,8 @@ namespace Idara.API.Controllers
             // Bloc séparé du PDF : un échec PDF ne doit pas priver le parent du
             // SMS, et inversement. NotificationService ne lève jamais, mais on
             // enveloppe quand même par principe (lecture DB du guardian/élève).
-            if (completedPayment != null
+            if (processingError == null
+                && completedPayment != null
                 && completedPayment.Status == PaymentStatus.Completed
                 && completedPayment.GuardianId.HasValue)
             {
@@ -323,7 +327,8 @@ namespace Idara.API.Controllers
             // -------- 9) Push « paiement reçu » à l'ÉCOLE (admin + personnel) --------
             // Push uniquement (pas de SMS : l'école recevrait trop de SMS payants).
             // Clic → page solde/wallet. Idempotent via le webhook (1 traitement/payment).
-            if (completedPayment != null
+            if (processingError == null
+                && completedPayment != null
                 && completedPayment.Status == PaymentStatus.Completed
                 && completedPayment.SchoolId > 0)
             {
@@ -343,10 +348,12 @@ namespace Idara.API.Controllers
                         var shownAmount = completedPayment.TargetAmountFcfa > 0
                             ? completedPayment.TargetAmountFcfa
                             : completedPayment.AmountFcfa;
-                        // Topup wallet école (FeesPayer=School, sans élève) → message
+                        // Topup wallet école (ni élève ni parent rattaché) → message
                         // « recharge » au lieu de « paiement pour un élève ».
-                        var isTopup = completedPayment.FeesPayer == FeesPayer.School
-                                      && completedPayment.StudentId == null;
+                        // Détection indépendante de FeesPayer (le topup est passé en
+                        // FeesPayer=Parent pour appliquer la majoration +8 %).
+                        var isTopup = completedPayment.StudentId == null
+                                      && completedPayment.GuardianId == null;
                         var msg = isTopup
                             ? NotificationTemplates.WalletTopupReceived(shownAmount)
                             : NotificationTemplates.PaymentReceivedSchool(
@@ -379,7 +386,8 @@ namespace Idara.API.Controllers
             // (DbContext frais) → n'interfère pas avec le change tracker du webhook.
             // Sous verrou wallet + idempotent (no-op si l'abo n'est pas en impayé).
             // Ne lève jamais (un échec ici ne doit pas faire échouer le webhook).
-            if (completedPayment != null
+            if (processingError == null
+                && completedPayment != null
                 && completedPayment.Status == PaymentStatus.Completed
                 && completedPayment.SchoolId > 0)
             {
@@ -708,9 +716,23 @@ namespace Idara.API.Controllers
             _context.WalletTransactions.Add(txEntry);
 
             // Si une Invoice est rattachée (mode FixedAmount), on met à jour son
-            // AmountPaidFcfa et son statut. On crédite l'invoice avec le montant
-            // CIBLE (cohérent avec le wallet en mode Parent), sinon elle resterait
-            // éternellement "presque payée" avec quelques FCFA fantômes.
+            // AmountPaidFcfa et son statut. On crédite TOUJOURS l'invoice avec le
+            // montant CIBLE (la dette de la FAMILLE), dans LES DEUX modes FeesPayer :
+            //
+            //  • FeesPayer=Parent : le parent paie target×1,08, la famille doit
+            //    target → invoice créditée target → soldée. Wallet aussi = target.
+            //
+            //  • FeesPayer=School : le parent paie EXACTEMENT target (pas de +8 %),
+            //    donc la famille a payé sa dette en entier → invoice créditée target
+            //    → soldée. Le wallet, lui, reçoit le NET (l'école absorbe les frais,
+            //    par choix). C'est de la compta brut(facture)/net(caisse) NORMALE,
+            //    PAS une incohérence : la facture suit ce que la famille a payé,
+            //    le wallet suit le cash net encaissé.
+            //
+            //  ⚠️ NE JAMAIS créditer l'invoice du net : en mode School elle
+            //  resterait sous son dû (ex 4730/5000) → facture ZOMBIE jamais soldée
+            //  alors que le parent a tout payé. Le crédit invoice = CIBLE, point.
+            //  (Fallback netAmount uniquement pour d'anciens Payments sans cible.)
             if (payment.InvoiceId is int invoiceId)
             {
                 var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == invoiceId);

@@ -129,6 +129,7 @@ namespace Idara.API.Controllers
             school.RepresentativeFirstName = string.IsNullOrWhiteSpace(dto.RepresentativeFirstName) ? null : dto.RepresentativeFirstName.Trim();
             school.RepresentativeLastName = string.IsNullOrWhiteSpace(dto.RepresentativeLastName) ? null : dto.RepresentativeLastName.Trim();
             school.RepresentativePhone = string.IsNullOrWhiteSpace(dto.RepresentativePhone) ? null : dto.RepresentativePhone.Trim();
+            if (dto.QuranRiwaya.HasValue) school.QuranRiwaya = dto.QuranRiwaya.Value;
         }
 
         /// <summary>
@@ -177,6 +178,11 @@ namespace Idara.API.Controllers
             await _context.ClassFees.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.SchoolWallets.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.SchoolPaymentSettings.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.PayoutAlerts.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Abonnement plateforme (factures → abo → deals custom de l'école).
+            await _context.SubscriptionInvoices.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.Subscriptions.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.SubscriptionPlans.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct); // plans custom (SchoolId non-null)
 
             // 2) Pédagogie (enfants d'abord)
             await _context.ReportCardLines.Where(l => l.ReportCard.SchoolId == id).ExecuteDeleteAsync(ct);
@@ -186,6 +192,13 @@ namespace Idara.API.Controllers
             await _context.DailyJournalEntries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.CoranSessions.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.CoranProgresses.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Suivi quotidien + évaluation Coran (enfants d'abord).
+            await _context.CoranEvaluationIncidents.Where(x => x.Evaluation.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.CoranEvaluations.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.CoranDailyPortions.Where(x => x.DailyRecord.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.CoranDailyRecords.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.CoranCycles.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.StaffAttendances.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.TimetableSlots.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.ClassSubjectTeachers.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.StudentDocuments.Where(d => d.Student.SchoolId == id).ExecuteDeleteAsync(ct);
@@ -198,7 +211,14 @@ namespace Idara.API.Controllers
             await _context.Subjects.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.Classes.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
 
-            // 4) Utilisateurs : sessions + tokens push puis comptes
+            // 4) Utilisateurs : logs de notif (audit) + sessions + tokens push puis comptes.
+            // NotificationLogs n'a pas de FK → nettoyage explicite (avant de perdre
+            // les UserId), pour ne pas laisser d'orphelins d'une école supprimée.
+            await _context.NotificationLogs
+                .Where(n => n.UserId != null
+                            && (_context.Users.Any(u => u.Id == n.UserId && u.SchoolId == id)
+                                || guardianIds.Contains(n.UserId.Value)))
+                .ExecuteDeleteAsync(ct);
             await _context.RefreshTokens.Where(t => t.User!.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.PushDeviceTokens.Where(t => t.User.SchoolId == id).ExecuteDeleteAsync(ct);
             if (guardianIds.Count > 0)
@@ -318,13 +338,15 @@ namespace Idara.API.Controllers
                     Email = u.Email,
                     Role = u.Role,
                     AccountStatus = u.AccountStatus,
-                    PhoneNumber = u.PhoneNumber
+                    PhoneNumber = u.PhoneNumber,
+                    CreatedAt = u.CreatedAt,
+                    LastLoginAt = u.LastLoginAt
                 })
                 .ToListAsync(ct);
 
             // Parents liés via leurs enfants de cette école.
             var guardianLinks = await _context.StudentGuardians
-                .Where(sg => sg.Student.SchoolId == schoolId && !sg.Guardian.IsDeleted)
+                .Where(sg => sg.Student.SchoolId == schoolId && !sg.Guardian.IsDeleted && !sg.Student.IsDeleted)
                 .Select(sg => new
                 {
                     sg.GuardianId,
@@ -332,6 +354,8 @@ namespace Idara.API.Controllers
                     sg.Guardian.Email,
                     sg.Guardian.AccountStatus,
                     sg.Guardian.PhoneNumber,
+                    sg.Guardian.CreatedAt,
+                    sg.Guardian.LastLoginAt,
                     sg.StudentId,
                     StudentName = (sg.Student.FirstName ?? "") + " " + (sg.Student.LastName ?? ""),
                     sg.Relationship
@@ -351,6 +375,8 @@ namespace Idara.API.Controllers
                         Role = UserRoles.Guardian,
                         AccountStatus = first.AccountStatus,
                         PhoneNumber = first.PhoneNumber,
+                        CreatedAt = first.CreatedAt,
+                        LastLoginAt = first.LastLoginAt,
                         Children = grp.Select(x => new SchoolUserChildDto
                         {
                             StudentId = x.StudentId,
@@ -489,11 +515,15 @@ namespace Idara.API.Controllers
             RepresentativePhone = school.RepresentativePhone ?? string.Empty,
             RepresentativeIdDocumentUrls = school.RepresentativeIdDocumentUrl?
                 .Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
+            QuranRiwaya = school.QuranRiwaya,
             Users = school.Users.Where(u => !u.IsDeleted).Select(u => new UserInfoDto
             {
                 Id = u.Id,
                 Email = u.Email,
                 FullName = u.FullName,
+                FirstName = u.FirstName,
+                LastName = u.LastName,
+                PhoneNumber = u.PhoneNumber,
                 Role = u.Role,
                 AccountStatus = u.AccountStatus,
                 CreatedAt = u.CreatedAt,

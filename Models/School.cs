@@ -19,6 +19,11 @@ namespace Idara.API.Models
         public DateTime? ValidatedAt { get; set; }
         public int? ValidatedBy { get; set; }
         public DateTime CreatedAt { get; set; }
+
+        /// <summary>Lecture (riwâya) du Coran utilisée par l'école pour
+        /// l'autocomplétion du texte. Warsh par défaut.</summary>
+        public QuranRiwaya QuranRiwaya { get; set; } = QuranRiwaya.Warsh;
+
         public ICollection<User> Users { get; set; } = new List<User>();
     }
 }

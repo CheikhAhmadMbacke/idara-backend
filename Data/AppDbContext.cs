@@ -24,6 +24,11 @@ namespace Idara.API.Data
         public DbSet<Grade> Grades { get; set; }
         public DbSet<CoranProgress> CoranProgresses { get; set; }
         public DbSet<CoranSession> CoranSessions { get; set; }
+        public DbSet<CoranCycle> CoranCycles { get; set; }
+        public DbSet<CoranDailyRecord> CoranDailyRecords { get; set; }
+        public DbSet<CoranDailyPortion> CoranDailyPortions { get; set; }
+        public DbSet<CoranEvaluation> CoranEvaluations { get; set; }
+        public DbSet<CoranEvaluationIncident> CoranEvaluationIncidents { get; set; }
         public DbSet<TimetableSlot> TimetableSlots { get; set; }
         public DbSet<ReportCard> ReportCards { get; set; }
         public DbSet<ReportCardLine> ReportCardLines { get; set; }
@@ -323,6 +328,73 @@ namespace Idara.API.Data
 
             modelBuilder.Entity<CoranSession>()
                 .HasIndex(s => new { s.StudentId, s.Date });
+
+            // --- Suivi quotidien Coran (cycles 22 jours) ---
+            modelBuilder.Entity<CoranCycle>()
+                .HasOne(c => c.Student)
+                .WithMany()
+                .HasForeignKey(c => c.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<CoranCycle>()
+                .HasIndex(c => new { c.StudentId, c.Number })
+                .IsUnique();
+
+            // Au plus UN cycle ouvert par élève à la fois.
+            modelBuilder.Entity<CoranCycle>()
+                .HasIndex(c => c.StudentId)
+                .IsUnique()
+                .HasFilter("\"IsComplete\" = FALSE");
+
+            modelBuilder.Entity<CoranDailyRecord>()
+                .HasOne(r => r.Cycle)
+                .WithMany(c => c.Records)
+                .HasForeignKey(r => r.CycleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<CoranDailyRecord>()
+                .HasOne(r => r.Student)
+                .WithMany()
+                .HasForeignKey(r => r.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Une seule ligne par élève par jour (ré-enregistrer = upsert).
+            modelBuilder.Entity<CoranDailyRecord>()
+                .HasIndex(r => new { r.StudentId, r.Date })
+                .IsUnique();
+
+            modelBuilder.Entity<CoranDailyPortion>()
+                .HasOne(p => p.DailyRecord)
+                .WithMany(r => r.Portions)
+                .HasForeignKey(p => p.DailyRecordId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Une portion par type (nouvelle leçon / révision récente / ancienne) par jour.
+            modelBuilder.Entity<CoranDailyPortion>()
+                .HasIndex(p => new { p.DailyRecordId, p.Kind })
+                .IsUnique();
+
+            // --- Évaluation qualité (par hizb, administration) ---
+            modelBuilder.Entity<CoranEvaluation>()
+                .HasOne(e => e.Student)
+                .WithMany()
+                .HasForeignKey(e => e.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<CoranEvaluation>()
+                .HasOne(e => e.Evaluator)
+                .WithMany()
+                .HasForeignKey(e => e.EvaluatorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<CoranEvaluation>()
+                .HasIndex(e => new { e.StudentId, e.Date });
+
+            modelBuilder.Entity<CoranEvaluationIncident>()
+                .HasOne(i => i.Evaluation)
+                .WithMany(e => e.Incidents)
+                .HasForeignKey(i => i.EvaluationId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<TimetableSlot>()
                 .HasOne(t => t.Class)

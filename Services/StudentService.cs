@@ -656,7 +656,10 @@ namespace Idara.API.Services
             var platform = await _context.GetPlatformSettingsAsync();
             var welcome = NotificationTemplates.InviteWelcome(
                 dto.FirstName, schoolName, "Responsable", "ولي الأمر", phone, code);
-            var messageText = welcome.Compose(platform.SmsBilingual, adminLanguage);
+            // Message PARTAGÉ manuellement (modal récap) = FR simple ; le SMS auto
+            // garde le template bilingue `welcome`.
+            var messageText = NotificationTemplates.CredentialShare(
+                $"{dto.FirstName} {dto.LastName}".Trim(), phone, code);
 
             var credential = new DTOs.Common.UserCredentialDto
             {

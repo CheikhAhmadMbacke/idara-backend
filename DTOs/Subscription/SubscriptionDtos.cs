@@ -142,8 +142,9 @@ namespace Idara.API.DTOs.Subscription
     {
         public int PaymentId { get; set; }
         public PaymentStatus Status { get; set; }
-        public long AmountFcfa { get; set; }
-        public long NetCreditedFcfa { get; set; }
+        public long AmountFcfa { get; set; }       // débité du payeur (target × 1,08)
+        public long NetCreditedFcfa { get; set; }  // net SenePay (interne)
+        public long CreditedFcfa { get; set; }     // réellement ajouté au wallet (= target)
         public string? FailureReason { get; set; }
     }
 

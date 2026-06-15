@@ -157,7 +157,10 @@ namespace Idara.API.Services
             // désactivé (on garde le dernier prix snapshoté). Le garde-fou palier
             // ci-dessous peut ensuite remonter à un plan supérieur si l'effectif
             // dépasse le plafond.
-            if (dueNow && sub.PlanId.HasValue)
+            // Inclut les écoles EN IMPAYÉ (inArrears) : leur prochain prélèvement
+            // EST ce rattrapage, donc une hausse de prix décidée entre-temps doit
+            // s'y appliquer aussi (sinon la hausse ne les atteint jamais).
+            if ((dueNow || inArrears) && sub.PlanId.HasValue)
             {
                 var planForSnapshot = await _db.SubscriptionPlans
                     .FirstOrDefaultAsync(p => p.Id == sub.PlanId.Value, ct);
