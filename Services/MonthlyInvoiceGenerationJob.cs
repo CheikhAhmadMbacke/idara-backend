@@ -104,14 +104,26 @@ namespace Idara.API.Services
             var bilingual = platform.SmsBilingual;
             var periodeLabel = FrenchMonthYear(new DateTime(today.Year, today.Month, 1));
 
-            // 1) Écoles éligibles : FixedAmount + Monthly + MonthlyDueDay == today.Day.
-            //    On filtre côté SQL pour ne charger que ce qu'on traite.
-            var eligibleSettings = await db.SchoolPaymentSettings
+            // 1) Écoles éligibles : FixedAmount + Monthly.
+            //    - Run quotidien réel (forceDay == null) : AUTO-RATTRAPAGE →
+            //      MonthlyDueDay <= jour courant. Le jour de l'échéance OU tout
+            //      jour suivant du mois, on (re)tente la génération si elle n'a
+            //      pas encore eu lieu. Couvre : changement du jour d'échéance en
+            //      cours de mois (cas du frère), élève ajouté après coup, tick
+            //      raté. Garde anti-recharge : en rattrapage, on saute tout élève
+            //      ayant DÉJÀ une facture pour la période (même ANNULÉE) — cf.
+            //      paramètre skipStudentsWithPeriodInvoice de GenerateForSchoolAsync.
+            //    - forceDay (SuperAdmin) : jour EXACT (ciblage / rejeu), et la
+            //      régénération d'une facture annulée reste possible (§67).
+            var catchUp = !forceDay.HasValue;
+            var settingsQuery = db.SchoolPaymentSettings
                 .Where(s =>
                     s.BillingMode == BillingMode.FixedAmount &&
-                    s.BillingPeriod == BillingPeriod.Monthly &&
-                    s.MonthlyDueDay == dayOfMonth)
-                .ToListAsync(ct);
+                    s.BillingPeriod == BillingPeriod.Monthly);
+            settingsQuery = catchUp
+                ? settingsQuery.Where(s => s.MonthlyDueDay <= dayOfMonth)
+                : settingsQuery.Where(s => s.MonthlyDueDay == dayOfMonth);
+            var eligibleSettings = await settingsQuery.ToListAsync(ct);
 
             if (eligibleSettings.Count == 0)
             {
@@ -138,7 +150,8 @@ namespace Idara.API.Services
                 {
                     var perSchool = await GenerateForSchoolAsync(
                         db, settings.SchoolId, settings.GeneralMonthlyFeeFcfa,
-                        periodStart, periodEnd, dueDate, today, notif, bilingual, periodeLabel, ct);
+                        periodStart, periodEnd, dueDate, today, notif, bilingual,
+                        periodeLabel, skipStudentsWithPeriodInvoice: catchUp, ct);
                     report.SchoolsProcessed++;
                     report.InvoicesCreated += perSchool.Created;
                     report.InvoicesSkipped += perSchool.Skipped;
@@ -216,9 +229,13 @@ namespace Idara.API.Services
                 "[invoice-ondemand] SchoolId={SchoolId} génération à la demande pour {Period:yyyy-MM} (échéance {Due:yyyy-MM-dd})",
                 schoolId, periodStart, dueDate);
 
+            // À la demande : on n'impose PAS le saut des élèves déjà facturés
+            // (skip=false) → l'unicité (élève, période) hors-annulées suffit, ce
+            // qui autorise la régénération explicite d'une facture annulée (§67).
             var stats = await GenerateForSchoolAsync(
                 db, schoolId, settings.GeneralMonthlyFeeFcfa,
-                periodStart, periodEnd, dueDate, today, notif, bilingual, periodeLabel, ct);
+                periodStart, periodEnd, dueDate, today, notif, bilingual,
+                periodeLabel, skipStudentsWithPeriodInvoice: false, ct);
 
             report.SchoolsProcessed = 1;
             report.InvoicesCreated = stats.Created;
@@ -239,6 +256,7 @@ namespace Idara.API.Services
             INotificationService notif,
             bool bilingual,
             string periodeLabel,
+            bool skipStudentsWithPeriodInvoice,
             CancellationToken ct)
         {
             var stats = new PerSchoolStats();
@@ -250,6 +268,20 @@ namespace Idara.API.Services
                 .ToListAsync(ct);
 
             if (students.Count == 0) return stats;
+
+            // Mode rattrapage : on saute tout élève ayant DÉJÀ une facture pour
+            // la période (TOUT statut, ANNULÉE comprise) → jamais de recréation
+            // d'une facture annulée volontairement, jamais de double facturation.
+            // Garantit AU PLUS une tentative de génération par élève et par mois.
+            HashSet<int> alreadyInvoiced = new();
+            if (skipStudentsWithPeriodInvoice)
+            {
+                alreadyInvoiced = (await db.Invoices
+                    .Where(i => i.SchoolId == schoolId && i.PeriodStart == periodStart)
+                    .Select(i => i.StudentId)
+                    .Distinct()
+                    .ToListAsync(ct)).ToHashSet();
+            }
 
             // 3) Tous les overrides étudiants de cette école en une requête.
             var studentIds = students.Select(s => s.Id).ToList();
@@ -314,6 +346,13 @@ namespace Idara.API.Services
             //    veut catch l'unique violation par élève sans casser le batch.
             foreach (var s in students)
             {
+                // Rattrapage : élève déjà facturé ce mois (même annulé) → on saute.
+                if (alreadyInvoiced.Contains(s.Id))
+                {
+                    stats.AlreadyExisting++;
+                    continue;
+                }
+
                 // Hiérarchie : override élève > tarif classe > tarif général école.
                 long? amount = null;
                 if (overrides.TryGetValue(s.Id, out var ov))
