@@ -165,6 +165,69 @@ namespace Idara.API.Services
             return report;
         }
 
+        /// <summary>
+        /// Génération À LA DEMANDE pour UNE école, sur un mois donné,
+        /// INDÉPENDAMMENT du <c>MonthlyDueDay</c> (contrairement au cron
+        /// quotidien). Permet à une école de générer ses factures quand elle
+        /// veut, sans attendre l'échéance NI le SuperAdmin. Idempotent (les
+        /// élèves déjà facturés pour la période sont sautés via l'UNIQUE filtré).
+        /// </summary>
+        public async Task<InvoiceGenerationReport> GenerateForSchoolNowAsync(
+            int schoolId, int year, int month, DateTime nowUtc, CancellationToken ct)
+        {
+            var report = new InvoiceGenerationReport { RunAtUtc = nowUtc, DayOfMonth = nowUtc.Day };
+
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var notif = scope.ServiceProvider.GetRequiredService<INotificationService>();
+
+            var settings = await db.SchoolPaymentSettings
+                .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
+            if (settings == null)
+            {
+                _logger.LogWarning(
+                    "[invoice-ondemand] SchoolId={SchoolId} sans SchoolPaymentSettings — rien à générer", schoolId);
+                return report;
+            }
+            if (settings.BillingMode != BillingMode.FixedAmount)
+            {
+                // Seul le mode FixedAmount produit des factures mensuelles.
+                _logger.LogInformation(
+                    "[invoice-ondemand] SchoolId={SchoolId} pas en FixedAmount — rien à générer", schoolId);
+                return report;
+            }
+
+            var today = nowUtc.Date;
+            var platform = await db.GetPlatformSettingsAsync(ct);
+            var bilingual = platform.SmsBilingual;
+
+            var periodStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
+            var periodEnd = periodStart.AddMonths(1).AddDays(-1);
+            // Échéance = jour configuré, borné au dernier jour du mois, et jamais
+            // AVANT aujourd'hui (une facture générée à la demande ne naît pas
+            // « en retard » si l'échéance du mois est déjà passée).
+            var daysInMonth = DateTime.DaysInMonth(year, month);
+            var dueDay = Math.Min(Math.Max(settings.MonthlyDueDay, 1), daysInMonth);
+            var dueDate = new DateTime(year, month, dueDay, 0, 0, 0, DateTimeKind.Utc);
+            if (dueDate < today) dueDate = today;
+            var periodeLabel = FrenchMonthYear(periodStart);
+
+            _logger.LogInformation(
+                "[invoice-ondemand] SchoolId={SchoolId} génération à la demande pour {Period:yyyy-MM} (échéance {Due:yyyy-MM-dd})",
+                schoolId, periodStart, dueDate);
+
+            var stats = await GenerateForSchoolAsync(
+                db, schoolId, settings.GeneralMonthlyFeeFcfa,
+                periodStart, periodEnd, dueDate, today, notif, bilingual, periodeLabel, ct);
+
+            report.SchoolsProcessed = 1;
+            report.InvoicesCreated = stats.Created;
+            report.InvoicesAlreadyExisting = stats.AlreadyExisting;
+            report.InvoicesSkipped = stats.Skipped;
+            report.StudentsWithoutFee = stats.WithoutFee;
+            return report;
+        }
+
         private async Task<PerSchoolStats> GenerateForSchoolAsync(
             AppDbContext db,
             int schoolId,

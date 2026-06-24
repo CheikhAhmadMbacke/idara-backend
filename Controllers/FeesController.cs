@@ -761,6 +761,50 @@ namespace Idara.API.Controllers
             return Ok(report);
         }
 
+        /// <summary>
+        /// `POST /api/fees/invoices/generate` — génère les factures du mois À LA
+        /// DEMANDE pour SON école (SchoolAdmin), **sans attendre le jour
+        /// d'échéance ni l'intervention du SuperAdmin**. Idempotent : un élève
+        /// déjà facturé pour la période n'est pas re-facturé. Par défaut le mois
+        /// courant ; <c>?year=&amp;month=</c> pour un autre mois (ex. générer le
+        /// mois prochain pour un test). Réservé au mode FixedAmount.
+        /// </summary>
+        [HttpPost("invoices/generate")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<InvoiceGenerationReport>>> GenerateMyInvoices(
+            [FromQuery] int? year, [FromQuery] int? month, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var now = DateTime.UtcNow;
+            var y = year ?? now.Year;
+            var m = month ?? now.Month;
+            if (m < 1 || m > 12 || y < 2020 || y > now.Year + 1)
+            {
+                return BadRequest(ApiResponse<InvoiceGenerationReport>.Fail(
+                    "Mois ou année invalide."));
+            }
+
+            _logger.LogInformation(
+                "[fees] Génération factures à la demande par École {SchoolId} (user {UserId}) pour {Year}-{Month:D2}",
+                schoolId, User.GetUserId(), y, m);
+
+            var report = await _invoiceJob.GenerateForSchoolNowAsync(schoolId.Value, y, m, now, ct);
+
+            string msg;
+            if (report.InvoicesCreated > 0)
+                msg = $"{report.InvoicesCreated} facture(s) générée(s).";
+            else if (report.StudentsWithoutFee > 0 && report.InvoicesAlreadyExisting == 0)
+                msg = "Aucune facture : aucun tarif configuré pour ces élèves. Définissez un tarif (général, par classe, ou par élève).";
+            else if (report.InvoicesAlreadyExisting > 0)
+                msg = "Les factures de ce mois existent déjà (aucune nouvelle créée).";
+            else
+                msg = "Aucune facture générée (aucun élève éligible).";
+
+            return Ok(ApiResponse<InvoiceGenerationReport>.Ok(report, msg));
+        }
+
         // ========================================================
         // ===== Helpers =====
         // ========================================================
