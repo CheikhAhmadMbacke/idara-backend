@@ -232,8 +232,15 @@ namespace Idara.API.Services
                     .Select(g => new
                     {
                         ClassId = g.Key,
-                        // ORDER BY EffectiveFrom DESC LIMIT 1 équivalent
-                        Amount = g.OrderByDescending(f => f.EffectiveFrom).First().AmountFcfa
+                        // ORDER BY EffectiveFrom DESC, Id DESC LIMIT 1 équivalent.
+                        // Le ThenByDescending(Id) départage les tarifs de même
+                        // date (plusieurs saisies le même jour) de façon
+                        // déterministe : la dernière saisie gagne. Sans lui,
+                        // l'ordre était indéfini → un tarif erroné saisi le même
+                        // jour pouvait être choisi (bug du 200 FCFA, 2026-06-24).
+                        Amount = g.OrderByDescending(f => f.EffectiveFrom)
+                                  .ThenByDescending(f => f.Id)
+                                  .First().AmountFcfa
                     })
                     .ToListAsync(ct);
                 classFeeByClassId = feesQuery.ToDictionary(x => x.ClassId, x => x.Amount);

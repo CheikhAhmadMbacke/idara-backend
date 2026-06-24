@@ -156,7 +156,12 @@ namespace Idara.API.Controllers
                 .Select(g => new
                 {
                     ClassId = g.Key,
-                    Top = g.OrderByDescending(f => f.EffectiveFrom).First()
+                    // ThenByDescending(Id) : départage les tarifs de même date
+                    // de façon déterministe (la dernière saisie gagne) — cohérent
+                    // avec MonthlyInvoiceGenerationJob (cf. bug du 200 FCFA).
+                    Top = g.OrderByDescending(f => f.EffectiveFrom)
+                           .ThenByDescending(f => f.Id)
+                           .First()
                 })
                 .ToDictionaryAsync(x => x.ClassId, x => x.Top, ct);
 
@@ -195,6 +200,7 @@ namespace Idara.API.Controllers
             var history = await _context.ClassFees
                 .Where(f => f.ClassId == classId)
                 .OrderByDescending(f => f.EffectiveFrom)
+                .ThenByDescending(f => f.Id)
                 .Select(f => new ClassFeeDto
                 {
                     Id = f.Id,
