@@ -111,6 +111,10 @@ builder.Services.AddMemoryCache();
 // Source unique des transitions de solde wallet liées aux payouts (verrou
 // pessimiste, idempotence, webhook correcteur anti double dépense).
 builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
+// Source unique des règlements payin (transition statut + crédit wallet/invoice),
+// partagée par le webhook ET le PayinVerificationJob (verrou pessimiste + garde
+// Status==Pending → idempotent, jamais de double crédit ni de perte).
+builder.Services.AddScoped<IPayinSettlementService, PayinSettlementService>();
 builder.Services.AddScoped<DbInitializer>();
 
 // ---------- Cron / background jobs ----------
@@ -135,6 +139,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutVerification
 // Σ(wallets) + backstop de re-poll. Dépend du PayoutVerificationJob (singleton).
 builder.Services.AddSingleton<PayoutReconciliationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliationJob>());
+
+// Vérifie en continu (~3min) les payins restés Pending via GET /{token}/status
+// autoritatif : résout les paiements abandonnés (parent revenu sans confirmer)
+// ET récupère un webhook manqué (Completed). Ne marque terminal QUE sur statut
+// SenePay explicite — jamais sur l'horloge/une erreur réseau (anti-perte).
+builder.Services.AddSingleton<PayinVerificationJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PayinVerificationJob>());
 
 // Facturation des abonnements plateforme (Phase 4) : moteur scoped (réutilisé
 // par le cron ET le retry post-crédit-wallet) + cron quotidien 02:15 UTC.

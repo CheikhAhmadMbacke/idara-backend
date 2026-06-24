@@ -56,6 +56,25 @@ namespace Idara.API.Services
             CancellationToken ct = default);
 
         /// <summary>
+        /// `GET /api/v1/{token}/status` — état **autoritatif** d'un payin.
+        /// <paramref name="token"/> = le `token` (afp_tx_…) renvoyé par
+        /// `/payments/initiate` et stocké dans <c>Payment.SenePayTransactionId</c>.
+        /// Source de vérité pour trancher un Payment resté Pending (webhook
+        /// manqué OU paiement abandonné par le parent : solde insuffisant, etc.).
+        /// </summary>
+        /// <returns>
+        /// La réponse parsée ; <c>null</c> si SenePay répond 404
+        /// (<c>PAYMENT_NOT_FOUND</c> — aucun paiement pour ce token).
+        /// </returns>
+        /// <exception cref="SenePayApiException">
+        /// Lancée sur timeout / 5xx / réseau : l'appelant garde le Payment en
+        /// Pending et réessaiera (jamais de transition terminale sur ambigu).
+        /// </exception>
+        Task<SenePayPayinStatusResponse?> GetPayinStatusAsync(
+            string token,
+            CancellationToken ct = default);
+
+        /// <summary>
         /// `GET /api/v1/merchant/wallet/balance` — solde réserve du compte
         /// marchand Idara. Utilisé par le job de réconciliation quotidien.
         /// </summary>

@@ -264,6 +264,86 @@ namespace Idara.API.Services
             return parsed;
         }
 
+        public async Task<SenePayPayinStatusResponse?> GetPayinStatusAsync(
+            string token,
+            CancellationToken ct = default)
+        {
+            var startedAt = DateTime.UtcNow;
+            var path = $"api/v1/{Uri.EscapeDataString(token)}/status";
+
+            _logger.LogInformation("[SenePay] GET /{Token}/status", token);
+
+            HttpResponseMessage httpResponse;
+            try
+            {
+                httpResponse = await _http.GetAsync(path, ct);
+            }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "[SenePay] TIMEOUT GET /{Token}/status", token);
+                throw new SenePayApiException("Timeout calling SenePay GET /{token}/status", null, null, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[SenePay] NETWORK ERROR GET /{Token}/status", token);
+                throw new SenePayApiException("Network error calling SenePay GET payin status", null, null, ex);
+            }
+
+            var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+            // 404 = PAYMENT_NOT_FOUND : SenePay n'a aucun paiement pour ce token
+            // (ex. l'initiate n'a jamais abouti côté SenePay). On retourne null —
+            // l'appelant tranchera (aucun paiement réel → sûr de marquer échoué).
+            if (httpResponse.StatusCode == HttpStatusCode.NotFound)
+            {
+                _logger.LogInformation(
+                    "[SenePay] GET /{Token}/status → 404 (introuvable) elapsedMs={Elapsed:0}",
+                    token, elapsedMs);
+                return null;
+            }
+
+            // Tout autre non-2xx (auth, 5xx, timeout serveur) = indéterminé :
+            // on lève, l'appelant garde le Payment en Pending et réessaiera.
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "[SenePay] HTTP {Status} GET /{Token}/status elapsedMs={Elapsed:0} body={Body}",
+                    (int)httpResponse.StatusCode, token, elapsedMs, Truncate(responseBody, 500));
+                throw new SenePayApiException(
+                    $"SenePay returned HTTP {(int)httpResponse.StatusCode}",
+                    (int)httpResponse.StatusCode,
+                    responseBody);
+            }
+
+            SenePayPayinStatusResponse? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<SenePayPayinStatusResponse>(responseBody, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex,
+                    "[SenePay] GET /{Token}/status body 200 mais JSON inattendu : {Body}",
+                    token, Truncate(responseBody, 500));
+                throw new SenePayApiException("Malformed SenePay payin status response", 200, responseBody, ex);
+            }
+
+            if (parsed == null)
+            {
+                _logger.LogError(
+                    "[SenePay] GET /{Token}/status body 200 mais null après parsing : {Body}",
+                    token, Truncate(responseBody, 500));
+                throw new SenePayApiException("Empty SenePay payin status response", 200, responseBody);
+            }
+
+            _logger.LogInformation(
+                "[SenePay] OK GET /{Token}/status status={Status} credited={Credited} elapsedMs={Elapsed:0}",
+                token, parsed.Status, parsed.CreditedAmount, elapsedMs);
+
+            return parsed;
+        }
+
         public async Task<SenePayMerchantBalanceResponse> GetMerchantBalanceAsync(
             CancellationToken ct = default)
         {

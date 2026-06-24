@@ -31,10 +31,8 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly SenePaySettings _senepay;
-        private readonly IReceiptPdfService _receiptPdf;
+        private readonly IPayinSettlementService _payinSettlement;
         private readonly IPayoutSettlementService _settlement;
-        private readonly Services.Notifications.INotificationService _notif;
-        private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<WebhooksController> _logger;
 
         // Constantes du provider — figées dans le code pour empêcher une typo
@@ -52,18 +50,14 @@ namespace Idara.API.Controllers
         public WebhooksController(
             AppDbContext context,
             IOptions<SenePaySettings> senepay,
-            IReceiptPdfService receiptPdf,
+            IPayinSettlementService payinSettlement,
             IPayoutSettlementService settlement,
-            Services.Notifications.INotificationService notif,
-            IServiceScopeFactory scopeFactory,
             ILogger<WebhooksController> logger)
         {
             _context = context;
             _senepay = senepay.Value;
-            _receiptPdf = receiptPdf;
+            _payinSettlement = payinSettlement;
             _settlement = settlement;
-            _notif = notif;
-            _scopeFactory = scopeFactory;
             _logger = logger;
         }
 
@@ -198,17 +192,21 @@ namespace Idara.API.Controllers
                 return Ok(new { received = true, processed = false, duplicate = true });
             }
 
-            // -------- 6) Traitement métier dans une transaction PG --------
+            // -------- 6) Règlement métier --------
+            // Délégué à IPayinSettlementService (transaction + verrou pessimiste
+            // wallet + garde Status==Pending) : SOURCE UNIQUE partagée avec le
+            // PayinVerificationJob. On NE wrappe PAS ici (le service possède sa
+            // propre transaction) — même schéma que le payout. L'idempotence
+            // webhook reste garantie par l'INSERT unique WebhookEvent ci-dessus,
+            // et l'idempotence métier par la garde de statut dans le service.
             string? processingError = null;
-            Payment? completedPayment = null;
+            int? completedPaymentId = null;
             try
             {
-                await using var tx = await _context.Database.BeginTransactionAsync();
-                completedPayment = await ProcessPayinPayloadAsync(ev, payload);
+                completedPaymentId = await SettlePayinAsync(payload);
                 ev.ProcessedAt = DateTime.UtcNow;
                 ev.Status = WebhookEventStatus.Processed;
                 await _context.SaveChangesAsync();
-                await tx.CommitAsync();
             }
             catch (Exception ex)
             {
@@ -216,12 +214,6 @@ namespace Idara.API.Controllers
                 _logger.LogError(ex,
                     "[webhook/payin] ÉCHEC TRAITEMENT métier transactionId={Tx} event={Event}",
                     payload.TransactionId, payload.Event);
-                // La transaction métier a rollback automatiquement (using await tx).
-                // ATTENTION : le change tracker EF a encore les valeurs in-memory
-                // que la tx a annulées (ev.ProcessedAt, ev.Status...). Un simple
-                // SaveChanges renverrait l'UPDATE avec ces valeurs périmées.
-                // On bypass via ExecuteUpdateAsync — UPDATE directe en DB,
-                // change tracker ignoré.
                 try
                 {
                     await _context.WebhookEvents
@@ -238,181 +230,14 @@ namespace Idara.API.Controllers
                 }
             }
 
-            // -------- 7) Génération du reçu PDF (best-effort, post-commit) --------
-            // Volontairement HORS de la transaction métier : un échec de
-            // génération PDF (disque plein, font manquante, exception
-            // QuestPDF...) ne doit PAS rollback le crédit wallet ni faire
-            // remonter en erreur le webhook. Le PDF peut toujours être
-            // regénéré à la demande via GET /api/payments/{id}/receipt.
-            // Garde processingError==null : si le COMMIT métier a échoué (rollback),
-            // l'objet en mémoire garde Status=Completed alors que rien n'est en base
-            // → ne RIEN notifier/générer (sinon fausse confirmation de paiement).
-            if (processingError == null && completedPayment != null && completedPayment.Status == PaymentStatus.Completed)
+            // -------- 7) Effets post-complétion (best-effort, hors transaction) --------
+            // Reçu PDF + SMS parent + push école + retry abonnement. Délégué au
+            // service (même code que le PayinVerificationJob). Ne lève jamais.
+            // Garde processingError==null : si le règlement a échoué/rollback, on
+            // ne notifie/génère rien (sinon fausse confirmation de paiement).
+            if (processingError == null && completedPaymentId is int pid)
             {
-                try
-                {
-                    var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == completedPayment.SchoolId);
-                    var student = completedPayment.StudentId.HasValue
-                        ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
-                        : null;
-                    var invoice = completedPayment.InvoiceId.HasValue
-                        ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == completedPayment.InvoiceId.Value)
-                        : null;
-                    if (school != null)
-                    {
-                        var pdfPath = await _receiptPdf.GenerateAsync(completedPayment, school, student, invoice);
-                        // ExecuteUpdate pour bypass change tracker (la tx précédente est déjà commitée
-                        // mais on veut juste poser le chemin sans repasser par les autres champs).
-                        await _context.Payments
-                            .Where(p => p.Id == completedPayment.Id)
-                            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, pdfPath));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[webhook/payin] Échec génération reçu PDF Payment.Id={Id} — pas bloquant",
-                        completedPayment.Id);
-                }
-            }
-
-            // -------- 8) SMS « paiement reçu » au responsable (best-effort) --------
-            // Bloc séparé du PDF : un échec PDF ne doit pas priver le parent du
-            // SMS, et inversement. NotificationService ne lève jamais, mais on
-            // enveloppe quand même par principe (lecture DB du guardian/élève).
-            if (processingError == null
-                && completedPayment != null
-                && completedPayment.Status == PaymentStatus.Completed
-                && completedPayment.GuardianId.HasValue)
-            {
-                try
-                {
-                    var guardian = await _context.Users.FirstOrDefaultAsync(
-                        u => u.Id == completedPayment.GuardianId.Value && !u.IsDeleted);
-                    if (guardian?.PhoneNumber != null)
-                    {
-                        var student = completedPayment.StudentId.HasValue
-                            ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
-                            : null;
-                        var eleve = student != null
-                            ? $"{student.FirstName} {student.LastName}".Trim()
-                            : "votre enfant";
-                        var platform = await _context.GetPlatformSettingsAsync();
-                        // Montant CIBLE (ce que la facture considère payé), pas le
-                        // débité parent (cible×1,08) — cohérent avec le reçu/facture
-                        // (§82). Fallback AmountFcfa pour les anciens Payments.
-                        var shownAmount = completedPayment.TargetAmountFcfa > 0
-                            ? completedPayment.TargetAmountFcfa
-                            : completedPayment.AmountFcfa;
-                        var msg = NotificationTemplates.PaymentReceived(eleve, shownAmount);
-                        await _notif.SendSmsAsync(new NotificationSmsRequest(
-                            UserId: guardian.Id,
-                            RawPhone: guardian.PhoneNumber,
-                            PreferredLanguage: guardian.PreferredLanguage ?? "fr",
-                            Message: msg,
-                            Bilingual: platform.SmsBilingual,
-                            TemplateCode: "PAYMENT_RECEIVED",
-                            RelatedEntityId: completedPayment.Id,
-                            PushRoute: "/guardian/invoices"));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[webhook/payin] Échec SMS paiement reçu Payment.Id={Id} — pas bloquant",
-                        completedPayment.Id);
-                }
-            }
-
-            // -------- 9) Push « paiement reçu » à l'ÉCOLE (admin + personnel) --------
-            // Push uniquement (pas de SMS : l'école recevrait trop de SMS payants).
-            // Clic → page solde/wallet. Idempotent via le webhook (1 traitement/payment).
-            if (processingError == null
-                && completedPayment != null
-                && completedPayment.Status == PaymentStatus.Completed
-                && completedPayment.SchoolId > 0)
-            {
-                try
-                {
-                    var schoolUserIds = await _context.Users
-                        .Where(u => u.SchoolId == completedPayment.SchoolId
-                                    && !u.IsDeleted
-                                    && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
-                        .Select(u => new { u.Id, u.PreferredLanguage })
-                        .ToListAsync();
-                    if (schoolUserIds.Count > 0)
-                    {
-                        var student = completedPayment.StudentId.HasValue
-                            ? await _context.Students.FirstOrDefaultAsync(x => x.Id == completedPayment.StudentId.Value)
-                            : null;
-                        var shownAmount = completedPayment.TargetAmountFcfa > 0
-                            ? completedPayment.TargetAmountFcfa
-                            : completedPayment.AmountFcfa;
-                        // Topup wallet école (ni élève ni parent rattaché) → message
-                        // « recharge » au lieu de « paiement pour un élève ».
-                        // Détection indépendante de FeesPayer (le topup est passé en
-                        // FeesPayer=Parent pour appliquer la majoration +8 %).
-                        var isTopup = completedPayment.StudentId == null
-                                      && completedPayment.GuardianId == null;
-                        var msg = isTopup
-                            ? NotificationTemplates.WalletTopupReceived(shownAmount)
-                            : NotificationTemplates.PaymentReceivedSchool(
-                                student != null ? $"{student.FirstName} {student.LastName}".Trim() : "un eleve",
-                                shownAmount);
-                        foreach (var su in schoolUserIds)
-                        {
-                            await _notif.SendPushOnlyAsync(new PushOnlyRequest(
-                                UserId: su.Id,
-                                PreferredLanguage: su.PreferredLanguage ?? "fr",
-                                Message: msg,
-                                TemplateCode: "SCHOOL_PAYMENT_RECEIVED",
-                                RelatedEntityId: completedPayment.Id,
-                                PushRoute: "/payments/overview"));
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[webhook/payin] Échec push école Payment.Id={Id} — pas bloquant",
-                        completedPayment.Id);
-                }
-            }
-
-            // -------- 10) Retry abonnement plateforme (best-effort, post-commit) --------
-            // Ce crédit wallet (topup OU paiement parent) peut suffire à régler un
-            // abonnement impayé : on re-tente le prélèvement IMMÉDIATEMENT pour
-            // débloquer l'école sans attendre le cron du lendemain. Scope DI séparé
-            // (DbContext frais) → n'interfère pas avec le change tracker du webhook.
-            // Sous verrou wallet + idempotent (no-op si l'abo n'est pas en impayé).
-            // Ne lève jamais (un échec ici ne doit pas faire échouer le webhook).
-            if (processingError == null
-                && completedPayment != null
-                && completedPayment.Status == PaymentStatus.Completed
-                && completedPayment.SchoolId > 0)
-            {
-                try
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    var billing = scope.ServiceProvider.GetRequiredService<ISubscriptionBillingService>();
-                    // CancellationToken.None : le webhook répond 200 quoi qu'il
-                    // arrive ; on ne veut pas que le retry de réactivation soit
-                    // coupé en plein milieu si SenePay abandonne la connexion.
-                    var outcome = await billing.RetryForSchoolAsync(
-                        completedPayment.SchoolId, DateTime.UtcNow, CancellationToken.None);
-                    if (outcome == BillingOutcome.Paid)
-                    {
-                        _logger.LogInformation(
-                            "[webhook/payin] Abonnement École {SchoolId} débloqué après crédit (Payment {Id})",
-                            completedPayment.SchoolId, completedPayment.Id);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[webhook/payin] Retry abonnement École {SchoolId} échoué — pas bloquant",
-                        completedPayment.SchoolId);
-                }
+                await _payinSettlement.RunPostCompletionEffectsAsync(pid, "webhook");
             }
 
             var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
@@ -576,179 +401,44 @@ namespace Idara.API.Controllers
         // ====================================================================
 
         /// <summary>
-        /// Retourne le Payment complété (ou null si le webhook n'a rien
-        /// changé : statut non-success, déjà traité, etc.). Utilisé par
-        /// l'appelant pour décider s'il doit générer le reçu PDF post-commit.
+        /// Mappe le payload webhook payin → appel <see cref="IPayinSettlementService"/>.
+        /// Retourne le Payment.Id si le règlement vient de transiter vers
+        /// Completed (→ effets post-complétion à déclencher), sinon null.
+        /// Lève si l'OrderId n'est pas parsable ou si le Payment est introuvable
+        /// (webhook reçu avant le commit de l'initiate) → ev en ProcessingFailed
+        /// pour rejeu.
         /// </summary>
-        private async Task<Payment?> ProcessPayinPayloadAsync(
-            WebhookEvent ev,
-            SenePayPayinWebhookPayload payload)
+        private async Task<int?> SettlePayinAsync(SenePayPayinWebhookPayload payload)
         {
-            // OrderId = Payment.Id sérialisé (cf. 1.4 — on l'envoie comme
-            // `orderId` à SenePay dans /payments/initiate, et SenePay nous le
-            // renvoie dans `order_id` du webhook).
+            // OrderId = Payment.Id sérialisé (envoyé comme `orderId` à l'initiate).
             if (!int.TryParse(payload.OrderId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var paymentId))
             {
                 throw new InvalidOperationException(
                     $"OrderId '{payload.OrderId}' non parsable en Payment.Id");
             }
 
-            var payment = await _context.Payments
-                .FirstOrDefaultAsync(p => p.Id == paymentId);
+            var terminalStatus = MapSenePayStatus(payload.Status);
 
-            if (payment == null)
-            {
-                // Cas plausible : webhook reçu avant que /initiate ait commit le
-                // Payment côté DB (latence Postgres). On lève — la transaction
-                // métier rollback, ev passe en ProcessingFailed, l'admin peut
-                // rejouer. On ne crée PAS un Payment fantôme depuis le webhook.
-                throw new InvalidOperationException(
-                    $"Payment.Id={paymentId} introuvable pour ce webhook");
-            }
+            // SenePay envoie les montants en decimal (200.0 / 196.0). En XOF, pas
+            // de centimes — on arrondit au long sans perte.
+            var fees = (long)Math.Round(payload.Fees, MidpointRounding.AwayFromZero);
+            var net = (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero);
+            var reason = payload.FailedReason ?? payload.ErrorCode ?? payload.Status;
 
-            // Idempotence "métier" : si on a déjà traité un webhook pour ce
-            // Payment (Status non-Pending), on ne rejoue rien — webhook tardif
-            // ou doublon logique côté SenePay.
-            if (payment.Status != PaymentStatus.Pending)
-            {
-                _logger.LogInformation(
-                    "[webhook/payin] Payment.Id={Id} déjà en statut {Status}, webhook ignoré",
-                    payment.Id, payment.Status);
-                return null;
-            }
+            var result = await _payinSettlement.SettleAsync(
+                paymentId,
+                terminalStatus,
+                fees,
+                net,
+                payload.TransactionId,
+                payload.Timestamp?.ToUtcSafe(),
+                reason,
+                "webhook");
 
-            // Map du statut SenePay → notre enum.
-            var newStatus = MapSenePayStatus(payload.Status);
-
-            // SenePay envoie les montants en decimal (200.0 / 196.0 / 4.0). En
-            // XOF (FCFA), pas de centimes — on tronque vers long sans perte.
-            // Math.Round par sécurité au cas où SenePay enverrait 195.9999.
-            payment.FeesFcfa = (long)Math.Round(payload.Fees, MidpointRounding.AwayFromZero);
-            payment.NetCreditedFcfa = (long)Math.Round(payload.NetAmount, MidpointRounding.AwayFromZero);
-            payment.SenePayTransactionId = payload.TransactionId;
-            payment.Status = newStatus;
-
-            switch (newStatus)
-            {
-                case PaymentStatus.Completed:
-                    payment.PaidAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                    await CreditSchoolWalletAsync(payment);
-                    break;
-
-                case PaymentStatus.Failed:
-                case PaymentStatus.Cancelled:
-                case PaymentStatus.Expired:
-                    payment.FailedAt = payload.Timestamp?.ToUtcSafe() ?? DateTime.UtcNow;
-                    payment.FailureReason = payload.FailedReason ?? payload.ErrorCode ?? payload.Status;
-                    // Rien à débiter — le wallet n'a jamais été crédité.
-                    break;
-
-                default:
-                    throw new InvalidOperationException(
-                        $"Statut SenePay inattendu '{payload.Status}'");
-            }
-
-            return payment;
-        }
-
-        private async Task CreditSchoolWalletAsync(Payment payment)
-        {
-            var netAmount = payment.NetCreditedFcfa;
-
-            // Montant crédité au wallet école — dépend de QUI porte les frais :
-            //
-            //  • FeesPayer=Parent : on crédite le montant CIBLE (TargetAmountFcfa,
-            //    ce que l'école a fixé), PAS le net reçu de SenePay. Le parent a
-            //    payé target × 1,08 ; la majoration de 8% couvre les frais payin
-            //    (5,37%) ET la réserve du futur payout (1,77%). L'école reçoit
-            //    donc EXACTEMENT ce qu'elle a fixé, en payin comme au retrait
-            //    (décision 2026-06-07 : les Daara reçoivent toujours leur montant
-            //    fixé, ni plus ni moins). L'excédent (net réel − target) reste
-            //    dans la réserve marchand SenePay : c'est le coussin qui finance
-            //    les frais de payout et la marge plateforme. Sans ce choix, le
-            //    wallet recevrait le net (variable, ex 529 pour une cible de 500)
-            //    et l'école toucherait un surplus imprévisible.
-            //
-            //  • FeesPayer=School : l'école absorbe les frais à la source (spec
-            //    §4.4) → on crédite le NET réellement reversé par SenePay. Le
-            //    wallet reflète le net post-frais, c'est le principe de ce mode.
-            //    Créditer le target ici sur-créditerait le wallet vs la réserve
-            //    marchand réelle → casserait l'invariant de réconciliation §78.
-            //
-            //  Fallback sur netAmount pour les anciens Payments d'avant 1.10 qui
-            //  n'ont pas TargetAmountFcfa rempli (= 0).
-            var amountToCredit = payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0
-                ? payment.TargetAmountFcfa
-                : netAmount;
-
-            if (amountToCredit <= 0)
-            {
-                _logger.LogWarning(
-                    "[webhook/payin] montant à créditer={Amount} <= 0 pour Payment.Id={Id} (net={Net}, target={Target}, feesPayer={FeesPayer}), pas de crédit wallet",
-                    amountToCredit, payment.Id, netAmount, payment.TargetAmountFcfa, payment.FeesPayer);
-                return;
-            }
-
-            // SchoolWallet est seedé pour chaque école par DbInitializer (1.2).
-            // Si jamais absent (race ou bug), on lève — on ne crée pas un
-            // wallet à la volée depuis un webhook (audit trail).
-            // Verrou pessimiste : sérialise vs un retrait concurrent sur le même
-            // wallet (cf. WalletLockExtensions). Évite tout lost update Available.
-            var wallet = await _context.LockWalletAsync(payment.SchoolId)
-                ?? throw new InvalidOperationException(
-                    $"SchoolWallet manquant pour SchoolId={payment.SchoolId}");
-
-            wallet.AvailableBalance += amountToCredit;
-            wallet.TotalCreditedLifetime += amountToCredit;
-            wallet.UpdatedAt = DateTime.UtcNow;
-
-            var txEntry = new WalletTransaction
-            {
-                SchoolId = payment.SchoolId,
-                Type = WalletTransactionType.Credit,
-                AmountFcfa = amountToCredit, // Crédit = montant signé positif.
-                BalanceAfter = wallet.AvailableBalance,
-                RelatedEntity = WalletRelatedEntity.Payment,
-                RelatedId = payment.Id,
-                Note = $"Payment {payment.SenePayTransactionId}",
-                OccurredAt = DateTime.UtcNow
-            };
-            _context.WalletTransactions.Add(txEntry);
-
-            // Si une Invoice est rattachée (mode FixedAmount), on met à jour son
-            // AmountPaidFcfa et son statut. On crédite TOUJOURS l'invoice avec le
-            // montant CIBLE (la dette de la FAMILLE), dans LES DEUX modes FeesPayer :
-            //
-            //  • FeesPayer=Parent : le parent paie target×1,08, la famille doit
-            //    target → invoice créditée target → soldée. Wallet aussi = target.
-            //
-            //  • FeesPayer=School : le parent paie EXACTEMENT target (pas de +8 %),
-            //    donc la famille a payé sa dette en entier → invoice créditée target
-            //    → soldée. Le wallet, lui, reçoit le NET (l'école absorbe les frais,
-            //    par choix). C'est de la compta brut(facture)/net(caisse) NORMALE,
-            //    PAS une incohérence : la facture suit ce que la famille a payé,
-            //    le wallet suit le cash net encaissé.
-            //
-            //  ⚠️ NE JAMAIS créditer l'invoice du net : en mode School elle
-            //  resterait sous son dû (ex 4730/5000) → facture ZOMBIE jamais soldée
-            //  alors que le parent a tout payé. Le crédit invoice = CIBLE, point.
-            //  (Fallback netAmount uniquement pour d'anciens Payments sans cible.)
-            if (payment.InvoiceId is int invoiceId)
-            {
-                var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == invoiceId);
-                if (invoice != null)
-                {
-                    var creditedToInvoice = payment.TargetAmountFcfa > 0
-                        ? payment.TargetAmountFcfa
-                        : netAmount;
-                    invoice.AmountPaidFcfa += creditedToInvoice;
-                    invoice.UpdatedAt = DateTime.UtcNow;
-                    if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
-                    {
-                        invoice.Status = InvoiceStatus.Paid;
-                    }
-                }
-            }
+            return result.Outcome == PayinSettlementOutcome.Transitioned
+                   && result.FinalStatus == PaymentStatus.Completed
+                ? paymentId
+                : null;
         }
 
         /// <summary>

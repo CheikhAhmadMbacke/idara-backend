@@ -486,6 +486,25 @@ namespace Idara.API.Controllers
                 .Take(100)
                 .ToListAsync(ct);
 
+            // Vue par défaut : on REGROUPE les tentatives multiples pour une même
+            // facture (un parent qui réessaie crée plusieurs Payment) → on n'affiche
+            // qu'UNE ligne par facture : le paiement Complété s'il existe, sinon la
+            // tentative la plus récente (« en cours »). Évite la duplication des
+            // badges « en cours » signalée côté parent. Les paiements sans facture
+            // (montant libre / topup) gardent une clé unique → jamais regroupés.
+            // Si un statut explicite est demandé, on ne regroupe pas (liste brute).
+            if (!status.HasValue)
+            {
+                items = items
+                    .GroupBy(p => p.InvoiceId ?? -p.Id)
+                    .Select(g => g
+                        .OrderByDescending(p => p.Status == PaymentStatus.Completed)
+                        .ThenByDescending(p => p.InitiatedAt)
+                        .First())
+                    .OrderByDescending(p => p.InitiatedAt)
+                    .ToList();
+            }
+
             return Ok(items.Select(p => new PaymentDto
             {
                 Id = p.Id,

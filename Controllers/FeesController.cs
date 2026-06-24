@@ -711,6 +711,23 @@ namespace Idara.API.Controllers
                 })
                 .ToListAsync(ct);
 
+            // Vue par défaut : regroupe les tentatives multiples d'une même
+            // facture (réessais parent) → 1 ligne/facture (Complété sinon la plus
+            // récente). Évite la duplication des « en cours » côté école. Les
+            // paiements sans facture (topup) gardent une clé unique. Pas de
+            // regroupement si un statut explicite est demandé (liste brute debug).
+            if (!status.HasValue)
+            {
+                items = items
+                    .GroupBy(p => p.InvoiceId ?? -p.Id)
+                    .Select(g => g
+                        .OrderByDescending(p => p.Status == PaymentStatus.Completed)
+                        .ThenByDescending(p => p.InitiatedAt)
+                        .First())
+                    .OrderByDescending(p => p.InitiatedAt)
+                    .ToList();
+            }
+
             return Ok(items);
         }
 
