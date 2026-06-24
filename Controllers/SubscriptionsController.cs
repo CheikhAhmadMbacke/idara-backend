@@ -161,10 +161,16 @@ namespace Idara.API.Controllers
                 if (!plan.IsCustom && plan.StudentMax.HasValue && studentCount > plan.StudentMax.Value)
                 {
                     dto.ExceedsCap = true;
-                    var publicPlans = await _context.SubscriptionPlans
+                    // Tri déterministe identique à SubscriptionBillingService (prix
+                    // croissant, puis plus petite tranche, puis Id) → l'avertissement
+                    // de capacité correspond toujours au plan réellement facturé.
+                    var publicPlans = (await _context.SubscriptionPlans
                         .Where(p => p.IsActive && !p.IsCustom)
+                        .ToListAsync(ct))
                         .OrderBy(p => p.MonthlyPriceFcfa)
-                        .ToListAsync(ct);
+                        .ThenBy(p => p.StudentMax ?? int.MaxValue)
+                        .ThenBy(p => p.Id)
+                        .ToList();
                     var correct = publicPlans.FirstOrDefault(
                         p => !p.StudentMax.HasValue || studentCount <= p.StudentMax.Value);
                     if (correct != null && correct.Id != plan.Id)

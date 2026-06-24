@@ -200,10 +200,18 @@ namespace Idara.API.Services
                         .CountAsync(s => s.SchoolId == sub.SchoolId && !s.IsDeleted, ct);
                     if (studentCount > currentPlan.StudentMax.Value)
                     {
-                        var publicPlans = await _db.SubscriptionPlans
+                        // Tri déterministe (cf. bug du tarif classe) : prix croissant,
+                        // puis plus petite tranche, puis Id — sinon deux plans de même
+                        // prix donneraient un choix non déterministe. DOIT rester
+                        // identique à SubscriptionsController.Capacity pour que
+                        // l'avertissement affiché corresponde au prélèvement réel.
+                        var publicPlans = (await _db.SubscriptionPlans
                             .Where(p => p.IsActive && !p.IsCustom)
+                            .ToListAsync(ct))
                             .OrderBy(p => p.MonthlyPriceFcfa)
-                            .ToListAsync(ct);
+                            .ThenBy(p => p.StudentMax ?? int.MaxValue)
+                            .ThenBy(p => p.Id)
+                            .ToList();
                         var correct = publicPlans.FirstOrDefault(
                             p => !p.StudentMax.HasValue || studentCount <= p.StudentMax.Value);
                         var correctAmount = correct == null
