@@ -30,14 +30,17 @@ namespace Idara.API.Services
     /// Un paiement réellement débité ne peut donc que se compléter, jamais se
     /// perdre — même en cas de webhook retardé.</para>
     ///
-    /// <para>⚠️ <b>2026-06-24 (§108)</b> : l'endpoint statut SenePay
-    /// (<c>GET /{token}/status</c>) renvoie 404 pour TOUS nos payins de l'API
-    /// Direct — même les réussis (testé en prod). Tant qu'on n'a pas l'endpoint
-    /// correct (à confirmer avec SenePay), ce poll est donc un filet INERTE et
-    /// SÛR : il interroge, reçoit 404, et laisse le Payment Pending. Le résolveur
-    /// fiable des abandons reste le WEBHOOK <c>payin.failed</c> (confirmé en prod).
-    /// Dès que l'endpoint correct sera câblé, ce poll deviendra fonctionnel sans
-    /// autre changement.</para>
+    /// <para><b>Source de vérité</b> : le WEBHOOK reste le résolveur primaire et
+    /// le plus fiable. Ce poll est une 2ᵉ source de réconciliation qui lit le
+    /// statut AUTORITATIF de SenePay (<c>GET /api/v1/payments/{token}/status</c>) :
+    /// il rattrape un webhook MANQUÉ et clôt les abandons (SenePay finit par
+    /// passer un long-Pending en <c>Failed</c> → le poll le lit). Le webhook et le
+    /// poll se sérialisent sur le verrou wallet (garde Status==Pending) : un seul
+    /// transite, l'autre est no-op.</para>
+    ///
+    /// <para>⚠️ Le chemin DOIT contenir le segment <c>payments/</c> — sans lui,
+    /// 404 systématique même pour un paiement réussi (piège vécu le 2026-06-24,
+    /// §108). Corrigé dans <c>SenePayClient.GetPayinStatusAsync</c>.</para>
     ///
     /// Pas de colonnes de scheduling sur Payment (pas de migration) : on re-scanne
     /// les Pending échus à chaque tick. Volume attendu faible (quelques paiements).

@@ -269,7 +269,10 @@ namespace Idara.API.Services
             CancellationToken ct = default)
         {
             var startedAt = DateTime.UtcNow;
-            var path = $"api/v1/{Uri.EscapeDataString(token)}/status";
+            // Chemin CORRECT = api/v1/payments/{token}/status (avec le segment
+            // "payments/"). Sans lui → 404 systématique, même pour un paiement
+            // réussi (piège vécu le 2026-06-24, cf. §108).
+            var path = $"api/v1/payments/{Uri.EscapeDataString(token)}/status";
 
             _logger.LogInformation("[SenePay] GET /{Token}/status", token);
 
