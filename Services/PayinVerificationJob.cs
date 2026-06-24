@@ -20,18 +20,24 @@ namespace Idara.API.Services
     ///    resterait « en cours » à vie ET l'école ne serait jamais créditée).
     ///
     /// <para><b>Sûreté (exigence absolue)</b> : on ne marque JAMAIS un Payment
-    /// terminal sur une simple horloge ou une erreur réseau. Transition terminale
-    /// UNIQUEMENT sur le statut EXPLICITE de SenePay :
+    /// terminal sur une horloge, un 404, un timeout ou une absence de token.
+    /// Transition UNIQUEMENT sur un statut 200 EXPLICITE de SenePay :
     /// <list type="bullet">
     /// <item><c>Completed</c> → crédit (via le service de règlement partagé).</item>
     /// <item><c>Failed</c>/<c>Cancelled</c> → échec (aucun fonds n'a bougé).</item>
-    /// <item>404 (jamais créé chez SenePay) → échec, mais seulement passé un délai.</item>
-    /// <item><c>Pending</c> très ancien (&gt; 6h) → Expired (SenePay confirme qu'il
-    ///       n'est PAS Completed → aucun débit parent → sûr).</item>
-    /// <item>timeout / 5xx / réseau → on NE TOUCHE À RIEN, on réessaiera.</item>
+    /// <item>404 / timeout / 5xx / Pending → on NE TOUCHE À RIEN, on réessaiera.</item>
     /// </list>
     /// Un paiement réellement débité ne peut donc que se compléter, jamais se
     /// perdre — même en cas de webhook retardé.</para>
+    ///
+    /// <para>⚠️ <b>2026-06-24 (§108)</b> : l'endpoint statut SenePay
+    /// (<c>GET /{token}/status</c>) renvoie 404 pour TOUS nos payins de l'API
+    /// Direct — même les réussis (testé en prod). Tant qu'on n'a pas l'endpoint
+    /// correct (à confirmer avec SenePay), ce poll est donc un filet INERTE et
+    /// SÛR : il interroge, reçoit 404, et laisse le Payment Pending. Le résolveur
+    /// fiable des abandons reste le WEBHOOK <c>payin.failed</c> (confirmé en prod).
+    /// Dès que l'endpoint correct sera câblé, ce poll deviendra fonctionnel sans
+    /// autre changement.</para>
     ///
     /// Pas de colonnes de scheduling sur Payment (pas de migration) : on re-scanne
     /// les Pending échus à chaque tick. Volume attendu faible (quelques paiements).
@@ -43,20 +49,8 @@ namespace Idara.API.Services
 
         private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(3);
         // On ne vérifie pas un Pending trop jeune : laisse le webhook (rapide pour
-        // Wave) faire son travail d'abord. Inoffensif si on vérifie quand même
-        // (SenePay répond Pending/Completed), mais évite de marteler l'API.
+        // Wave) faire son travail d'abord. Évite de marteler l'API SenePay.
         private static readonly TimeSpan MinAge = TimeSpan.FromMinutes(2);
-        // Pending sans token SenePay = l'initiate n'a jamais abouti côté SenePay
-        // (appel en échec) → aucun paiement possible → échec après ce délai.
-        private static readonly TimeSpan NoTokenFailAfter = TimeSpan.FromMinutes(15);
-        // 404 (PAYMENT_NOT_FOUND) sur un token : SenePay ne connaît pas ce
-        // paiement. On attend ce délai avant de conclure (évite toute course
-        // juste après l'initiate).
-        private static readonly TimeSpan NotFoundFailAfter = TimeSpan.FromMinutes(10);
-        // Pending TOUJOURS Pending chez SenePay après ce délai = abandonné pour
-        // de bon (Wave/Orange tranchent en quelques minutes) → Expired. Sûr :
-        // SenePay confirme « pas Completed » donc le parent n'a pas été débité.
-        private static readonly TimeSpan HardExpiry = TimeSpan.FromHours(6);
         private const int BatchSize = 100;
 
         public PayinVerificationJob(
@@ -140,20 +134,24 @@ namespace Idara.API.Services
             ISenePayClient senepay, IPayinSettlementService settlement,
             int paymentId, string? token, DateTime initiatedAt, DateTime now, CancellationToken ct)
         {
-            var age = now - initiatedAt;
+            // ⚠️ RÈGLE DE SÛRETÉ ABSOLUE : on ne marque JAMAIS un Payment terminal
+            // sur une horloge, un 404, un timeout ou une absence de token. UNIQUEMENT
+            // sur un statut 200 EXPLICITE renvoyé par SenePay (Completed/Failed/
+            // Cancelled). Raison : l'endpoint statut SenePay s'est avéré renvoyer 404
+            // même pour des paiements RÉUSSIS (testé en prod 2026-06-24, cf. §108) →
+            // un 404 ne signifie PAS « n'existe pas ». Conclure « échec » d'un 404
+            // marquerait Failed un paiement réel dont le webhook tarde (Orange jusqu'à
+            // 15 min) → le webhook Completed serait ensuite ignoré → PERTE. Donc tout
+            // ce qui n'est pas un statut terminal explicite = on laisse Pending.
+            // Le résolveur fiable des paiements abandonnés reste le WEBHOOK SenePay
+            // (payin.failed), confirmé en prod. Ce poll est un filet de sécurité qui
+            // ne s'activera que lorsque l'endpoint statut renverra un état exploitable.
 
-            // Pas de token = l'initiate n'a jamais abouti chez SenePay (l'appel a
-            // levé). Aucun paiement réel possible → échec passé le délai de grâce.
+            // Pas de token = l'initiate a levé avant de stocker le token. On NE peut
+            // PAS conclure : SenePay a pu créer le paiement malgré le timeout (le
+            // webhook le complèterait via OrderId=Payment.Id). On laisse Pending.
             if (string.IsNullOrWhiteSpace(token))
-            {
-                if (age >= NoTokenFailAfter)
-                {
-                    await settlement.SettleAsync(
-                        paymentId, PaymentStatus.Failed, 0, 0, null, now,
-                        "Initiation SenePay jamais aboutie (aucun token)", "poll", ct);
-                }
                 return;
-            }
 
             SenePayPayinStatusResponse? status;
             try
@@ -162,23 +160,18 @@ namespace Idara.API.Services
             }
             catch (SenePayApiException ex)
             {
-                // Timeout / 5xx / réseau : indéterminé. On NE TOUCHE À RIEN — on
-                // réessaiera au prochain tick. Jamais de transition sur ambigu.
+                // Timeout / 5xx / réseau : indéterminé → on NE TOUCHE À RIEN.
                 _logger.LogWarning(ex,
                     "[payin-verify] GET status indéterminé pour Payment {Id} — on réessaiera", paymentId);
                 return;
             }
 
-            // 404 : SenePay n'a aucun paiement pour ce token. Aucun fonds n'a
-            // bougé → échec sûr, mais seulement passé un délai (anti-course).
+            // 404 : NON concluant (l'endpoint 404 même pour des paiements réussis).
+            // On laisse Pending — surtout PAS de transition terminale.
             if (status == null)
             {
-                if (age >= NotFoundFailAfter)
-                {
-                    await settlement.SettleAsync(
-                        paymentId, PaymentStatus.Failed, 0, 0, null, now,
-                        "Paiement introuvable chez SenePay", "poll", ct);
-                }
+                _logger.LogDebug(
+                    "[payin-verify] Payment {Id} : statut SenePay 404 (non concluant) — laissé Pending", paymentId);
                 return;
             }
 
@@ -210,18 +203,8 @@ namespace Idara.API.Services
                     break;
 
                 default:
-                    // Toujours Pending chez SenePay. Au-delà de 6h = abandonné pour
-                    // de bon → Expired (SenePay confirme « pas Completed » : sûr).
-                    // Sinon on laisse, on revérifiera au prochain tick.
-                    if (age >= HardExpiry)
-                    {
-                        _logger.LogInformation(
-                            "[payin-verify] Payment {Id} Pending chez SenePay depuis {Hours:0.0}h → Expired",
-                            paymentId, age.TotalHours);
-                        await settlement.SettleAsync(
-                            paymentId, PaymentStatus.Expired, 0, 0, token, now,
-                            "Paiement non confirmé (expiré)", "poll", ct);
-                    }
+                    // Pending (ou statut inconnu) : on NE conclut PAS. Laissé Pending,
+                    // revérifié au prochain tick. Pas d'expiration sur l'horloge.
                     break;
             }
         }
