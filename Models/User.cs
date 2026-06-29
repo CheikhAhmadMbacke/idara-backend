@@ -19,6 +19,21 @@ namespace Idara.API.Models
         public string? PhoneNumber { get; set; }
         public string PasswordHash { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Si false, le compte ne peut PAS se connecter (personnel « sans appli »
+        /// — ex. cuisinière, gardien — créé uniquement pour être pointé par le
+        /// surveillant). Aucun SMS/code n'est envoyé à sa création. Défaut true.
+        /// </summary>
+        public bool CanLogin { get; set; } = true;
+
+        /// <summary>
+        /// Fonction libre saisie par l'école (« Cuisinière », « Comptable »,
+        /// « Gardien »…), indépendante du rôle technique. Sert d'étiquette
+        /// d'affichage / sous-catégorie du personnel. Null = non renseignée.
+        /// </summary>
+        public string? JobTitle { get; set; }
+
         public bool IsEmailVerified { get; set; } = true;
         public AccountStatus AccountStatus { get; set; } = AccountStatus.Inactive;
         public int? SchoolId { get; set; }

@@ -11,6 +11,7 @@ using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 namespace Idara.API.Controllers
@@ -18,7 +19,10 @@ namespace Idara.API.Controllers
     /// <summary>
     /// Retraits du wallet école vers un compte Mobile Money (SenePay Payout).
     /// Saisie manuelle des coordonnées à chaque retrait (pas de comptes
-    /// pré-enregistrés, spec §4.2), validation OTP SchoolAdmin obligatoire.
+    /// pré-enregistrés, spec §4.2). Step-up de sécurité = mot de passe SchoolAdmin
+    /// vérifié côté serveur (remplace l'OTP retrait, jugé trop compliqué — cf.
+    /// chantier auth retrait). Le mot de passe est saisi au verrou de l'écran
+    /// paiement puis réutilisé ici.
     ///
     /// Modèle de frais (spec §4.4) : le wallet est DÉJÀ net de payout. L'école
     /// retire X (= ce qu'elle voit), le bénéficiaire reçoit X. On envoie à
@@ -32,8 +36,8 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly ISenePayClient _senepay;
         private readonly SenePaySettings _senepaySettings;
-        private readonly IOtpService _otp;
         private readonly IPayoutSettlementService _settlement;
+        private readonly IMemoryCache _cache;
         private readonly ILogger<SchoolWalletController> _logger;
 
         // Montant minimum de retrait et frais payout (%) ne sont plus codés en
@@ -43,46 +47,20 @@ namespace Idara.API.Controllers
             AppDbContext context,
             ISenePayClient senepay,
             IOptions<SenePaySettings> senepaySettings,
-            IOtpService otp,
             IPayoutSettlementService settlement,
+            IMemoryCache cache,
             ILogger<SchoolWalletController> logger)
         {
             _context = context;
             _senepay = senepay;
             _senepaySettings = senepaySettings.Value;
-            _otp = otp;
             _settlement = settlement;
+            _cache = cache;
             _logger = logger;
         }
 
         /// <summary>
-        /// Étape 1 : envoie un OTP au SchoolAdmin (interim : email ; WA en Phase 2)
-        /// avant d'autoriser un retrait. L'OTP est scopé OtpPurpose.Withdrawal,
-        /// valable selon OtpSettings (10 min par défaut), à usage unique.
-        /// </summary>
-        [HttpPost("withdraw/init")]
-        [Authorize(Roles = UserRoles.SchoolAdmin)]
-        public async Task<ActionResult<ApiResponse<object>>> InitWithdraw(CancellationToken ct)
-        {
-            var userId = User.GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
-            if (admin == null) return Unauthorized();
-
-            await _otp.GenerateAndSendOtpAsync(admin.Email ?? string.Empty, OtpPurpose.Withdrawal, admin.PreferredLanguage);
-
-            _logger.LogInformation(
-                "[withdraw] OTP retrait envoyé au SchoolAdmin {UserId} (School {SchoolId})",
-                userId, User.GetSchoolId());
-
-            return Ok(ApiResponse<object>.Ok(
-                new { sentTo = MaskEmail(admin.Email ?? string.Empty) },
-                "Un code de validation vous a été envoyé par email."));
-        }
-
-        /// <summary>
-        /// Étape 2 : exécute le retrait. Valide l'OTP, réserve le montant
+        /// Exécute le retrait. Vérifie le mot de passe (step-up), réserve le montant
         /// (Available → Pending), appelle SenePay Payout, puis attend le webhook
         /// final (3.3) pour le débit définitif ou la restitution.
         /// </summary>
@@ -130,6 +108,24 @@ namespace Idara.API.Controllers
             var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
             if (admin == null) return Unauthorized();
 
+            // --- Step-up de sécurité : mot de passe SchoolAdmin (remplace l'OTP) ---
+            // Rate-limité par utilisateur (15 min) pour empêcher le brute-force du
+            // mot de passe via une session valide. Le mot de passe est réutilisable
+            // (pas single-use comme l'OTP) → vérifié AVANT la transaction wallet,
+            // pour échouer vite sans réserver de fonds. Clé PARTAGÉE avec
+            // /auth/verify-password (`pwdreauth:{userId}`) : un attaquant n'a pas
+            // deux budgets séparés contre le même secret (gate + retrait).
+            var rlKey = $"pwdreauth:{userId.Value}";
+            if (_cache.TryGetValue(rlKey, out int pwdAttempts) && pwdAttempts >= 5)
+                return StatusCode(429, ApiResponse<WithdrawalDto>.Fail(
+                    "Trop de tentatives. Réessayez dans quelques minutes."));
+            if (!BCrypt.Net.BCrypt.Verify(dto.Password, admin.PasswordHash))
+            {
+                _cache.Set(rlKey, pwdAttempts + 1, TimeSpan.FromMinutes(15));
+                return BadRequest(ApiResponse<WithdrawalDto>.Fail("Mot de passe incorrect."));
+            }
+            _cache.Remove(rlKey);
+
             // Réglages globaux (min retrait + frais payout %), éditables SuperAdmin.
             var platform = await _context.GetPlatformSettingsAsync(ct);
 
@@ -157,6 +153,9 @@ namespace Idara.API.Controllers
                 SepayAmountFcfa = sepayAmount,
                 Operator = operatorEnum,
                 Category = dto.Category,
+                CategoryLabel = dto.Category == TransferCategory.Other
+                    ? dto.CategoryLabel?.Trim()
+                    : null,
                 BeneficiaryId = beneficiaryId,
                 RecipientName = recipientName,
                 RecipientPhone = recipientPhone,
@@ -165,13 +164,12 @@ namespace Idara.API.Controllers
                 CreatedAt = DateTime.UtcNow
             };
 
-            // --- Verrou wallet + check solde + OTP + réservation, ATOMIQUEMENT ---
+            // --- Verrou wallet + check solde + réservation, ATOMIQUEMENT ---
             // SELECT ... FOR UPDATE sérialise tout mouvement concurrent sur ce
             // wallet (deux retraits simultanés, retrait vs crédit payin, vs
-            // webhook) : ni sur-débit ni lost update possibles. L'OTP est
-            // consommé SOUS ce verrou → deux requêtes au même code sont
-            // sérialisées (la 2e voit IsUsed=true). On COMMIT avant l'appel
-            // SenePay (anti-race webhook, même logique que le payin §1.4).
+            // webhook) : ni sur-débit ni lost update possibles. Le mot de passe
+            // (step-up) est déjà vérifié en amont. On COMMIT avant l'appel SenePay
+            // (anti-race webhook, même logique que le payin §1.4).
             await using (var tx = await _context.Database.BeginTransactionAsync(ct))
             {
                 var wallet = await _context.LockWalletAsync(schoolId.Value, ct);
@@ -188,11 +186,28 @@ namespace Idara.API.Controllers
                         $"Solde insuffisant. Disponible : {wallet.AvailableBalance} FCFA."));
                 }
 
-                var otpOk = await _otp.VerifyOtpAsync(admin.Email ?? string.Empty, dto.OtpCode, OtpPurpose.Withdrawal);
-                if (!otpOk)
+                // --- Idempotence anti double-dépense ---
+                // L'OTP à usage unique (consommé sous CE verrou) protégeait contre
+                // le rejeu : double-tap, deux onglets, OU retry réseau après un
+                // succès dont la réponse s'est perdue. Le mot de passe qui le
+                // remplace est RÉUTILISABLE → on bloque tout retrait identique
+                // (même école, même montant, même bénéficiaire) initié dans les
+                // 60 dernières s et non échoué. Sous le verrou FOR UPDATE, deux
+                // requêtes concurrentes sont sérialisées : la 2e voit la 1re
+                // committée (READ COMMITTED) → rejetée. Les retraits Failed
+                // (restitués) ne bloquent pas un nouvel essai légitime.
+                var dupSince = DateTime.UtcNow.AddSeconds(-60);
+                var isDuplicate = await _context.Withdrawals.AnyAsync(w =>
+                    w.SchoolId == schoolId.Value
+                    && w.AmountFcfa == dto.Amount
+                    && w.RecipientPhone == recipientPhone
+                    && w.Status != WithdrawalStatus.Failed
+                    && w.CreatedAt >= dupSince, ct);
+                if (isDuplicate)
                 {
                     await tx.RollbackAsync(ct);
-                    return BadRequest(ApiResponse<WithdrawalDto>.Fail("Code de validation invalide ou expiré."));
+                    return Conflict(ApiResponse<WithdrawalDto>.Fail(
+                        "Un retrait identique vient d'être initié. Vérifiez l'historique avant de réessayer."));
                 }
 
                 _context.Withdrawals.Add(withdrawal);
@@ -361,6 +376,7 @@ namespace Idara.API.Controllers
             NetReceivedFcfa = w.NetReceivedFcfa,
             Operator = w.Operator,
             Category = w.Category,
+            CategoryLabel = w.CategoryLabel,
             RecipientName = w.RecipientName,
             RecipientPhoneMasked = MaskPhone(w.RecipientPhone),
             Status = w.Status,
@@ -382,13 +398,6 @@ namespace Idara.API.Controllers
         {
             if (string.IsNullOrEmpty(phone) || phone.Length < 4) return "****";
             return phone[..2] + new string('*', phone.Length - 4) + phone[^2..];
-        }
-
-        private static string MaskEmail(string email)
-        {
-            var at = email.IndexOf('@');
-            if (at <= 1) return "***" + (at >= 0 ? email[at..] : "");
-            return email[0] + new string('*', Math.Min(at - 1, 6)) + email[at..];
         }
     }
 }

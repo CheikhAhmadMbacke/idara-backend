@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260629150456_WithdrawalCategoryLabel")]
+    partial class WithdrawalCategoryLabel
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1984,9 +1987,6 @@ namespace Idara.API.Migrations
                     b.Property<int>("AccountStatus")
                         .HasColumnType("integer");
 
-                    b.Property<bool>("CanLogin")
-                        .HasColumnType("boolean");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -2007,9 +2007,6 @@ namespace Idara.API.Migrations
 
                     b.Property<bool>("IsEmailVerified")
                         .HasColumnType("boolean");
-
-                    b.Property<string>("JobTitle")
-                        .HasColumnType("text");
 
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("timestamp with time zone");

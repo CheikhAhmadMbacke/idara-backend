@@ -60,12 +60,13 @@ namespace Idara.API.DTOs.Operations
         [Range(1, 114)] public int? FromSurah { get; set; }
         [Range(1, 286)] public int? FromAyah { get; set; }
         [Range(0, 200)] public int? FromWordIndex { get; set; }
-        [StringLength(200)] public string? FromWordText { get; set; }
+        // Peut contenir une PLAGE de mots (pas un mot unique) → limite élargie.
+        [StringLength(1000)] public string? FromWordText { get; set; }
 
         [Range(1, 114)] public int? ToSurah { get; set; }
         [Range(1, 286)] public int? ToAyah { get; set; }
         [Range(0, 200)] public int? ToWordIndex { get; set; }
-        [StringLength(200)] public string? ToWordText { get; set; }
+        [StringLength(1000)] public string? ToWordText { get; set; }
 
         public CoranPortionStatus Status { get; set; } = CoranPortionStatus.NotSet;
     }

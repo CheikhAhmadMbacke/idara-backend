@@ -15,5 +15,11 @@ namespace Idara.API.DTOs.Common
 
         /// <summary>Message prêt à l'emploi (même contenu que le SMS de bienvenue).</summary>
         public string Message { get; set; } = string.Empty;
+
+        /// <summary>
+        /// false = personnel « sans appli » : aucun identifiant à communiquer
+        /// (le frontend n'affiche pas le modal récap). Défaut true.
+        /// </summary>
+        public bool CanLogin { get; set; } = true;
     }
 }

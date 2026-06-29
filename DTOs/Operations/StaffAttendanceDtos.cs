@@ -10,6 +10,9 @@ namespace Idara.API.DTOs.Operations
         public string FullName { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
         public string? PhoneNumber { get; set; }
+
+        /// <summary>Fonction libre (« Cuisinière »…) pour distinguer le personnel sans appli.</summary>
+        public string? JobTitle { get; set; }
     }
 
     public class StaffAttendanceDto

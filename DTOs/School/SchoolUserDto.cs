@@ -17,6 +17,12 @@ namespace Idara.API.DTOs.School
         public AccountStatus AccountStatus { get; set; }
         public string? PhoneNumber { get; set; }
 
+        /// <summary>false = personnel « sans appli » (pointé seulement, pas de login).</summary>
+        public bool CanLogin { get; set; } = true;
+
+        /// <summary>Fonction libre (« Cuisinière », « Comptable »…). Null si absente.</summary>
+        public string? JobTitle { get; set; }
+
         /// <summary>Date de création du compte (= date d'invitation pour les
         /// comptes ajoutés par l'école). Sert à contextualiser une relance
         /// (« invité il y a 5 j, jamais connecté »).</summary>

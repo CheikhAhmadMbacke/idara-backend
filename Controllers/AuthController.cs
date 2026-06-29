@@ -232,6 +232,12 @@ namespace Idara.API.Controllers
             // Identifiants corrects → on remet le compteur à zéro.
             ResetAttempts(rlKey);
 
+            // Personnel « sans appli » (cuisinière, gardien…) : compte créé
+            // uniquement pour le pointage, jamais autorisé à se connecter.
+            if (!user.CanLogin)
+                return Unauthorized(ApiResponse<bool>.Fail(
+                    "Ce compte n'utilise pas l'application."));
+
             if (user.AccountStatus == AccountStatus.Suspended)
                 return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu. Contactez l'administration."));
 
@@ -276,6 +282,10 @@ namespace Idara.API.Controllers
                 .OrderBy(u => u.Id).FirstOrDefaultAsync();
             if (user == null) return Ok(generic);
 
+            // Personnel « sans appli » (CanLogin=false) : aucun accès à l'app →
+            // on n'envoie pas de code (réponse générique inchangée, anti-énumération).
+            if (!user.CanLogin) return Ok(generic);
+
             await _otpService.GenerateAndSendSmsOtpAsync(
                 phone, OtpPurpose.ResetPassword, user.Id, user.PreferredLanguage);
             RegisterAttempt(rlKey);
@@ -313,6 +323,10 @@ namespace Idara.API.Controllers
                 .OrderBy(u => u.Id).FirstOrDefaultAsync();
             if (user == null)
                 return BadRequest(ApiResponse<bool>.Fail("Compte introuvable."));
+            // Personnel « sans appli » : jamais autorisé à obtenir une session
+            // (même garde qu'à Login — ce chemin auto-login le contournait).
+            if (!user.CanLogin)
+                return Unauthorized(ApiResponse<bool>.Fail("Ce compte n'utilise pas l'application."));
             if (user.AccountStatus == AccountStatus.Suspended)
                 return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu. Contactez l'administration."));
 
@@ -356,6 +370,13 @@ namespace Idara.API.Controllers
             {
                 await _refreshTokens.RevokeAsync(newRefresh, "AccountSuspended");
                 return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu."));
+            }
+            // Personnel « sans appli » : le garde CanLogin doit valoir sur TOUS les
+            // chemins d'émission de token (login, set-password, refresh).
+            if (!user.CanLogin)
+            {
+                await _refreshTokens.RevokeAsync(newRefresh, "NoAppAccount");
+                return Unauthorized(ApiResponse<bool>.Fail("Ce compte n'utilise pas l'application."));
             }
 
             var newAccess = _jwtService.GenerateToken(user);
@@ -705,11 +726,18 @@ namespace Idara.API.Controllers
             // Un Guardian n'est pas attaché à une école (multi-école possible).
             int? newUserSchoolId = request.Function == UserRoles.Guardian ? null : currentUser.SchoolId;
 
+            // Personnel « sans appli » : pas de connexion → on n'envoie aucun code
+            // et le mot de passe est aléatoire (jamais utilisable).
+            var canLogin = request.CanLogin || request.Function == UserRoles.Guardian
+                || request.Function == UserRoles.SchoolViewer;
+
             var newUser = new User
             {
                 Email = email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(code),
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(canLogin ? code : Guid.NewGuid().ToString("N")),
                 Role = request.Function,
+                CanLogin = canLogin,
+                JobTitle = string.IsNullOrWhiteSpace(request.JobTitle) ? null : request.JobTitle.Trim(),
                 IsEmailVerified = true,
                 AccountStatus = invitedStatus,
                 SchoolId = newUserSchoolId,
@@ -733,6 +761,17 @@ namespace Idara.API.Controllers
                     IsPrimaryGuardian = request.IsPrimaryGuardian
                 });
                 await _context.SaveChangesAsync();
+            }
+
+            // Compte sans appli : aucun identifiant à communiquer, aucun SMS.
+            if (!canLogin)
+            {
+                return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
+                {
+                    FullName = request.FullName,
+                    Phone = phone,
+                    CanLogin = false,
+                }, "Personnel ajouté (sans accès à l'application)."));
             }
 
             // Message de bienvenue (numéro + code à 6 chiffres = mot de passe).
@@ -761,6 +800,7 @@ namespace Idara.API.Controllers
                 Phone = phone,
                 Code = code,
                 Message = messageText,
+                CanLogin = true,
             }, "Utilisateur ajouté."));
         }
 
@@ -852,6 +892,7 @@ namespace Idara.API.Controllers
             UserRoles.SchoolStaff => ("Personnel", "موظف"),
             UserRoles.Guardian => ("Responsable", "ولي الأمر"),
             UserRoles.Surveillant => ("Surveillant", "مراقب"),
+            UserRoles.SchoolViewer => ("Observateur", "مُطّلِع"),
             _ => (role, role)
         };
 
@@ -880,6 +921,39 @@ namespace Idara.API.Controllers
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
             await _context.SaveChangesAsync();
             return Ok(ApiResponse<bool>.Ok(true, "Mot de passe modifié avec succès."));
+        }
+
+        /// <summary>
+        /// Vérifie le mot de passe de l'utilisateur connecté (re-auth légère).
+        /// Utilisé comme verrou d'accès à l'espace paiement et comme step-up au
+        /// retrait (en remplacement de l'OTP). Rate-limité par utilisateur pour
+        /// empêcher le brute-force du mot de passe sur une session valide.
+        /// </summary>
+        [HttpPost("verify-password")]
+        [Authorize]
+        public async Task<IActionResult> VerifyPassword([FromBody] VerifyPasswordRequest request)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            // Clé PARTAGÉE avec le step-up retrait (SchoolWalletController) : un même
+            // budget anti brute-force du mot de passe couvre gate + retrait.
+            var rlKey = $"pwdreauth:{userId.Value}";
+            if (IsRateLimited(rlKey, 5))
+                return StatusCode(429, ApiResponse<bool>.Fail(
+                    "Trop de tentatives. Réessayez dans quelques minutes."));
+
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (user == null) return Unauthorized();
+
+            if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+            {
+                RegisterAttempt(rlKey);
+                return BadRequest(ApiResponse<bool>.Fail("Mot de passe incorrect."));
+            }
+
+            ResetAttempts(rlKey);
+            return Ok(ApiResponse<bool>.Ok(true));
         }
 
         /// <summary>

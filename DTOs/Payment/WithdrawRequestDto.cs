@@ -27,6 +27,10 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Nature du transfert (retrait, salaire, loyer…).</summary>
         public TransferCategory Category { get; set; } = TransferCategory.Withdrawal;
 
+        /// <summary>Libellé libre obligatoire quand Category == Other (sinon ignoré).</summary>
+        [StringLength(120, ErrorMessage = "La catégorie ne doit pas dépasser 120 caractères.")]
+        public string? CategoryLabel { get; set; }
+
         /// <summary>Bénéficiaire du carnet. Null = saisie manuelle ponctuelle.</summary>
         public int? BeneficiaryId { get; set; }
 
@@ -41,12 +45,22 @@ namespace Idara.API.DTOs.Payment
         /// <summary>"wave" ou "orange".</summary>
         public string? Operator { get; set; }
 
-        [Required(ErrorMessage = "Le code OTP est obligatoire.")]
-        [RegularExpression(@"^\d{6}$", ErrorMessage = "Le code OTP doit contenir 6 chiffres.")]
-        public string OtpCode { get; set; } = string.Empty;
+        /// <summary>
+        /// Mot de passe du SchoolAdmin — step-up de sécurité au retrait (remplace
+        /// l'OTP). Vérifié côté serveur (BCrypt). Saisi une fois au verrou de
+        /// l'écran paiement puis réutilisé.
+        /// </summary>
+        [Required(ErrorMessage = "Le mot de passe est obligatoire.")]
+        public string Password { get; set; } = string.Empty;
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
+            // Catégorie « Autre » → un libellé libre est obligatoire.
+            if (Category == TransferCategory.Other &&
+                string.IsNullOrWhiteSpace(CategoryLabel))
+                yield return new ValidationResult(
+                    "Précisez la catégorie.", new[] { nameof(CategoryLabel) });
+
             // En mode saisie ponctuelle (pas de bénéficiaire du carnet), les
             // coordonnées manuelles deviennent obligatoires et validées.
             if (BeneficiaryId == null)

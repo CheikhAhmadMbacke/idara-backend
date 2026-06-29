@@ -15,6 +15,8 @@ namespace Idara.API.DTOs.Payment
         public long NetReceivedFcfa { get; set; }
         public PaymentOperator Operator { get; set; }
         public TransferCategory Category { get; set; }
+        /// <summary>Libellé libre quand Category == Other (sinon null).</summary>
+        public string? CategoryLabel { get; set; }
         public string RecipientName { get; set; } = string.Empty;
         public string RecipientPhoneMasked { get; set; } = string.Empty;
         public WithdrawalStatus Status { get; set; }

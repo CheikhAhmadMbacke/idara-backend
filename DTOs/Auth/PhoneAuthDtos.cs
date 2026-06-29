@@ -30,6 +30,17 @@ namespace Idara.API.DTOs.Auth
     }
 
     /// <summary>
+    /// Vérification du mot de passe de l'utilisateur connecté (re-authentification
+    /// légère). Sert de verrou à l'écran « Vue d'ensemble Paiement » et de
+    /// step-up au retrait (remplace l'OTP retrait).
+    /// </summary>
+    public class VerifyPasswordRequest
+    {
+        [Required(ErrorMessage = "Le mot de passe est requis.")]
+        public string Password { get; set; } = string.Empty;
+    }
+
+    /// <summary>
     /// Changement de mot de passe par un utilisateur connecté (vérifie l'ancien).
     /// </summary>
     public class ChangePasswordRequest

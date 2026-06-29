@@ -44,7 +44,8 @@ namespace Idara.API.Controllers
                     Id = u.Id,
                     FullName = u.FullName ?? string.Empty,
                     Role = u.Role,
-                    PhoneNumber = u.PhoneNumber
+                    PhoneNumber = u.PhoneNumber,
+                    JobTitle = u.JobTitle
                 })
                 .ToListAsync(ct);
 

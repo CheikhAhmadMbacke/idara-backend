@@ -339,6 +339,8 @@ namespace Idara.API.Controllers
                     Role = u.Role,
                     AccountStatus = u.AccountStatus,
                     PhoneNumber = u.PhoneNumber,
+                    CanLogin = u.CanLogin,
+                    JobTitle = u.JobTitle,
                     CreatedAt = u.CreatedAt,
                     LastLoginAt = u.LastLoginAt
                 })

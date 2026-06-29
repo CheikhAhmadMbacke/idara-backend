@@ -26,8 +26,25 @@ namespace Idara.API.Services
             {
                 new(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new(ClaimTypes.Email, user.Email ?? string.Empty),
+                // Le rôle réel reste le 1er claim → User.GetRole() le renvoie.
                 new(ClaimTypes.Role, user.Role)
             };
+
+            // Observateur (lecture seule) : on lui donne EN PLUS les rôles de
+            // lecture du directeur (SchoolAdmin + SchoolStaff) pour qu'il passe
+            // tous les [Authorize(Roles=...)] existants SANS toucher aux ~88
+            // attributs. Les écritures sont bloquées séparément par
+            // ReadOnlyRoleMiddleware. Ce dernier s'appuie sur le claim DÉDIÉ
+            // "readonly" (et non sur l'ordre des claims de rôle, qui n'est pas
+            // contractuellement garanti) → détection fail-CLOSED et robuste à
+            // tout réordonnancement futur des claims.
+            if (user.Role == Constants.UserRoles.SchoolViewer)
+            {
+                claims.Add(new Claim("readonly", "true"));
+                claims.Add(new Claim(ClaimTypes.Role, Constants.UserRoles.SchoolAdmin));
+                claims.Add(new Claim(ClaimTypes.Role, Constants.UserRoles.SchoolStaff));
+            }
+
             if (user.SchoolId.HasValue)
                 claims.Add(new Claim("SchoolId", user.SchoolId.Value.ToString()));
 

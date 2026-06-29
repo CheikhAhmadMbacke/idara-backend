@@ -18,9 +18,20 @@ namespace Idara.API.DTOs.Auth
         public string FullName { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "La fonction est requise.")]
-        [RegularExpression("^(Teacher|SchoolStaff|Guardian|Surveillant)$",
-            ErrorMessage = "Fonction invalide. Valeurs autorisées : Teacher, SchoolStaff, Guardian, Surveillant.")]
+        [RegularExpression("^(Teacher|SchoolStaff|Guardian|Surveillant|SchoolViewer)$",
+            ErrorMessage = "Fonction invalide.")]
         public string Function { get; set; } = string.Empty;
+
+        /// <summary>
+        /// false = personnel « sans appli » (cuisinière, gardien…) : compte créé
+        /// pour le pointage uniquement, pas de login ni de SMS/code. Défaut true.
+        /// Réservé aux rôles de personnel pointable (pas Guardian ni SchoolViewer).
+        /// </summary>
+        public bool CanLogin { get; set; } = true;
+
+        /// <summary>Fonction libre affichée (« Cuisinière », « Comptable »…). Optionnel.</summary>
+        [StringLength(80)]
+        public string? JobTitle { get; set; }
 
         // ----- Champs spécifiques à Guardian -----
 
@@ -42,6 +53,16 @@ namespace Idara.API.DTOs.Auth
                 yield return new ValidationResult(
                     "Pour inviter un Guardian, vous devez fournir le 'StudentId' de l'élève à lui rattacher.",
                     new[] { nameof(StudentId) });
+            }
+
+            // Un compte « sans appli » n'a de sens que pour le personnel pointable
+            // (il sert au pointage). Un parent et un observateur DOIVENT se
+            // connecter → CanLogin=false leur est interdit.
+            if (!CanLogin && (Function == "Guardian" || Function == "SchoolViewer"))
+            {
+                yield return new ValidationResult(
+                    "Un compte sans accès à l'application n'est possible que pour le personnel.",
+                    new[] { nameof(CanLogin) });
             }
         }
     }

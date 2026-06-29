@@ -269,6 +269,10 @@ app.UseAuthorization();
 // que PlatformSettings.SubscriptionEnforcementEnabled est OFF (défaut).
 app.UseMiddleware<Idara.API.Common.Middleware.SubscriptionEnforcementMiddleware>();
 
+// Lecture seule du rôle Observateur (SchoolViewer) : bloque toute écriture (403).
+// APRÈS l'auth (besoin du rôle), garde-fou unique de ce rôle.
+app.UseMiddleware<Idara.API.Common.Middleware.ReadOnlyRoleMiddleware>();
+
 app.MapControllers();
 
 app.Run();

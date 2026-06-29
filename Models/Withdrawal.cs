@@ -43,6 +43,12 @@ namespace Idara.API.Models
         public TransferCategory Category { get; set; } = TransferCategory.Withdrawal;
 
         /// <summary>
+        /// Libellé libre saisi quand <see cref="Category"/> == Other (sinon null).
+        /// Permet à l'école de nommer une nature de transfert hors liste fixe.
+        /// </summary>
+        public string? CategoryLabel { get; set; }
+
+        /// <summary>
         /// Bénéficiaire du carnet utilisé (null = saisie ponctuelle). On snapshote
         /// quand même Name/Phone ci-dessous pour figer l'historique même si le
         /// bénéficiaire est modifié/archivé ensuite.
