@@ -219,15 +219,16 @@ namespace Idara.API.Services
             {
                 var amount = (long)Math.Round(p.Amount, MidpointRounding.AwayFromZero);
                 var net = (long)Math.Round(p.NetAmount, MidpointRounding.AwayFromZero);
+                // Impact RÉEL sur la réserve (frais inclus) = montant à imputer en
+                // réconciliation. amount_debited si fourni par SenePay, sinon amount+fees.
+                var reserveDebit = (long)Math.Round(p.ReserveDebit, MidpointRounding.AwayFromZero);
 
-                // Différenciation par PRÉFIXE du disbursement_id (source de vérité
-                // fournie par SenePay) : `DISB_...` = payout initié par l'API (Idara) ;
-                // `SENEPAY_PAYOUT_...` = retrait effectué depuis le dashboard marchand.
-                // ⚠️ Actuellement `GET /api/v1/payouts` ne renvoie QUE les `DISB_`
-                // (les dashboard sont absents de l'API) — cette classification est
-                // donc prête pour le jour où SenePay les exposera.
-                var isDashboard = p.DisbursementId != null
-                    && p.DisbursementId.StartsWith("SENEPAY_PAYOUT_", StringComparison.OrdinalIgnoreCase);
+                // Différenciation de la source (cf. SenePayPayoutListItem.IsDashboard) :
+                // champ explicite `source` en priorité, repli sur le préfixe du
+                // disbursement_id (`SENEPAY_PAYOUT_` = dashboard / `DISB_` = API).
+                // ⚠️ Aujourd'hui `GET /api/v1/payouts` ne renvoie QUE les payouts API ;
+                // prêt pour le jour où SenePay exposera les dashboard.
+                var isDashboard = p.IsDashboard;
 
                 if (!isDashboard)
                 {
@@ -260,21 +261,22 @@ namespace Idara.API.Services
                     // → traité comme orphelin par prudence (à consigner).
                 }
 
-                // Orphelin = retrait dashboard (SENEPAY_PAYOUT_) OU payout API sans match Idara.
+                // Orphelin = retrait dashboard OU payout API sans match Idara.
+                // Montant imputé = impact réserve (frais inclus).
                 var already = p.DisbursementId != null && recordedRefs.Contains(p.DisbursementId);
                 result.Untracked.Add(new UntrackedPayoutDto
                 {
                     DisbursementId = p.DisbursementId,
                     ExternalId = p.ExternalId,
-                    AmountFcfa = amount,
+                    AmountFcfa = reserveDebit,
                     NetAmountFcfa = net,
                     RecipientPhone = p.RecipientPhone,
                     Operator = p.Operator,
                     CompletedAt = p.CompletedAt,
                     AlreadyRecorded = already
                 });
-                if (already) result.TotalAlreadyRecordedFcfa += amount;
-                else result.TotalToRecordFcfa += amount;
+                if (already) result.TotalAlreadyRecordedFcfa += reserveDebit;
+                else result.TotalToRecordFcfa += reserveDebit;
             }
 
             _logger.LogInformation(
