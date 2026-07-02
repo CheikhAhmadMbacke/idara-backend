@@ -39,6 +39,9 @@ namespace Idara.API.Services
             if (await _context.StudentGuardians.AnyAsync(x => x.GuardianId == userId, ct)) return true;
             if (await _context.Payments.AnyAsync(x => x.GuardianId == userId, ct)) return true;
 
+            // Donateur : dons émis (FK Restrict Payment.DonorId → anonymiser, pas hard-delete).
+            if (await _context.Payments.AnyAsync(x => x.DonorId == userId, ct)) return true;
+
             // Teacher : affectations + production pédagogique.
             if (await _context.ClassSubjectTeachers.AnyAsync(x => x.TeacherId == userId, ct)) return true;
             if (await _context.DailyJournalEntries.AnyAsync(x => x.TeacherId == userId || x.DeletedById == userId, ct)) return true;

@@ -20,6 +20,14 @@ namespace Idara.API.Models
 
         public WalletTransactionType Type { get; set; }
 
+        /// <summary>
+        /// Origine/nature dénormalisée (paiement / don / topup / abo / retrait /
+        /// ajustement) — pour le BADGE d'affichage dans l'historique du wallet
+        /// (différencier un don d'un paiement parent). Aucun impact financier.
+        /// Défaut Payment = rétro-compatible.
+        /// </summary>
+        public WalletSource Source { get; set; } = WalletSource.Payment;
+
         public long AmountFcfa { get; set; }
         public long BalanceAfter { get; set; }
 

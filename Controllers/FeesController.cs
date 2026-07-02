@@ -632,6 +632,7 @@ namespace Idara.API.Controllers
                 {
                     t.Id,
                     t.Type,
+                    t.Source,
                     t.AmountFcfa,
                     t.BalanceAfter,
                     t.RelatedEntity,
@@ -646,6 +647,11 @@ namespace Idara.API.Controllers
                 wallet.SchoolId,
                 wallet.AvailableBalance,
                 wallet.PendingBalance,
+                // Deux poches du solde disponible (remarque produit) :
+                //  - Solde don   = DonationBalanceFcfa
+                //  - Solde paiement = Available − Don (dérivé)
+                DonationBalance = wallet.DonationBalanceFcfa,
+                FeeBalance = wallet.AvailableBalance - wallet.DonationBalanceFcfa,
                 wallet.TotalCreditedLifetime,
                 wallet.TotalWithdrawnLifetime,
                 wallet.UpdatedAt,
@@ -696,6 +702,10 @@ namespace Idara.API.Controllers
                     StudentNumber = p.Student != null ? p.Student.StudentNumber : null,
                     GuardianId = p.GuardianId,
                     InvoiceId = p.InvoiceId,
+                    Purpose = p.Purpose,
+                    DonorId = p.DonorId,
+                    DonorName = p.Donor != null ? p.Donor.FullName : null,
+                    DonorType = p.Donor != null ? p.Donor.DonorType : null,
                     AmountFcfa = p.AmountFcfa,
                     FeesFcfa = p.FeesFcfa,
                     NetCreditedFcfa = p.NetCreditedFcfa,

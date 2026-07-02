@@ -27,6 +27,12 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Nature du transfert (retrait, salaire, loyer…).</summary>
         public TransferCategory Category { get; set; } = TransferCategory.Withdrawal;
 
+        /// <summary>
+        /// Poche du wallet dans laquelle puiser (le daara choisit) : Total (défaut),
+        /// Fee (solde paiement uniquement) ou Donation (solde don uniquement).
+        /// </summary>
+        public WithdrawalSource Source { get; set; } = WithdrawalSource.Total;
+
         /// <summary>Libellé libre obligatoire quand Category == Other (sinon ignoré).</summary>
         [StringLength(120, ErrorMessage = "La catégorie ne doit pas dépasser 120 caractères.")]
         public string? CategoryLabel { get; set; }

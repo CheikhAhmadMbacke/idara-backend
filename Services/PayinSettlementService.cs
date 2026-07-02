@@ -144,17 +144,36 @@ namespace Idara.API.Services
 
             wallet.AvailableBalance += amountToCredit;
             wallet.TotalCreditedLifetime += amountToCredit;
+
+            // Poche « Don » : un don crédite Available ET DonationBalance (l'école
+            // pourra ensuite choisir de retirer sur cette poche). Invariant préservé :
+            // DonationBalance <= Available. Un paiement / topup ne touche pas la poche.
+            if (payment.Purpose == PaymentPurpose.Donation)
+                wallet.DonationBalanceFcfa += amountToCredit;
+
             wallet.UpdatedAt = DateTime.UtcNow;
+
+            // Source dénormalisée (badge affiché dans l'historique wallet — un don
+            // se distingue d'un paiement parent). Aucun impact financier.
+            var (source, note) = payment.Purpose switch
+            {
+                PaymentPurpose.Donation => (WalletSource.Donation, $"Don {payment.SenePayTransactionId}"),
+                PaymentPurpose.WalletTopup => (WalletSource.Topup, $"Recharge {payment.SenePayTransactionId}"),
+                _ => (WalletSource.Payment, $"Payment {payment.SenePayTransactionId}")
+            };
 
             _context.WalletTransactions.Add(new WalletTransaction
             {
                 SchoolId = payment.SchoolId,
                 Type = WalletTransactionType.Credit,
+                Source = source,
                 AmountFcfa = amountToCredit,
                 BalanceAfter = wallet.AvailableBalance,
-                RelatedEntity = WalletRelatedEntity.Payment,
+                RelatedEntity = payment.Purpose == PaymentPurpose.WalletTopup
+                    ? WalletRelatedEntity.Topup
+                    : WalletRelatedEntity.Payment,
                 RelatedId = payment.Id,
-                Note = $"Payment {payment.SenePayTransactionId}",
+                Note = note,
                 OccurredAt = DateTime.UtcNow
             });
 
@@ -182,20 +201,23 @@ namespace Idara.API.Services
             // Re-lecture fraîche du Payment complété.
             var payment = await _context.Payments
                 .Include(p => p.Student)
+                .Include(p => p.Donor)
                 .FirstOrDefaultAsync(p => p.Id == paymentId, ct);
             if (payment == null || payment.Status != PaymentStatus.Completed)
                 return;
 
+            var school0 = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
+
             // -------- Reçu PDF (best-effort) --------
             try
             {
-                var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
                 var invoice = payment.InvoiceId.HasValue
                     ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == payment.InvoiceId.Value, ct)
                     : null;
-                if (school != null)
+                if (school0 != null)
                 {
-                    var pdfPath = await _receiptPdf.GenerateAsync(payment, school, payment.Student, invoice);
+                    var pdfPath = await _receiptPdf.GenerateAsync(
+                        payment, school0, payment.Student, invoice, payment.Donor);
                     await _context.Payments
                         .Where(p => p.Id == payment.Id)
                         .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, pdfPath), ct);
@@ -209,7 +231,64 @@ namespace Idara.API.Services
             }
 
             var shownAmount = payment.TargetAmountFcfa > 0 ? payment.TargetAmountFcfa : payment.AmountFcfa;
-            var isTopup = payment.StudentId == null && payment.GuardianId == null;
+            var isTopup = payment.Purpose == PaymentPurpose.WalletTopup;
+
+            // ==================== DON (push uniquement, pas de SMS) ====================
+            if (payment.Purpose == PaymentPurpose.Donation)
+            {
+                var donorName = string.IsNullOrWhiteSpace(payment.Donor?.FullName)
+                    ? "un donateur"
+                    : payment.Donor!.FullName!.Trim();
+                var schoolName = school0?.Name ?? "un daara";
+
+                // Push à l'ÉCOLE (admin + personnel) : « don reçu de X ».
+                try
+                {
+                    var schoolUsers = await _context.Users
+                        .Where(u => u.SchoolId == payment.SchoolId && !u.IsDeleted
+                                    && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                        .Select(u => new { u.Id, u.PreferredLanguage })
+                        .ToListAsync(ct);
+                    var msg = NotificationTemplates.DonationReceivedSchool(donorName, shownAmount);
+                    foreach (var su in schoolUsers)
+                        await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                            UserId: su.Id,
+                            PreferredLanguage: su.PreferredLanguage ?? "fr",
+                            Message: msg,
+                            TemplateCode: "DONATION_RECEIVED_SCHOOL",
+                            RelatedEntityId: payment.Id,
+                            PushRoute: "/payments/overview"));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[payin-settle] Échec push don école Payment.Id={Id} — pas bloquant", payment.Id);
+                }
+
+                // Push au DONATEUR : remerciement + reçu dispo.
+                if (payment.DonorId.HasValue)
+                {
+                    try
+                    {
+                        await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                            UserId: payment.DonorId.Value,
+                            PreferredLanguage: payment.Donor?.PreferredLanguage ?? "fr",
+                            Message: NotificationTemplates.DonationThanks(shownAmount, schoolName),
+                            TemplateCode: "DONATION_THANKS",
+                            RelatedEntityId: payment.Id,
+                            PushRoute: "/donor/donations"));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "[payin-settle] Échec push remerciement donateur Payment.Id={Id} — pas bloquant", payment.Id);
+                    }
+                }
+
+                // Un don crédite le wallet → peut débloquer un abonnement en impayé.
+                await RetrySubscriptionAsync(payment.SchoolId, payment.Id);
+                return;
+            }
 
             // -------- SMS « paiement reçu » au responsable (best-effort) --------
             if (payment.GuardianId.HasValue)
@@ -283,26 +362,33 @@ namespace Idara.API.Services
             }
 
             // -------- Retry abonnement plateforme (scope DI séparé, best-effort) --------
-            if (payment.SchoolId > 0)
+            await RetrySubscriptionAsync(payment.SchoolId, payment.Id);
+        }
+
+        /// <summary>
+        /// Re-tente le prélèvement de l'abonnement de l'école après un crédit wallet
+        /// (paiement, topup OU don) — un crédit peut débloquer une école en impayé.
+        /// Scope DI séparé (DbContext frais, ne pollue pas le change tracker) et
+        /// CancellationToken.None (pas coupé si SenePay abandonne la connexion).
+        /// Best-effort : ne lève jamais.
+        /// </summary>
+        private async Task RetrySubscriptionAsync(int schoolId, int paymentId)
+        {
+            if (schoolId <= 0) return;
+            try
             {
-                try
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    var billing = scope.ServiceProvider.GetRequiredService<ISubscriptionBillingService>();
-                    var outcome = await billing.RetryForSchoolAsync(
-                        payment.SchoolId, DateTime.UtcNow, CancellationToken.None);
-                    if (outcome == BillingOutcome.Paid)
-                    {
-                        _logger.LogInformation(
-                            "[payin-settle] Abonnement École {SchoolId} débloqué après crédit (Payment {Id})",
-                            payment.SchoolId, payment.Id);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[payin-settle] Retry abonnement École {SchoolId} échoué — pas bloquant", payment.SchoolId);
-                }
+                using var scope = _scopeFactory.CreateScope();
+                var billing = scope.ServiceProvider.GetRequiredService<ISubscriptionBillingService>();
+                var outcome = await billing.RetryForSchoolAsync(schoolId, DateTime.UtcNow, CancellationToken.None);
+                if (outcome == BillingOutcome.Paid)
+                    _logger.LogInformation(
+                        "[payin-settle] Abonnement École {SchoolId} débloqué après crédit (Payment {Id})",
+                        schoolId, paymentId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[payin-settle] Retry abonnement École {SchoolId} échoué — pas bloquant", schoolId);
             }
         }
     }

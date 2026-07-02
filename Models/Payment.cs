@@ -30,6 +30,23 @@ namespace Idara.API.Models
         public int? InvoiceId { get; set; }
         public Invoice? Invoice { get; set; }
 
+        /// <summary>
+        /// Nature métier du paiement (mensualité / topup / don). Explicite depuis
+        /// l'ajout du module Donateur : le webhook payin ne DEVINE plus le topup
+        /// d'après les champs null (un don a AUSSI Student/Guardian null, il
+        /// collisionnait). Défaut SchoolFee = rétro-compatible.
+        /// </summary>
+        public PaymentPurpose Purpose { get; set; } = PaymentPurpose.SchoolFee;
+
+        /// <summary>
+        /// DONATEUR à l'origine du paiement quand <see cref="Purpose"/> == Donation
+        /// (null sinon). Pointe vers un <c>User</c> de rôle Donor. Le don crédite
+        /// la poche « Don » du wallet école ; l'identité (nom + type) est visible
+        /// par le daara.
+        /// </summary>
+        public int? DonorId { get; set; }
+        public User? Donor { get; set; }
+
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }

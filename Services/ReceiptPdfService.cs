@@ -34,13 +34,16 @@ namespace Idara.API.Services
             _logger = logger;
         }
 
-        public async Task<string> GenerateAsync(Payment payment, School school, Student? student, Invoice? invoice)
+        public async Task<string> GenerateAsync(
+            Payment payment, School school, Student? student, Invoice? invoice, User? donor = null)
         {
             var folder = Path.Combine(_env.WebRootPath, "uploads", "receipts");
             Directory.CreateDirectory(folder);
 
             var fileName = $"receipt-{payment.Id}.pdf";
             var fullPath = Path.Combine(folder, fileName);
+
+            var isDonation = payment.Purpose == PaymentPurpose.Donation;
 
             try
             {
@@ -53,8 +56,8 @@ namespace Idara.API.Services
                         page.PageColor(Colors.White);
                         page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
 
-                        page.Header().Element(c => ComposeHeader(c, school, payment));
-                        page.Content().Element(c => ComposeContent(c, payment, student, invoice));
+                        page.Header().Element(c => ComposeHeader(c, school, payment, isDonation));
+                        page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation));
                         page.Footer().Element(ComposeFooter);
                     });
                 });
@@ -72,7 +75,7 @@ namespace Idara.API.Services
 
         // ===== Composition QuestPDF =====
 
-        private static void ComposeHeader(IContainer container, School school, Payment payment)
+        private static void ComposeHeader(IContainer container, School school, Payment payment, bool isDonation)
         {
             container.Column(col =>
             {
@@ -88,7 +91,8 @@ namespace Idara.API.Services
                     });
                     row.ConstantItem(150).AlignRight().Column(c =>
                     {
-                        c.Item().AlignRight().Text("REÇU DE PAIEMENT").Bold().FontSize(11).FontColor(PrimaryHex);
+                        c.Item().AlignRight().Text(isDonation ? "REÇU DE DON" : "REÇU DE PAIEMENT")
+                            .Bold().FontSize(11).FontColor(PrimaryHex);
                         c.Item().AlignRight().Text($"N° {payment.Id:D6}").FontSize(9).FontColor(TextSecondary);
                         var paidAt = payment.PaidAt ?? payment.InitiatedAt;
                         c.Item().AlignRight().Text($"Du {paidAt:dd/MM/yyyy HH:mm}").FontSize(8).FontColor(TextSecondary);
@@ -99,14 +103,33 @@ namespace Idara.API.Services
             });
         }
 
-        private static void ComposeContent(IContainer container, Payment payment, Student? student, Invoice? invoice)
+        private static void ComposeContent(
+            IContainer container, Payment payment, Student? student, Invoice? invoice, User? donor, bool isDonation)
         {
             container.Column(col =>
             {
-                // Bloc élève / objet du paiement
+                // Bloc élève / objet du paiement — ou bloc DONATEUR pour un don.
                 col.Item().Background(SurfaceVariant).Padding(10).Column(c =>
                 {
-                    if (student != null)
+                    if (isDonation)
+                    {
+                        c.Item().Text(t =>
+                        {
+                            t.Span("Donateur : ").SemiBold().FontColor(TextSecondary);
+                            t.Span(donor?.FullName ?? "Donateur").Bold();
+                        });
+                        c.Item().Text(t =>
+                        {
+                            t.Span("Type : ").SemiBold().FontColor(TextSecondary);
+                            t.Span(donor?.DonorType == DonorType.Organization ? "Organisation" : "Particulier");
+                        });
+                        c.Item().Text(t =>
+                        {
+                            t.Span("Objet : ").SemiBold().FontColor(TextSecondary);
+                            t.Span("Don au daara");
+                        });
+                    }
+                    else if (student != null)
                     {
                         c.Item().Text(t =>
                         {
@@ -122,24 +145,28 @@ namespace Idara.API.Services
                             });
                         }
                     }
-                    if (invoice != null)
+                    // Objet du paiement (hors don — le bloc don ci-dessus est complet).
+                    if (!isDonation)
                     {
-                        c.Item().Text(t =>
+                        if (invoice != null)
                         {
-                            t.Span("Période facturée : ").SemiBold().FontColor(TextSecondary);
-                            t.Span($"{invoice.PeriodStart:dd/MM/yyyy} → {invoice.PeriodEnd:dd/MM/yyyy}");
-                        });
-                    }
-                    else
-                    {
-                        c.Item().Text(t =>
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Période facturée : ").SemiBold().FontColor(TextSecondary);
+                                t.Span($"{invoice.PeriodStart:dd/MM/yyyy} → {invoice.PeriodEnd:dd/MM/yyyy}");
+                            });
+                        }
+                        else
                         {
-                            t.Span("Type : ").SemiBold().FontColor(TextSecondary);
-                            // Topup wallet école = pas d'élève + pas de facture.
-                            t.Span(student == null
-                                ? "Recharge du wallet école"
-                                : "Paiement libre");
-                        });
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Type : ").SemiBold().FontColor(TextSecondary);
+                                // Topup wallet école = pas d'élève + pas de facture.
+                                t.Span(student == null
+                                    ? "Recharge du wallet école"
+                                    : "Paiement libre");
+                            });
+                        }
                     }
                 });
 

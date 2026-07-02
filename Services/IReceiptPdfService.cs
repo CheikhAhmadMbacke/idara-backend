@@ -8,7 +8,10 @@ namespace Idara.API.Services
         /// Génère le reçu PDF pour un paiement complété et retourne le chemin
         /// relatif servi par nginx (ex: <c>/uploads/receipts/receipt-42.pdf</c>).
         /// Idempotent : un appel sur un Payment déjà généré écrase le fichier.
+        /// <paramref name="donor"/> est fourni pour un DON (Purpose=Donation) →
+        /// en-tête « Reçu de don » + bloc donateur (nom + Particulier/Organisation).
         /// </summary>
-        Task<string> GenerateAsync(Payment payment, School school, Student? student, Invoice? invoice);
+        Task<string> GenerateAsync(
+            Payment payment, School school, Student? student, Invoice? invoice, User? donor = null);
     }
 }

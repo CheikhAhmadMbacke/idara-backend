@@ -113,6 +113,17 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : votre effectif ({effectif} eleves) depasse votre ancien plan. Vous etes passe au plan {nouveauPlan} ({montantFcfa} FCFA).",
             Ar: $"Idara: عدد تلاميذكم ({effectif}) تجاوز خطتكم السابقة. تم ترقيتكم إلى خطة {nouveauPlan} ({montantFcfa} FCFA).");
 
+        // Don reçu côté école (push) : prévient l'admin + le personnel. Le nom du
+        // donateur est fourni déjà formaté par l'appelant (identité toujours visible).
+        public static BilingualMessage DonationReceivedSchool(string donateur, long montantFcfa) => new(
+            Fr: $"Idara : don de {montantFcfa} FCFA recu de {donateur}. Votre solde a ete credite.",
+            Ar: $"Idara: تبرع بمبلغ {montantFcfa} FCFA من {donateur}. تم إضافة المبلغ إلى رصيدك.");
+
+        // Remerciement au donateur (push) après confirmation de son don.
+        public static BilingualMessage DonationThanks(long montantFcfa, string ecole) => new(
+            Fr: $"Idara : merci pour votre don de {montantFcfa} FCFA a {ecole}. Votre recu est disponible dans l'application.",
+            Ar: $"Idara: شكرا على تبرعك بمبلغ {montantFcfa} FCFA لفائدة {ecole}. الإيصال متاح في التطبيق.");
+
         // Retrait/transfert effectué : prévient l'admin uniquement.
         public static BilingualMessage WithdrawalDone(long montantFcfa) => new(
             Fr: $"Idara : votre retrait de {montantFcfa} FCFA a ete effectue avec succes.",

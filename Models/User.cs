@@ -34,6 +34,14 @@ namespace Idara.API.Models
         /// </summary>
         public string? JobTitle { get; set; }
 
+        /// <summary>
+        /// Nature du compte DONATEUR (particulier vs organisation/Dahira/fondation),
+        /// choisie à l'auto-inscription. NULL pour tous les autres rôles — n'a de
+        /// sens que quand <c>Role == UserRoles.Donor</c>. Affiché au daara sur
+        /// chaque don (chip Particulier / Organisation).
+        /// </summary>
+        public DonorType? DonorType { get; set; }
+
         public bool IsEmailVerified { get; set; } = true;
         public AccountStatus AccountStatus { get; set; } = AccountStatus.Inactive;
         public int? SchoolId { get; set; }

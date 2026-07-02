@@ -256,13 +256,14 @@
     function renderSummary(data) {
       const rows = [
         {
-          label: data.isTopup ? 'Montant rechargé' : 'Montant payé',
+          label: data.isTopup ? 'Montant rechargé' : data.isDonation ? 'Montant du don' : 'Montant payé',
           value: fmt(data.amountChargedFcfa) + ' FCFA',
           big: true,
         },
       ];
       if (data.studentName) rows.push({ label: 'Élève', value: data.studentName });
-      if (data.schoolName) rows.push({ label: 'École', value: data.schoolName });
+      if (data.isDonation && data.donorName) rows.push({ label: 'Donateur', value: data.donorName });
+      if (data.schoolName) rows.push({ label: data.isDonation ? 'Daara' : 'École', value: data.schoolName });
       rows.push({ label: 'Moyen de paiement', value: data['operator'] === 'Orange' ? 'Orange Money' : 'Wave' });
       if (data.senePayTransactionId) {
         rows.push({ label: 'Référence', value: data.senePayTransactionId });
@@ -285,7 +286,7 @@
         // que le destinataire peut télécharger.
         const pdfUrl = `${window.location.origin}/pay/${paymentId}/${token}/receipt.pdf`;
         const waText = encodeURIComponent(
-          `Bonjour, voici le reçu de mon paiement Idara (${fmt(data.amountChargedFcfa)} FCFA). ${pdfUrl}`
+          `Bonjour, voici le reçu de mon ${data.isDonation ? 'don' : data.isTopup ? 'rechargement' : 'paiement'} Idara (${fmt(data.amountChargedFcfa)} FCFA). ${pdfUrl}`
         );
         items.push(`
           <a class="btn btn-whatsapp" href="https://wa.me/?text=${waText}" target="_blank" rel="noopener">
@@ -348,10 +349,12 @@
 
           if (s === 'completed') {
             setState('success', '✓',
-              data.isTopup ? 'Recharge confirmée' : 'Paiement confirmé',
+              data.isTopup ? 'Recharge confirmée' : data.isDonation ? 'Don confirmé' : 'Paiement confirmé',
               data.isTopup
                 ? 'Le solde de votre école a bien été crédité. Le reçu est ci-dessous.'
-                : 'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
+                : data.isDonation
+                  ? 'Merci pour votre don. Le daara a bien reçu votre soutien. Le reçu est ci-dessous.'
+                  : 'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
             // Affiche le PDF en iframe.
             pdfFrame.src = `/pay/${paymentId}/${token}/receipt.pdf`;
             pdfFrame.style.display = 'block';

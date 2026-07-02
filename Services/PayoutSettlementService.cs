@@ -161,12 +161,20 @@ namespace Idara.API.Services
                     // signée négative (préserve Σ tx == Available).
                     wallet.AvailableBalance -= withdrawal.AmountFcfa;
                     wallet.TotalWithdrawnLifetime += withdrawal.AmountFcfa;
+                    // Re-applique la déduction de la poche « Don » qu'avait annulée
+                    // la restitution. Clamp à 0 par prudence : entre la restitution
+                    // et ce correcteur (rare), d'autres débits ont pu réduire la
+                    // poche don ; l'Available (money-critical) reste exact, seul le
+                    // détail de la poche est approché dans ce cas extrême.
+                    wallet.DonationBalanceFcfa = Math.Max(
+                        0, wallet.DonationBalanceFcfa - withdrawal.DonationAmountFcfa);
                     wallet.UpdatedAt = DateTime.UtcNow;
 
                     _context.WalletTransactions.Add(new WalletTransaction
                     {
                         SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Adjustment,
+                        Source = WalletSource.Adjustment,
                         AmountFcfa = -withdrawal.AmountFcfa,
                         BalanceAfter = wallet.AvailableBalance,
                         RelatedEntity = WalletRelatedEntity.Withdrawal,
@@ -234,12 +242,16 @@ namespace Idara.API.Services
 
                     wallet.PendingBalance -= withdrawal.AmountFcfa;
                     wallet.AvailableBalance += withdrawal.AmountFcfa;
+                    // Restitution symétrique de la poche « Don » : on remet
+                    // exactement la part qui avait été prélevée dessus à la réservation.
+                    wallet.DonationBalanceFcfa += withdrawal.DonationAmountFcfa;
                     wallet.UpdatedAt = DateTime.UtcNow;
 
                     _context.WalletTransactions.Add(new WalletTransaction
                     {
                         SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Release,
+                        Source = WalletSource.Withdrawal,
                         AmountFcfa = withdrawal.AmountFcfa, // release = signé positif
                         BalanceAfter = wallet.AvailableBalance,
                         RelatedEntity = WalletRelatedEntity.Withdrawal,

@@ -74,6 +74,22 @@ namespace Idara.API.Models
         /// <summary>Numéro national 9 chiffres (sans indicatif). On préfixe "221" à l'appel SenePay.</summary>
         public string RecipientPhone { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Poche du wallet dans laquelle ce retrait puise (décision produit : le
+        /// daara choisit). Total par défaut (rétro-compatible : les retraits
+        /// existants puisaient dans le total). Cf. <see cref="DonationAmountFcfa"/>.
+        /// </summary>
+        public WithdrawalSource Source { get; set; } = WithdrawalSource.Total;
+
+        /// <summary>
+        /// Part de <see cref="AmountFcfa"/> effectivement prélevée sur la poche
+        /// « Don » (<see cref="SchoolWallet.DonationBalanceFcfa"/>), figée à la
+        /// réservation. Sert à restituer EXACTEMENT cette part si le retrait échoue
+        /// (et à la re-débiter sur le correcteur `completed`-après-`Failed`). 0 pour
+        /// un retrait 100 % sur le solde paiement (dont tous les retraits existants).
+        /// </summary>
+        public long DonationAmountFcfa { get; set; }
+
         public WithdrawalStatus Status { get; set; } = WithdrawalStatus.Initiated;
 
         /// <summary>Identifiant SenePay du décaissement (rempli après l'appel /payouts).</summary>

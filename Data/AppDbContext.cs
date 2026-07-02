@@ -585,6 +585,19 @@ namespace Idara.API.Data
                 .HasForeignKey(p => p.InvoiceId)
                 .OnDelete(DeleteBehavior.SetNull);
 
+            // FK vers le DONATEUR (Purpose=Donation). Restrict comme Guardian :
+            // un don appartient à l'append-only financier, on ne supprime jamais
+            // physiquement un donateur ayant donné (anonymisation §68 à la place).
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.Donor)
+                .WithMany()
+                .HasForeignKey(p => p.DonorId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Vue Donateur : « mes dons » (récents d'abord).
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => new { p.DonorId, p.InitiatedAt });
+
             // Lookup par référence SenePay (webhook → Payment correspondant).
             // Filtré IS NOT NULL car le Payment est créé AVANT l'appel SenePay.
             modelBuilder.Entity<Payment>()

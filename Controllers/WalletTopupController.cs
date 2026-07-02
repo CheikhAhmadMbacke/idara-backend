@@ -96,6 +96,7 @@ namespace Idara.API.Controllers
                 StudentId = null,
                 GuardianId = null,
                 InvoiceId = null,
+                Purpose = PaymentPurpose.WalletTopup,
                 AmountFcfa = amountToCharge,
                 TargetAmountFcfa = targetAmount,
                 FeesFcfa = 0,
@@ -156,7 +157,8 @@ namespace Idara.API.Controllers
             if (schoolId == null) return BadRequest(ApiResponse<TopupStatusDto>.Fail("École introuvable."));
 
             var p = await _context.Payments
-                .FirstOrDefaultAsync(x => x.Id == id && x.SchoolId == schoolId.Value && x.GuardianId == null, ct);
+                .FirstOrDefaultAsync(x => x.Id == id && x.SchoolId == schoolId.Value
+                                          && x.Purpose == PaymentPurpose.WalletTopup, ct);
             if (p == null) return NotFound(ApiResponse<TopupStatusDto>.Fail("Recharge introuvable."));
 
             return Ok(ApiResponse<TopupStatusDto>.Ok(new TopupStatusDto

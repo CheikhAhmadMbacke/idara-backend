@@ -58,10 +58,11 @@ namespace Idara.API.Common.Middleware
             if (ctx.User?.Identity?.IsAuthenticated != true) { await _next(ctx); return; }
 
             var role = ctx.User.GetRole();
-            // SuperAdmin gère la plateforme ; Guardian (parent) doit pouvoir payer.
+            // SuperAdmin gère la plateforme ; Guardian (parent) doit pouvoir payer ;
+            // Donor (donateur global, sans école) n'est lié à aucun abonnement.
             // Un rôle vide n'est PAS exempté (fail-closed) : s'il porte un SchoolId
             // il sera évalué, sinon le check SchoolId==null l'exempte juste après.
-            if (role == UserRoles.SuperAdmin || role == UserRoles.Guardian)
+            if (role == UserRoles.SuperAdmin || role == UserRoles.Guardian || role == UserRoles.Donor)
             {
                 await _next(ctx); return;
             }

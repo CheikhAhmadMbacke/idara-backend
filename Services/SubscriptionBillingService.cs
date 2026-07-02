@@ -243,13 +243,19 @@ namespace Idara.API.Services
             {
                 // ----- Prélèvement réussi -----
                 var amount = sub.AmountFcfa;
+                // Prélèvement auto = « Paiements d'abord, puis Dons » : la part qui
+                // dépasse le solde paiement entame la poche don (décision produit).
+                // Calculé AVANT de réduire Available (sinon FeeBalance serait faussé).
+                var subDonationDraw = wallet.DonationDrawFor(amount, WithdrawalSource.Total);
                 wallet.AvailableBalance -= amount;
+                wallet.DonationBalanceFcfa -= subDonationDraw;
                 wallet.UpdatedAt = nowUtc;
 
                 var walletTx = new WalletTransaction
                 {
                     SchoolId = sub.SchoolId,
                     Type = WalletTransactionType.Debit,
+                    Source = WalletSource.Subscription,
                     AmountFcfa = -amount,
                     BalanceAfter = wallet.AvailableBalance,
                     RelatedEntity = WalletRelatedEntity.Subscription,

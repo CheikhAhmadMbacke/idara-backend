@@ -159,6 +159,7 @@ namespace Idara.API.Controllers
                 BeneficiaryId = beneficiaryId,
                 RecipientName = recipientName,
                 RecipientPhone = recipientPhone,
+                Source = dto.Source,
                 Status = WithdrawalStatus.Initiated,
                 InitiatedById = userId.Value,
                 CreatedAt = DateTime.UtcNow
@@ -179,11 +180,19 @@ namespace Idara.API.Controllers
                     return StatusCode(500, ApiResponse<WithdrawalDto>.Fail("Wallet introuvable."));
                 }
 
-                if (dto.Amount > wallet.AvailableBalance)
+                // Check de solde PAR POCHE (le daara a choisi Total / Paiements /
+                // Dons). Sous le verrou → l'état est figé.
+                if (!wallet.HasEnoughForSource(dto.Amount, dto.Source))
                 {
                     await tx.RollbackAsync(ct);
+                    var (label, avail) = dto.Source switch
+                    {
+                        WithdrawalSource.Fee => ("solde paiement", wallet.FeeBalance()),
+                        WithdrawalSource.Donation => ("solde don", wallet.DonationBalanceFcfa),
+                        _ => ("solde disponible", wallet.AvailableBalance)
+                    };
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                        $"Solde insuffisant. Disponible : {wallet.AvailableBalance} FCFA."));
+                        $"Solde insuffisant. {char.ToUpper(label[0]) + label[1..]} : {avail} FCFA."));
                 }
 
                 // --- Idempotence anti double-dépense ---
@@ -210,17 +219,24 @@ namespace Idara.API.Controllers
                         "Un retrait identique vient d'être initié. Vérifiez l'historique avant de réessayer."));
                 }
 
+                // Part prélevée sur la poche « Don » (figée sur le retrait pour une
+                // restitution exacte en cas d'échec, cf. PayoutSettlementService).
+                var donationDraw = wallet.DonationDrawFor(dto.Amount, dto.Source);
+                withdrawal.DonationAmountFcfa = donationDraw;
+
                 _context.Withdrawals.Add(withdrawal);
                 await _context.SaveChangesAsync(ct); // assigne withdrawal.Id
 
                 wallet.AvailableBalance -= dto.Amount;
                 wallet.PendingBalance += dto.Amount;
+                wallet.DonationBalanceFcfa -= donationDraw; // la poche don suit la réservation
                 wallet.UpdatedAt = DateTime.UtcNow;
 
                 _context.WalletTransactions.Add(new WalletTransaction
                 {
                     SchoolId = schoolId.Value,
                     Type = WalletTransactionType.Reservation,
+                    Source = WalletSource.Withdrawal,
                     AmountFcfa = -dto.Amount, // réservation = signé négatif
                     BalanceAfter = wallet.AvailableBalance,
                     RelatedEntity = WalletRelatedEntity.Withdrawal,
@@ -418,6 +434,7 @@ namespace Idara.API.Controllers
             NetReceivedFcfa = w.NetReceivedFcfa,
             Operator = w.Operator,
             Category = w.Category,
+            Source = w.Source,
             CategoryLabel = w.CategoryLabel,
             RecipientName = w.RecipientName,
             RecipientPhoneMasked = MaskPhone(w.RecipientPhone),

@@ -10,6 +10,17 @@
         public const string Surveillant = "Surveillant";
 
         /// <summary>
+        /// DONATEUR : compte global (sans école) qui fait des dons aux daaras.
+        /// Auto-inscription (nom + téléphone + mot de passe), identité par
+        /// téléphone comme les comptes école. Aucun <c>SchoolId</c> dans le JWT
+        /// (rattaché à AUCUNE école — il peut donner à plusieurs daaras). Ne voit
+        /// que : la liste publique des daaras, l'écran « faire un don » et « mes
+        /// dons ». Exempté de l'enforcement abonnement (comme Guardian). Ne JAMAIS
+        /// l'ajouter à un [Authorize(Roles=...)] scopé école.
+        /// </summary>
+        public const string Donor = "Donor";
+
+        /// <summary>
         /// Compte en LECTURE SEULE (observateur) : voit TOUT ce que voit le
         /// SchoolAdmin mais ne peut RIEN modifier. Le titulaire peut être le
         /// propriétaire de l'école, un superviseur du directeur, un auditeur, etc.

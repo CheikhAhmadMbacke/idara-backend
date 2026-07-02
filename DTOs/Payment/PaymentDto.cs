@@ -20,6 +20,14 @@ namespace Idara.API.DTOs.Payment
         public int? GuardianId { get; set; }
         public int? InvoiceId { get; set; }
 
+        /// <summary>Nature (mensualité / recharge / DON) — pour le badge côté école.</summary>
+        public PaymentPurpose Purpose { get; set; }
+
+        /// <summary>Nom + type du donateur (renseignés uniquement pour un don).</summary>
+        public int? DonorId { get; set; }
+        public string? DonorName { get; set; }
+        public DonorType? DonorType { get; set; }
+
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }

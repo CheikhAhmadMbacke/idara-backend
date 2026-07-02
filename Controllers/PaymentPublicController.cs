@@ -77,9 +77,15 @@ namespace Idara.API.Controllers
                 : null;
             var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
 
-            // Topup = rechargement du wallet école (FeesPayer=School, sans élève) —
-            // distinct d'un paiement de scolarité (FeesPayer=Parent, avec élève).
-            var isTopup = payment.FeesPayer == FeesPayer.School && payment.StudentId == null;
+            // On branche sur Purpose (source de vérité) plutôt que sur l'ancienne
+            // heuristique FeesPayer==School, obsolète depuis §105 (un topup est
+            // désormais FeesPayer=Parent) et qui ne distinguait pas un DON (aussi
+            // FeesPayer=Parent + sans élève).
+            var isTopup = payment.Purpose == PaymentPurpose.WalletTopup;
+            var isDonation = payment.Purpose == PaymentPurpose.Donation;
+            var donor = isDonation && payment.DonorId.HasValue
+                ? await _context.Users.FirstOrDefaultAsync(u => u.Id == payment.DonorId.Value, ct)
+                : null;
 
             return Ok(new
             {
@@ -95,6 +101,8 @@ namespace Idara.API.Controllers
                 schoolName = school?.Name,
                 studentName = student != null ? $"{student.FirstName} {student.LastName}" : null,
                 isTopup,
+                isDonation,
+                donorName = donor?.FullName,
             });
         }
 
@@ -135,8 +143,13 @@ namespace Idara.API.Controllers
                 var invoice = payment.InvoiceId.HasValue
                     ? await _context.Invoices.FirstOrDefaultAsync(i => i.Id == payment.InvoiceId.Value, ct)
                     : null;
+                // Pour un DON : charger le donateur afin que le reçu régénéré porte
+                // son nom + type (sinon « Reçu de don » avec donateur vide/Particulier).
+                var donor = payment.Purpose == PaymentPurpose.Donation && payment.DonorId.HasValue
+                    ? await _context.Users.FirstOrDefaultAsync(u => u.Id == payment.DonorId.Value, ct)
+                    : null;
                 if (school == null) return NotFound();
-                var regenerated = await _receiptPdf.GenerateAsync(payment, school, student, invoice);
+                var regenerated = await _receiptPdf.GenerateAsync(payment, school, student, invoice, donor);
                 await _context.Payments
                     .Where(p => p.Id == payment.Id)
                     .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, regenerated), ct);
