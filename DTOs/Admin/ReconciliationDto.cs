@@ -60,6 +60,9 @@ namespace Idara.API.DTOs.Admin
 
         /// <summary>Sorties plateforme enregistrées (retraits gains + ajustements manuels).</summary>
         public long PlatformOutflowsFcfa { get; set; }
+
+        /// <summary>Injections de capital enregistrées (argent ajouté à la réserve, +P).</summary>
+        public long CapitalInjectionsFcfa { get; set; }
     }
 
     /// <summary>Solde d'une école (vue SuperAdmin).</summary>

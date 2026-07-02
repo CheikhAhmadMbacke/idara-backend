@@ -139,6 +139,39 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Enregistre une injection de capital : argent ajouté par la plateforme à
+        /// sa propre réserve marchand SenePay (recharge). AUGMENTE le solde
+        /// plateforme P → absorbe un écart positif de réconciliation. Écriture
+        /// comptable pure.
+        /// </summary>
+        [HttpPost("platform/capital-injection")]
+        public async Task<ActionResult<ApiResponse<object>>> RecordCapitalInjection(
+            [FromBody] RecordManualOutflowDto dto, CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var entry = new PlatformOutflow
+            {
+                Type = PlatformOutflowType.CapitalInjection,
+                AmountFcfa = dto.AmountFcfa,
+                Note = string.IsNullOrWhiteSpace(dto.Note) ? null : dto.Note.Trim(),
+                OccurredAt = (dto.OccurredAt ?? DateTime.UtcNow).ToUtcSafe(),
+                CreatedById = userId.Value,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.PlatformOutflows.Add(entry);
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[finance] Injection de capital enregistrée : {Amount} FCFA (id #{Id}, par user {User})",
+                dto.AmountFcfa, entry.Id, userId.Value);
+
+            return Ok(ApiResponse<object>.Ok(new { entry.Id }, "Injection de capital enregistrée."));
+        }
+
+        /// <summary>
         /// Retrait des GAINS PLATEFORME vers un Mobile Money via SenePay Payout.
         /// Step-up mot de passe SuperAdmin. Garde-fou SOUS verrou plateforme : ne
         /// peut pas faire passer la réserve sous D × (1 + marge) — l'argent des

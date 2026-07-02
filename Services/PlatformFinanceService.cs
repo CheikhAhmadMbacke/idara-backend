@@ -70,11 +70,19 @@ namespace Idara.API.Services
             // via API (Withdrawal.IsPlatform). Un retrait plateforme NON-Failed
             // (Initiated/UnderVerification/Completed) sort de la réserve son montant
             // + les frais → réduit P dès sa création (réservation implicite, P dérivé).
-            var manualOutflows = await _db.PlatformOutflows.SumAsync(o => o.AmountFcfa, ct);
+            var manualOutflows = await _db.PlatformOutflows
+                .Where(o => o.Type != PlatformOutflowType.CapitalInjection)
+                .SumAsync(o => o.AmountFcfa, ct);
             var platformWithdrawalCost = await _db.Withdrawals
                 .Where(w => w.IsPlatform && w.Status != WithdrawalStatus.Failed)
                 .SumAsync(w => w.AmountFcfa + w.FeesFcfa, ct);
             var platformOutflows = manualOutflows + platformWithdrawalCost;
+
+            // Injections de capital = argent que la plateforme ajoute elle-même à la
+            // réserve → AUGMENTE P (mouvement entrant, absorbe un écart positif).
+            var capitalInjections = await _db.PlatformOutflows
+                .Where(o => o.Type == PlatformOutflowType.CapitalInjection)
+                .SumAsync(o => o.AmountFcfa, ct);
 
             var platform = new PlatformBalanceDto
             {
@@ -82,7 +90,9 @@ namespace Idara.API.Services
                 Surplus8PercentFcfa = surplus8,
                 SchoolPayoutFeesFcfa = schoolPayoutFees,
                 PlatformOutflowsFcfa = platformOutflows,
-                TotalFcfa = surplus8 + subscriptionRevenue - schoolPayoutFees - platformOutflows
+                CapitalInjectionsFcfa = capitalInjections,
+                TotalFcfa = surplus8 + subscriptionRevenue + capitalInjections
+                    - schoolPayoutFees - platformOutflows
             };
 
             return (owedToSchools, platform);
