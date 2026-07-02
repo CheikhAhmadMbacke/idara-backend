@@ -1,14 +1,17 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.School;
 using Idara.API.Enums;
+using Idara.API.Options;
 using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SchoolModel = Idara.API.Models.School;
 
 namespace Idara.API.Controllers
@@ -20,15 +23,21 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IUserDeletionService _userDeletion;
+        private readonly IWebHostEnvironment _env;
+        private readonly UploadSettings _uploads;
         private readonly ILogger<SchoolController> _logger;
 
         public SchoolController(
             AppDbContext context,
             IUserDeletionService userDeletion,
+            IWebHostEnvironment env,
+            IOptions<UploadSettings> uploads,
             ILogger<SchoolController> logger)
         {
             _context = context;
             _userDeletion = userDeletion;
+            _env = env;
+            _uploads = uploads.Value;
             _logger = logger;
         }
 
@@ -118,6 +127,130 @@ namespace Idara.API.Controllers
 
             var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == schoolId.Value);
             return Ok(MapToSchoolInfoResponse(reloaded));
+        }
+
+        // ================================================================
+        // ===== Personnalisation de l'espace (branding) =====
+        // ================================================================
+
+        /// <summary>
+        /// Branding de MON école — accessible à TOUT utilisateur rattaché à une
+        /// école (admin/personnel/enseignant/surveillant/observateur) pour afficher
+        /// la carte d'accueil personnalisée. Renvoie le nom (= titre), le logo, le
+        /// sous-titre, la couleur/l'image de couverture.
+        /// </summary>
+        [HttpGet("branding")]
+        public async Task<ActionResult<SchoolBrandingDto>> GetMyBranding(CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var school = await _context.Schools
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == schoolId.Value, ct);
+            if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
+
+            return Ok(MapToBrandingDto(school));
+        }
+
+        /// <summary>
+        /// Met à jour le branding de MON école (SchoolAdmin only) : logo, sous-titre,
+        /// couleur et/ou image de couverture. Le nom (titre) s'édite via my-info.
+        /// </summary>
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        [HttpPut("branding")]
+        public async Task<ActionResult<SchoolBrandingDto>> UpdateMyBranding(
+            [FromBody] UpdateSchoolBrandingDto dto, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == schoolId.Value, ct);
+            if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
+
+            // Sous-titre : null = inchangé ; "" = revenir au défaut (stocké null).
+            if (dto.WelcomeSubtitle != null)
+                school.WelcomeSubtitle = string.IsNullOrWhiteSpace(dto.WelcomeSubtitle)
+                    ? null : dto.WelcomeSubtitle.Trim();
+
+            // Couleur : null = inchangé ; "" = défaut (dégradé). Sinon hex validé par le DTO.
+            if (dto.CoverColor != null)
+                school.CoverColor = string.IsNullOrWhiteSpace(dto.CoverColor) ? null : dto.CoverColor;
+
+            // Logo : remove prioritaire, sinon nouveau base64 remplace l'ancien.
+            if (dto.RemoveLogo)
+            {
+                DeleteBrandingFile(school.LogoUrl);
+                school.LogoUrl = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(dto.LogoBase64))
+            {
+                var saved = await SaveBrandingImageAsync(dto.LogoBase64);
+                if (saved == null)
+                    return BadRequest(ApiResponse<bool>.Fail("Logo invalide (format ou taille non supportés)."));
+                DeleteBrandingFile(school.LogoUrl);
+                school.LogoUrl = saved;
+            }
+
+            // Image de couverture : idem.
+            if (dto.RemoveCoverImage)
+            {
+                DeleteBrandingFile(school.CoverImageUrl);
+                school.CoverImageUrl = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(dto.CoverImageBase64))
+            {
+                var saved = await SaveBrandingImageAsync(dto.CoverImageBase64);
+                if (saved == null)
+                    return BadRequest(ApiResponse<bool>.Fail("Image de couverture invalide (format ou taille non supportés)."));
+                DeleteBrandingFile(school.CoverImageUrl);
+                school.CoverImageUrl = saved;
+            }
+
+            await _context.SaveChangesAsync(ct);
+            _logger.LogInformation("[school] Branding de l'école {SchoolId} mis à jour par {AdminId}", schoolId, User.GetUserId());
+            return Ok(MapToBrandingDto(school));
+        }
+
+        private static SchoolBrandingDto MapToBrandingDto(SchoolModel s) => new()
+        {
+            SchoolId = s.Id,
+            Name = s.Name ?? string.Empty,
+            LogoUrl = s.LogoUrl,
+            WelcomeSubtitle = s.WelcomeSubtitle,
+            CoverColor = s.CoverColor,
+            CoverImageUrl = s.CoverImageUrl
+        };
+
+        /// <summary>Décode + valide + sauvegarde une image de branding dans /uploads/school-branding/.</summary>
+        private async Task<string?> SaveBrandingImageAsync(string base64)
+        {
+            var decoded = FileUploadValidator.DecodeAndValidate(
+                base64, _uploads.MaxPhotoSizeMb, _uploads.AllowedPhotoMimeTypes);
+            if (decoded == null) return null;
+
+            var folder = Path.Combine(_env.WebRootPath, "uploads", "school-branding");
+            Directory.CreateDirectory(folder);
+            var fileName = $"{Guid.NewGuid():N}{decoded.Extension}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(folder, fileName), decoded.Bytes);
+            return $"/uploads/school-branding/{fileName}";
+        }
+
+        /// <summary>Supprime un fichier de branding du disque (best-effort, défense path-traversal).</summary>
+        private void DeleteBrandingFile(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+            try
+            {
+                var root = Path.GetFullPath(_env.WebRootPath);
+                var full = Path.GetFullPath(Path.Combine(_env.WebRootPath, url.TrimStart('/')));
+                if (full.StartsWith(root) && System.IO.File.Exists(full))
+                    System.IO.File.Delete(full);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[school] Échec suppression fichier branding {Url} (non bloquant)", url);
+            }
         }
 
         /// <summary>Applique les champs éditables d'une école depuis le DTO (jamais l'email).</summary>

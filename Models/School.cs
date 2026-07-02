@@ -24,6 +24,22 @@ namespace Idara.API.Models
         /// l'autocomplétion du texte. Warsh par défaut.</summary>
         public QuranRiwaya QuranRiwaya { get; set; } = QuranRiwaya.Warsh;
 
+        // ----- Personnalisation de l'espace (branding) -----
+        // Affiché sur la carte d'accueil de TOUS les utilisateurs de l'école
+        // (admin/personnel/enseignant/surveillant/observateur). Le titre = Name.
+
+        /// <summary>Logo du daara (remplace l'icône Idara sur la carte d'accueil). URL relative /uploads/school-branding/…</summary>
+        public string? LogoUrl { get; set; }
+
+        /// <summary>Sous-titre éditable de la carte d'accueil (défaut côté client si null).</summary>
+        public string? WelcomeSubtitle { get; set; }
+
+        /// <summary>Couleur de fond de la carte d'accueil (hex "#RRGGBB"). Null = dégradé vert par défaut.</summary>
+        public string? CoverColor { get; set; }
+
+        /// <summary>Image de couverture de la carte d'accueil. Prioritaire sur CoverColor si renseignée.</summary>
+        public string? CoverImageUrl { get; set; }
+
         public ICollection<User> Users { get; set; } = new List<User>();
     }
 }
