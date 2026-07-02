@@ -49,6 +49,7 @@ namespace Idara.API.Data
         public DbSet<WebhookEvent> WebhookEvents { get; set; }
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
         public DbSet<PayoutAlert> PayoutAlerts { get; set; }
+        public DbSet<PlatformOutflow> PlatformOutflows { get; set; }
 
         // ----- Abonnement plateforme (Phase 4) -----
         public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
@@ -705,6 +706,11 @@ namespace Idara.API.Data
             // StuckUnderVerification dans PayoutVerificationJob).
             modelBuilder.Entity<PayoutAlert>()
                 .HasIndex(a => a.WithdrawalId);
+
+            // --- PlatformOutflow (sorties du solde de gains plateforme, append-only) ---
+            // Somme requêtée à chaque réconciliation → index sur OccurredAt.
+            modelBuilder.Entity<PlatformOutflow>()
+                .HasIndex(o => o.OccurredAt);
 
             // ===== Abonnement plateforme (Phase 4) =====
 

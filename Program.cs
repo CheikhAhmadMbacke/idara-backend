@@ -115,6 +115,9 @@ builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
 // partagée par le webhook ET le PayinVerificationJob (verrou pessimiste + garde
 // Status==Pending → idempotent, jamais de double crédit ni de perte).
 builder.Services.AddScoped<IPayinSettlementService, PayinSettlementService>();
+// Réconciliation financière plateforme (SuperAdmin) : R = D + P recalculé depuis
+// les tables sources, sans hook ni ledger de revenu (aucune dérive).
+builder.Services.AddScoped<IPlatformFinanceService, PlatformFinanceService>();
 builder.Services.AddScoped<DbInitializer>();
 
 // ---------- Cron / background jobs ----------
