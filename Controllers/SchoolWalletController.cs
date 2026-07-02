@@ -270,13 +270,19 @@ namespace Idara.API.Controllers
                 {
                     // Rejet pré-exécution (numéro/opérateur invalide, solde
                     // marchand insuffisant…) → restitution immédiate + feedback.
+                    var reason = ex.ResponseBody ?? ex.Message;
                     await _settlement.SettleFailedAsync(
-                        withdrawal.Id, ex.ResponseBody ?? ex.Message, null, null, "sync-init", ct);
+                        withdrawal.Id, reason, null, null, "sync-init", ct);
                     _logger.LogWarning(ex,
                         "[withdraw] SenePay {Status} (rejet pré-exécution) Withdrawal {Id} — réservation restituée",
                         ex.StatusCode, withdrawal.Id);
+                    // Ne PAS accuser les coordonnées si c'est une indisponibilité
+                    // temporaire du prestataire (float opérateur insuffisant) — le
+                    // solde école est déjà validé en amont (ligne 182).
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                        "Le retrait a été refusé (coordonnées ou solde). Votre solde a été restitué."));
+                        IsTemporaryPayoutOutage(reason)
+                            ? PayoutUnavailableMsg
+                            : "Le retrait a été refusé (coordonnées ou opérateur invalide). Votre solde a été restitué."));
                 }
 
                 // 5xx / timeout / réseau / duplicate = INDÉTERMINÉ → on garde les
@@ -286,8 +292,19 @@ namespace Idara.API.Controllers
                     withdrawal.Id, null, ex.Message, "sync-init", ct);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogWarning(ex,
-                    "[withdraw] SenePay indéterminé (status={Status}) Withdrawal {Id} — passé en vérification",
-                    ex.StatusCode, withdrawal.Id);
+                    "[withdraw] SenePay indéterminé (status={Status}) Withdrawal {Id} — statut={WStatus}",
+                    ex.StatusCode, withdrawal.Id, withdrawal.Status);
+
+                // Race observée en prod : SenePay renvoie un 502 gateway ET envoie
+                // le webhook d'échec (« Insufficient balance ») quasi simultanément.
+                // Si le webhook a déjà tranché Failed + restitué AVANT le retour du
+                // POST, on renvoie un message clair plutôt qu'un « en vérification »
+                // trompeur (suivi d'un push d'échec contradictoire). Sinon (vraiment
+                // indéterminé), on garde le « en vérification » : le PayoutVerificationJob
+                // interrogera GET /payouts/{id} jusqu'à résolution.
+                if (withdrawal.Status == WithdrawalStatus.Failed)
+                    return BadRequest(ApiResponse<WithdrawalDto>.Fail(PayoutUnavailableMsg));
+
                 return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
                     "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
             }
@@ -305,7 +322,9 @@ namespace Idara.API.Controllers
                     "[withdraw] SenePay a rejeté le payout Withdrawal {Id} (status={Status}) — réservation restituée",
                     withdrawal.Id, resp.Status);
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                    "Le retrait a été refusé par l'opérateur. Votre solde a été restitué."));
+                    IsTemporaryPayoutOutage(resp.ErrorCode ?? resp.Message)
+                        ? PayoutUnavailableMsg
+                        : "Le retrait a été refusé par l'opérateur. Votre solde a été restitué."));
             }
 
             // Succès SYNCHRONE (défensif — depuis le durcissement SenePay, le POST
@@ -367,6 +386,29 @@ namespace Idara.API.Controllers
         // ====================================================================
         // ===== Helpers =====
         // ====================================================================
+
+        // Message utilisateur pour un échec TEMPORAIRE côté prestataire (float
+        // opérateur/AfribaPay insuffisant, 502 gateway SenePay) — distinct d'une
+        // vraie erreur de coordonnées. Le solde est TOUJOURS restitué dans ces cas.
+        private const string PayoutUnavailableMsg =
+            "Le retrait n'a pas pu être effectué : le service de paiement est momentanément indisponible. Votre solde a été restitué, réessayez plus tard.";
+
+        /// <summary>
+        /// Détecte une indisponibilité temporaire du décaissement (float provider
+        /// insuffisant, erreur gateway 5xx) à partir du message d'erreur SenePay,
+        /// pour afficher un message honnête plutôt que d'accuser les coordonnées.
+        /// </summary>
+        private static bool IsTemporaryPayoutOutage(string? reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return false;
+            return reason.Contains("insufficient", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("balance", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("indisponible", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("502", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("503", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("504", StringComparison.OrdinalIgnoreCase);
+        }
 
         private static WithdrawalDto MapToDto(Withdrawal w) => new()
         {
