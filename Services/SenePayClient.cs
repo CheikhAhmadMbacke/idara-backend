@@ -392,6 +392,57 @@ namespace Idara.API.Services
             return parsed;
         }
 
+        public async Task<SenePayPayoutListResponse> GetPayoutsAsync(
+            string? status, string? dateFrom, string? dateTo,
+            int page, int pageSize, CancellationToken ct = default)
+        {
+            var startedAt = DateTime.UtcNow;
+
+            var query = new List<string> { $"page={page}", $"pageSize={pageSize}" };
+            if (!string.IsNullOrWhiteSpace(status)) query.Add($"status={Uri.EscapeDataString(status)}");
+            if (!string.IsNullOrWhiteSpace(dateFrom)) query.Add($"dateFrom={Uri.EscapeDataString(dateFrom)}");
+            if (!string.IsNullOrWhiteSpace(dateTo)) query.Add($"dateTo={Uri.EscapeDataString(dateTo)}");
+            var url = "api/v1/payouts?" + string.Join("&", query);
+
+            HttpResponseMessage httpResponse;
+            try
+            {
+                httpResponse = await _http.GetAsync(url, ct);
+            }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "[SenePay] TIMEOUT GET /payouts");
+                throw new SenePayApiException("Timeout calling SenePay list payouts", null, null, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[SenePay] NETWORK ERROR GET /payouts");
+                throw new SenePayApiException("Network error calling SenePay list payouts", null, null, ex);
+            }
+
+            var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+            var elapsedMs = (DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "[SenePay] HTTP {Status} GET /payouts elapsedMs={Elapsed:0} body={Body}",
+                    (int)httpResponse.StatusCode, elapsedMs, Truncate(responseBody, 500));
+                throw new SenePayApiException(
+                    $"SenePay returned HTTP {(int)httpResponse.StatusCode}",
+                    (int)httpResponse.StatusCode, responseBody);
+            }
+
+            var parsed = JsonSerializer.Deserialize<SenePayPayoutListResponse>(responseBody, JsonOptions)
+                ?? throw new SenePayApiException("Empty SenePay payouts list response", 200, responseBody);
+
+            _logger.LogInformation(
+                "[SenePay] OK GET /payouts page={Page} count={Count} total={Total} elapsedMs={Elapsed:0}",
+                page, parsed.Data.Count, parsed.Pagination?.TotalCount, elapsedMs);
+
+            return parsed;
+        }
+
         private static string MaskPhone(string phone)
         {
             if (string.IsNullOrEmpty(phone) || phone.Length < 4) return "***";

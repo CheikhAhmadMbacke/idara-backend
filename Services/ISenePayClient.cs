@@ -81,5 +81,14 @@ namespace Idara.API.Services
         /// <exception cref="SenePayApiException">Lancée sur 4xx/5xx/timeout.</exception>
         Task<SenePayMerchantBalanceResponse> GetMerchantBalanceAsync(
             CancellationToken ct = default);
+
+        /// <summary>
+        /// `GET /api/v1/payouts` — liste paginée des décaissements du marchand.
+        /// Utilisé pour détecter les retraits effectués HORS Idara (dashboard).
+        /// </summary>
+        /// <exception cref="SenePayApiException">Lancée sur 4xx/5xx/timeout.</exception>
+        Task<SenePayPayoutListResponse> GetPayoutsAsync(
+            string? status, string? dateFrom, string? dateTo,
+            int page, int pageSize, CancellationToken ct = default);
     }
 }

@@ -712,6 +712,14 @@ namespace Idara.API.Data
             modelBuilder.Entity<PlatformOutflow>()
                 .HasIndex(o => o.OccurredAt);
 
+            // Idempotence de l'auto-enregistrement des payouts hors Idara : un même
+            // disbursement_id SenePay ne peut être consigné qu'une fois. Filtré
+            // (les ajustements manuels ont SenePayReference NULL, non contraints).
+            modelBuilder.Entity<PlatformOutflow>()
+                .HasIndex(o => o.SenePayReference)
+                .IsUnique()
+                .HasFilter("\"SenePayReference\" IS NOT NULL");
+
             // ===== Abonnement plateforme (Phase 4) =====
 
             // Plan public : Code unique parmi les plans NON custom (les deals

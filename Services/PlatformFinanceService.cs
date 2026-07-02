@@ -1,6 +1,9 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
+using Idara.API.DTOs.Senepay;
 using Idara.API.Enums;
+using Idara.API.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace Idara.API.Services
@@ -168,7 +171,154 @@ namespace Idara.API.Services
                 .ToListAsync(ct);
         }
 
+        public async Task<UntrackedPayoutsResultDto> ScanUntrackedPayoutsAsync(CancellationToken ct = default)
+        {
+            var result = new UntrackedPayoutsResultDto();
+
+            List<SenePayPayoutListItem> payouts;
+            try
+            {
+                payouts = await FetchAllCompletedPayoutsAsync(ct);
+                result.SenePayReachable = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[finance] Scan des payouts SenePay injoignable");
+                result.SenePayReachable = false;
+                return result;
+            }
+
+            result.ScannedCount = payouts.Count;
+
+            // Lookups Idara (tous les retraits, pour matcher external_id / disbursement_id).
+            var withdrawals = await _db.Withdrawals
+                .Select(w => new { w.Id, w.Status, w.SenePayDisbursementId })
+                .ToListAsync(ct);
+            var byExternalId = withdrawals.ToDictionary(w => w.Id.ToString(), w => w);
+            var byDisbId = withdrawals
+                .Where(w => !string.IsNullOrEmpty(w.SenePayDisbursementId))
+                .GroupBy(w => w.SenePayDisbursementId!)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var recordedRefs = (await _db.PlatformOutflows
+                .Where(o => o.SenePayReference != null)
+                .Select(o => o.SenePayReference!)
+                .ToListAsync(ct)).ToHashSet();
+
+            foreach (var p in payouts)
+            {
+                var amount = (long)Math.Round(p.Amount, MidpointRounding.AwayFromZero);
+                var net = (long)Math.Round(p.NetAmount, MidpointRounding.AwayFromZero);
+
+                var matched =
+                    (p.ExternalId != null && byExternalId.TryGetValue(p.ExternalId, out var w1)) ? w1
+                    : (p.DisbursementId != null && byDisbId.TryGetValue(p.DisbursementId, out var w2)) ? w2
+                    : null;
+
+                if (matched != null)
+                {
+                    // Tracé par Idara. Anomalie UNIQUEMENT si Idara le voit terminal-échoué
+                    // (Failed/Cancelled) alors que SenePay dit completed → argent sorti mais
+                    // Idara croit à un échec. Initiated/UnderVerification = transitoire (le
+                    // poll/webhook tranchera), on n'alerte pas.
+                    if (matched.Status is WithdrawalStatus.Failed or WithdrawalStatus.Cancelled)
+                    {
+                        result.Anomalies.Add(new PayoutAnomalyDto
+                        {
+                            DisbursementId = p.DisbursementId,
+                            WithdrawalId = matched.Id,
+                            IdaraStatus = matched.Status.ToString(),
+                            AmountFcfa = amount,
+                            CompletedAt = p.CompletedAt
+                        });
+                    }
+                    continue;
+                }
+
+                // Orphelin = payout effectué hors Idara (dashboard marchand).
+                var already = p.DisbursementId != null && recordedRefs.Contains(p.DisbursementId);
+                result.Untracked.Add(new UntrackedPayoutDto
+                {
+                    DisbursementId = p.DisbursementId,
+                    ExternalId = p.ExternalId,
+                    AmountFcfa = amount,
+                    NetAmountFcfa = net,
+                    RecipientPhone = p.RecipientPhone,
+                    Operator = p.Operator,
+                    CompletedAt = p.CompletedAt,
+                    AlreadyRecorded = already
+                });
+                if (already) result.TotalAlreadyRecordedFcfa += amount;
+                else result.TotalToRecordFcfa += amount;
+            }
+
+            _logger.LogInformation(
+                "[finance] Scan payouts : {Scanned} completed, {Untracked} hors Idara ({ToRecord} à enregistrer), {Anomalies} anomalies",
+                result.ScannedCount, result.Untracked.Count, result.TotalToRecordFcfa, result.Anomalies.Count);
+            return result;
+        }
+
+        public async Task<(int recorded, long totalFcfa)> RecordUntrackedPayoutsAsync(
+            int userId, CancellationToken ct = default)
+        {
+            var scan = await ScanUntrackedPayoutsAsync(ct);
+            if (!scan.SenePayReachable)
+                throw new InvalidOperationException("SenePay injoignable — réessaie dans un instant.");
+
+            var toRecord = scan.Untracked
+                .Where(u => !u.AlreadyRecorded && !string.IsNullOrEmpty(u.DisbursementId))
+                .ToList();
+
+            var recorded = 0;
+            long total = 0;
+            foreach (var u in toRecord)
+            {
+                var outflow = new PlatformOutflow
+                {
+                    Type = PlatformOutflowType.ManualAdjustment,
+                    AmountFcfa = u.AmountFcfa,
+                    Note = $"Retrait hors Idara détecté (dashboard SenePay) — {u.Operator} {u.RecipientPhone}".Trim(),
+                    SenePayReference = u.DisbursementId,
+                    OccurredAt = (u.CompletedAt ?? DateTime.UtcNow).ToUtcSafe(),
+                    CreatedById = userId,
+                    CreatedAt = DateTime.UtcNow
+                };
+                _db.PlatformOutflows.Add(outflow);
+                try
+                {
+                    await _db.SaveChangesAsync(ct);
+                    recorded++;
+                    total += u.AmountFcfa;
+                }
+                catch (DbUpdateException)
+                {
+                    // Conflit d'unicité (disbursement_id déjà consigné en concurrence) → on ignore.
+                    _db.Entry(outflow).State = EntityState.Detached;
+                }
+            }
+
+            _logger.LogInformation(
+                "[finance] {Count} retrait(s) hors Idara enregistrés ({Total} FCFA) par user {User}",
+                recorded, total, userId);
+            return (recorded, total);
+        }
+
         // --- Helpers ---
+
+        /// <summary>Pagine TOUS les payouts `completed` chez SenePay (garde-fou 100 pages).</summary>
+        private async Task<List<SenePayPayoutListItem>> FetchAllCompletedPayoutsAsync(CancellationToken ct)
+        {
+            var all = new List<SenePayPayoutListItem>();
+            const int pageSize = 100;
+            for (var page = 1; page <= 100; page++)
+            {
+                var resp = await _senepay.GetPayoutsAsync("completed", null, null, page, pageSize, ct);
+                if (resp.Data.Count > 0) all.AddRange(resp.Data);
+                var totalPages = resp.Pagination?.TotalPages ?? 1;
+                if (page >= totalPages || resp.Data.Count == 0) break;
+            }
+            return all;
+        }
 
         /// <summary>Commentaire d'analyse en clair (SANS emoji — la couleur/icône
         /// est portée par HealthColor côté UI).</summary>

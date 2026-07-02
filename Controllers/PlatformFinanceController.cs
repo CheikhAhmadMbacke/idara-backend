@@ -70,6 +70,42 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Rapproche les payouts SenePay avec les retraits Idara : liste les retraits
+        /// effectués HORS Idara (dashboard) + les anomalies. Lecture seule.
+        /// </summary>
+        [HttpGet("senepay/untracked-payouts")]
+        public async Task<ActionResult<ApiResponse<UntrackedPayoutsResultDto>>> GetUntrackedPayouts(CancellationToken ct)
+        {
+            var result = await _finance.ScanUntrackedPayoutsAsync(ct);
+            return Ok(ApiResponse<UntrackedPayoutsResultDto>.Ok(result));
+        }
+
+        /// <summary>
+        /// Enregistre en 1 clic tous les retraits hors Idara détectés (non encore
+        /// consignés) comme sorties plateforme → réconciliation exacte. Idempotent.
+        /// </summary>
+        [HttpPost("senepay/record-untracked")]
+        public async Task<ActionResult<ApiResponse<object>>> RecordUntracked(CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            try
+            {
+                var (recorded, total) = await _finance.RecordUntrackedPayoutsAsync(userId.Value, ct);
+                return Ok(ApiResponse<object>.Ok(
+                    new { recorded, totalFcfa = total },
+                    recorded == 0
+                        ? "Aucun nouveau retrait hors Idara à enregistrer."
+                        : $"{recorded} retrait(s) hors Idara enregistré(s) ({total} FCFA)."));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return StatusCode(503, ApiResponse<object>.Fail(ex.Message));
+            }
+        }
+
+        /// <summary>
         /// Enregistre un retrait manuel effectué depuis le dashboard marchand
         /// SenePay (hors Idara) → réduit les gains plateforme P, remet la
         /// réconciliation à l'équilibre. Écriture comptable pure (aucun mouvement

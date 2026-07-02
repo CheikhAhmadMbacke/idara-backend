@@ -30,6 +30,14 @@ namespace Idara.API.Models
         public string? Note { get; set; }
 
         /// <summary>
+        /// Référence SenePay (disbursement_id) quand cette sortie correspond à un
+        /// payout détecté hors Idara et auto-enregistré. Sert de clé d'idempotence
+        /// (on ne réenregistre jamais deux fois le même décaissement). NULL pour un
+        /// ajustement manuel saisi à la main.
+        /// </summary>
+        public string? SenePayReference { get; set; }
+
+        /// <summary>
         /// Date de la sortie réelle. Pour un retrait manuel dashboard, peut être
         /// antidatée à la date effective du retrait chez SenePay.
         /// </summary>

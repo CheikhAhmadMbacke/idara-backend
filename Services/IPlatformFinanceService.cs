@@ -22,5 +22,20 @@ namespace Idara.API.Services
 
         /// <summary>Marge de sécurité au-dessus de la dette (%). Seuil vert = D×(1+marge).</summary>
         double SafetyMarginPercent { get; }
+
+        /// <summary>
+        /// Rapproche les payouts `completed` de SenePay avec les retraits Idara :
+        /// détecte les payouts effectués HORS Idara (dashboard) et les anomalies
+        /// (payout completé côté SenePay mais retrait Idara non-Completed).
+        /// </summary>
+        Task<UntrackedPayoutsResultDto> ScanUntrackedPayoutsAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// Enregistre en une fois tous les payouts hors Idara détectés (non encore
+        /// consignés) comme PlatformOutflow → la réconciliation devient exacte.
+        /// Idempotent (clé = disbursement_id). Retourne (nb enregistrés, total FCFA).
+        /// </summary>
+        Task<(int recorded, long totalFcfa)> RecordUntrackedPayoutsAsync(
+            int userId, CancellationToken ct = default);
     }
 }
