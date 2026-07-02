@@ -210,32 +210,47 @@ namespace Idara.API.Services
                 var amount = (long)Math.Round(p.Amount, MidpointRounding.AwayFromZero);
                 var net = (long)Math.Round(p.NetAmount, MidpointRounding.AwayFromZero);
 
-                var matched =
-                    (p.ExternalId != null && byExternalId.TryGetValue(p.ExternalId, out var w1)) ? w1
-                    : (p.DisbursementId != null && byDisbId.TryGetValue(p.DisbursementId, out var w2)) ? w2
-                    : null;
+                // Différenciation par PRÉFIXE du disbursement_id (source de vérité
+                // fournie par SenePay) : `DISB_...` = payout initié par l'API (Idara) ;
+                // `SENEPAY_PAYOUT_...` = retrait effectué depuis le dashboard marchand.
+                // ⚠️ Actuellement `GET /api/v1/payouts` ne renvoie QUE les `DISB_`
+                // (les dashboard sont absents de l'API) — cette classification est
+                // donc prête pour le jour où SenePay les exposera.
+                var isDashboard = p.DisbursementId != null
+                    && p.DisbursementId.StartsWith("SENEPAY_PAYOUT_", StringComparison.OrdinalIgnoreCase);
 
-                if (matched != null)
+                if (!isDashboard)
                 {
-                    // Tracé par Idara. Anomalie UNIQUEMENT si Idara le voit terminal-échoué
-                    // (Failed/Cancelled) alors que SenePay dit completed → argent sorti mais
-                    // Idara croit à un échec. Initiated/UnderVerification = transitoire (le
-                    // poll/webhook tranchera), on n'alerte pas.
-                    if (matched.Status is WithdrawalStatus.Failed or WithdrawalStatus.Cancelled)
+                    // Payout API → DOIT correspondre à un Withdrawal Idara.
+                    var matched =
+                        (p.ExternalId != null && byExternalId.TryGetValue(p.ExternalId, out var w1)) ? w1
+                        : (p.DisbursementId != null && byDisbId.TryGetValue(p.DisbursementId, out var w2)) ? w2
+                        : null;
+
+                    if (matched != null)
                     {
-                        result.Anomalies.Add(new PayoutAnomalyDto
+                        // Tracé. Anomalie UNIQUEMENT si Idara le voit terminal-échoué
+                        // (Failed/Cancelled) alors que SenePay dit completed → argent sorti
+                        // mais Idara croit à un échec. Initiated/UnderVerification =
+                        // transitoire (le poll/webhook tranchera), on n'alerte pas.
+                        if (matched.Status is WithdrawalStatus.Failed or WithdrawalStatus.Cancelled)
                         {
-                            DisbursementId = p.DisbursementId,
-                            WithdrawalId = matched.Id,
-                            IdaraStatus = matched.Status.ToString(),
-                            AmountFcfa = amount,
-                            CompletedAt = p.CompletedAt
-                        });
+                            result.Anomalies.Add(new PayoutAnomalyDto
+                            {
+                                DisbursementId = p.DisbursementId,
+                                WithdrawalId = matched.Id,
+                                IdaraStatus = matched.Status.ToString(),
+                                AmountFcfa = amount,
+                                CompletedAt = p.CompletedAt
+                            });
+                        }
+                        continue;
                     }
-                    continue;
+                    // Payout API SANS retrait Idara correspondant : anormal (source tierce ?)
+                    // → traité comme orphelin par prudence (à consigner).
                 }
 
-                // Orphelin = payout effectué hors Idara (dashboard marchand).
+                // Orphelin = retrait dashboard (SENEPAY_PAYOUT_) OU payout API sans match Idara.
                 var already = p.DisbursementId != null && recordedRefs.Contains(p.DisbursementId);
                 result.Untracked.Add(new UntrackedPayoutDto
                 {
