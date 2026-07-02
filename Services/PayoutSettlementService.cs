@@ -6,6 +6,7 @@ using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Idara.API.Services
 {
@@ -65,7 +66,12 @@ namespace Idara.API.Services
             var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId, ct)
                 ?? throw new InvalidOperationException($"Withdrawal.Id={withdrawalId} introuvable (SettleCompleted)");
 
-            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId, ct)
+            // Retrait de GAINS PLATEFORME : chemin isolé (aucun wallet école touché).
+            if (withdrawal.IsPlatform)
+                return await SettlePlatformCompletedAsync(
+                    tx, withdrawal, disbursementId, feesFcfa, netReceivedFcfa, completedAtUtc, source, ct);
+
+            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId!.Value, ct)
                 ?? throw new InvalidOperationException($"SchoolWallet manquant pour SchoolId={withdrawal.SchoolId}");
 
             // SOUS le verrou wallet : recharger le statut du retrait pour voir
@@ -105,7 +111,7 @@ namespace Idara.API.Services
                     _logger.LogInformation(
                         "[payout-settle] Withdrawal {Id} → Completed (source={Source}, {Amount} FCFA)",
                         withdrawal.Id, source, withdrawal.AmountFcfa);
-                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                    await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
                         "WITHDRAWAL_DONE", withdrawal.Id);
                     return PayoutSettlementOutcome.SettledCompleted;
@@ -159,7 +165,7 @@ namespace Idara.API.Services
 
                     _context.WalletTransactions.Add(new WalletTransaction
                     {
-                        SchoolId = withdrawal.SchoolId,
+                        SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Adjustment,
                         AmountFcfa = -withdrawal.AmountFcfa,
                         BalanceAfter = wallet.AvailableBalance,
@@ -183,7 +189,7 @@ namespace Idara.API.Services
                     _logger.LogCritical(
                         "[ALERT][payout] DOUBLE-SPEND CORRECTED Withdrawal {Id} (School {SchoolId}, {Amount} FCFA) — restitution annulée par re-débit (source={Source})",
                         withdrawal.Id, withdrawal.SchoolId, withdrawal.AmountFcfa, source);
-                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                    await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
                         "WITHDRAWAL_DONE", withdrawal.Id);
                     return PayoutSettlementOutcome.Corrected;
@@ -204,7 +210,11 @@ namespace Idara.API.Services
             var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId, ct)
                 ?? throw new InvalidOperationException($"Withdrawal.Id={withdrawalId} introuvable (SettleFailed)");
 
-            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId, ct)
+            if (withdrawal.IsPlatform)
+                return await SettlePlatformFailedAsync(
+                    tx, withdrawal, reason, disbursementId, failedAtUtc, source, ct);
+
+            var wallet = await _context.LockWalletAsync(withdrawal.SchoolId!.Value, ct)
                 ?? throw new InvalidOperationException($"SchoolWallet manquant pour SchoolId={withdrawal.SchoolId}");
 
             // SOUS le verrou : recharger le statut (cf. SettleCompletedAsync).
@@ -228,7 +238,7 @@ namespace Idara.API.Services
 
                     _context.WalletTransactions.Add(new WalletTransaction
                     {
-                        SchoolId = withdrawal.SchoolId,
+                        SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Release,
                         AmountFcfa = withdrawal.AmountFcfa, // release = signé positif
                         BalanceAfter = wallet.AvailableBalance,
@@ -243,7 +253,7 @@ namespace Idara.API.Services
                     _logger.LogInformation(
                         "[payout-settle] Withdrawal {Id} → Failed + restitué (source={Source}, raison={Reason})",
                         withdrawal.Id, source, Truncate(reason, 120));
-                    await NotifyAdminsAsync(withdrawal.SchoolId,
+                    await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalFailed(withdrawal.AmountFcfa),
                         "WITHDRAWAL_FAILED", withdrawal.Id);
                     return PayoutSettlementOutcome.Restituted;
@@ -279,8 +289,11 @@ namespace Idara.API.Services
             var withdrawal = await _context.Withdrawals.FirstOrDefaultAsync(w => w.Id == withdrawalId, ct)
                 ?? throw new InvalidOperationException($"Withdrawal.Id={withdrawalId} introuvable (MarkUnderVerification)");
 
+            if (withdrawal.IsPlatform)
+                return await MarkPlatformUnderVerificationAsync(tx, withdrawal, disbursementId, reason, source, ct);
+
             // Verrou pour sérialiser vs un webhook qui clôturerait au même moment.
-            await _context.LockWalletAsync(withdrawal.SchoolId, ct);
+            await _context.LockWalletAsync(withdrawal.SchoolId!.Value, ct);
 
             // SOUS le verrou : recharger le statut (un webhook a pu trancher).
             await _context.Entry(withdrawal).ReloadAsync(ct);
@@ -302,6 +315,144 @@ namespace Idara.API.Services
             await tx.CommitAsync(ct);
             _logger.LogWarning(
                 "[payout-settle] Withdrawal {Id} → UnderVerification (source={Source}, raison={Reason}) — fonds maintenus réservés",
+                withdrawal.Id, source, Truncate(reason, 160));
+            return PayoutSettlementOutcome.MarkedUnderVerification;
+        }
+
+        // ====================================================================
+        // ===== Retraits de GAINS PLATEFORME (SchoolId == null) =====
+        // Isolé du chemin école : AUCUN wallet, AUCUNE WalletTransaction. Le solde
+        // plateforme P étant RECALCULÉ (dérivé), un retrait plateforme non-Failed
+        // réduit P de lui-même ; le passage à Failed le restaure. On ne fait donc
+        // que des transitions de statut, sérialisées par le verrou plateforme.
+        // ====================================================================
+
+        private async Task<PayoutSettlementOutcome> SettlePlatformCompletedAsync(
+            IDbContextTransaction tx, Withdrawal withdrawal, string? disbursementId,
+            long feesFcfa, long netReceivedFcfa, DateTime? completedAtUtc, string source, CancellationToken ct)
+        {
+            await _context.LockPlatformAsync(ct);
+            await _context.Entry(withdrawal).ReloadAsync(ct);
+
+            var completedAt = completedAtUtc?.ToUtcSafe() ?? DateTime.UtcNow;
+            withdrawal.SenePayDisbursementId ??= disbursementId;
+
+            switch (withdrawal.Status)
+            {
+                case WithdrawalStatus.Completed:
+                    await tx.RollbackAsync(ct);
+                    return PayoutSettlementOutcome.NoOp;
+
+                case WithdrawalStatus.Initiated:
+                case WithdrawalStatus.UnderVerification:
+                    withdrawal.Status = WithdrawalStatus.Completed;
+                    withdrawal.CompletedAt = completedAt;
+                    withdrawal.FeesFcfa = feesFcfa;
+                    withdrawal.NetReceivedFcfa = netReceivedFcfa;
+                    withdrawal.LastCheckedAt = DateTime.UtcNow;
+                    await _context.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    _logger.LogInformation(
+                        "[payout-settle] Retrait PLATEFORME {Id} → Completed (source={Source}, {Amount} FCFA)",
+                        withdrawal.Id, source, withdrawal.AmountFcfa);
+                    return PayoutSettlementOutcome.SettledCompleted;
+
+                case WithdrawalStatus.Failed:
+                    // Correcteur : `completed` authentique après un Failed. P étant
+                    // dérivé, il suffit de repasser Completed (P re-soustrait ce
+                    // retrait). AUCUN re-débit à faire (pas de wallet).
+                    if (withdrawal.ReversedAt != null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return PayoutSettlementOutcome.NoOp;
+                    }
+                    withdrawal.Status = WithdrawalStatus.Completed;
+                    withdrawal.ReversedAt = DateTime.UtcNow;
+                    withdrawal.CompletedAt = completedAt;
+                    withdrawal.FailedAt = null;
+                    withdrawal.FailureReason = null;
+                    withdrawal.FeesFcfa = feesFcfa;
+                    withdrawal.NetReceivedFcfa = netReceivedFcfa;
+                    withdrawal.LastCheckedAt = DateTime.UtcNow;
+                    AddAlertEntity(
+                        PayoutAlertType.DoubleSpendCorrected, null, withdrawal.Id,
+                        $"Retrait plateforme #{withdrawal.Id} : `completed` reçu après Failed → repassé Completed "
+                        + $"(P re-soustrait {withdrawal.AmountFcfa} FCFA). Double compte évité.",
+                        new { withdrawal.Id, withdrawal.AmountFcfa, disbursementId, source });
+                    await _context.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    _logger.LogCritical(
+                        "[ALERT][payout] PLATEFORME double-spend corrected Withdrawal {Id} ({Amount} FCFA, source={Source})",
+                        withdrawal.Id, withdrawal.AmountFcfa, source);
+                    return PayoutSettlementOutcome.Corrected;
+
+                default: // Cancelled
+                    await tx.RollbackAsync(ct);
+                    return PayoutSettlementOutcome.NoOp;
+            }
+        }
+
+        private async Task<PayoutSettlementOutcome> SettlePlatformFailedAsync(
+            IDbContextTransaction tx, Withdrawal withdrawal, string reason,
+            string? disbursementId, DateTime? failedAtUtc, string source, CancellationToken ct)
+        {
+            await _context.LockPlatformAsync(ct);
+            await _context.Entry(withdrawal).ReloadAsync(ct);
+            withdrawal.SenePayDisbursementId ??= disbursementId;
+
+            switch (withdrawal.Status)
+            {
+                case WithdrawalStatus.Initiated:
+                case WithdrawalStatus.UnderVerification:
+                    // Échec : P se restaure de lui-même (retrait Failed exclu du calcul).
+                    withdrawal.Status = WithdrawalStatus.Failed;
+                    withdrawal.FailedAt = failedAtUtc?.ToUtcSafe() ?? DateTime.UtcNow;
+                    withdrawal.FailureReason = Truncate(reason, 480);
+                    withdrawal.LastCheckedAt = DateTime.UtcNow;
+                    await _context.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    _logger.LogInformation(
+                        "[payout-settle] Retrait PLATEFORME {Id} → Failed (source={Source}, raison={Reason})",
+                        withdrawal.Id, source, Truncate(reason, 120));
+                    return PayoutSettlementOutcome.Restituted;
+
+                case WithdrawalStatus.Completed:
+                    await tx.RollbackAsync(ct);
+                    await RaiseAlertAsync(
+                        PayoutAlertType.FailedAfterCompleted, null, withdrawal.Id,
+                        $"Retrait plateforme #{withdrawal.Id} : `failed` reçu alors que déjà Completed. "
+                        + "Aucune action (fonds déjà sortis). Vérification manuelle requise.",
+                        new { withdrawal.Id, reason, disbursementId, source }, ct);
+                    return PayoutSettlementOutcome.FailedAfterCompleted;
+
+                default: // Failed (idempotent) / Cancelled
+                    await tx.RollbackAsync(ct);
+                    return PayoutSettlementOutcome.NoOp;
+            }
+        }
+
+        private async Task<PayoutSettlementOutcome> MarkPlatformUnderVerificationAsync(
+            IDbContextTransaction tx, Withdrawal withdrawal, string? disbursementId,
+            string reason, string source, CancellationToken ct)
+        {
+            await _context.LockPlatformAsync(ct);
+            await _context.Entry(withdrawal).ReloadAsync(ct);
+
+            if (withdrawal.Status != WithdrawalStatus.Initiated)
+            {
+                await tx.RollbackAsync(ct);
+                return PayoutSettlementOutcome.NoOp;
+            }
+
+            withdrawal.Status = WithdrawalStatus.UnderVerification;
+            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.VerificationStartedAt = DateTime.UtcNow;
+            withdrawal.NextVerificationAt = DateTime.UtcNow.AddSeconds(30);
+            withdrawal.VerificationAttempts = 0;
+            await _context.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            _logger.LogWarning(
+                "[payout-settle] Retrait PLATEFORME {Id} → UnderVerification (source={Source}, raison={Reason})",
                 withdrawal.Id, source, Truncate(reason, 160));
             return PayoutSettlementOutcome.MarkedUnderVerification;
         }

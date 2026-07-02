@@ -19,7 +19,8 @@ namespace Idara.API.Services
         private readonly ILogger<PlatformFinanceService> _logger;
 
         /// <summary>Marge de sécurité au-dessus de la dette (décision produit : 5%).</summary>
-        private const double SafetyMarginPercent = 5.0;
+        /// <inheritdoc/>
+        public double SafetyMarginPercent => 5.0;
 
         /// <summary>Tolérance sur l'écart de réconciliation (arrondis SenePay).</summary>
         private const long EpsilonFcfa = 50;
@@ -32,7 +33,9 @@ namespace Idara.API.Services
             _logger = logger;
         }
 
-        public async Task<ReconciliationDto> ComputeReconciliationAsync(CancellationToken ct = default)
+        /// <inheritdoc/>
+        public async Task<(long owedToSchools, PlatformBalanceDto platform)> ComputeDebtAndPlatformAsync(
+            CancellationToken ct = default)
         {
             // --- D : dette totale envers les écoles (Available + Pending) ---
             var owedToSchools = await _db.SchoolWallets
@@ -54,16 +57,21 @@ namespace Idara.API.Services
                 .Where(i => i.Status == SubscriptionInvoiceStatus.Paid)
                 .SumAsync(i => i.AmountFcfa, ct);
 
-            // Frais de payout des retraits école complétés (absorbés par la plateforme).
+            // Frais de payout des retraits ÉCOLE complétés (absorbés par la plateforme).
+            // On exclut les retraits plateforme (comptés séparément ci-dessous).
             var schoolPayoutFees = await _db.Withdrawals
-                .Where(w => w.Status == WithdrawalStatus.Completed)
+                .Where(w => w.Status == WithdrawalStatus.Completed && !w.IsPlatform)
                 .SumAsync(w => w.FeesFcfa, ct);
 
-            // Sorties plateforme enregistrées (retraits gains via API + ajustements manuels).
-            var platformOutflows = await _db.PlatformOutflows
-                .SumAsync(o => o.AmountFcfa, ct);
-
-            var platformTotal = surplus8 + subscriptionRevenue - schoolPayoutFees - platformOutflows;
+            // Sorties plateforme = ajustements manuels (dashboard) + retraits gains
+            // via API (Withdrawal.IsPlatform). Un retrait plateforme NON-Failed
+            // (Initiated/UnderVerification/Completed) sort de la réserve son montant
+            // + les frais → réduit P dès sa création (réservation implicite, P dérivé).
+            var manualOutflows = await _db.PlatformOutflows.SumAsync(o => o.AmountFcfa, ct);
+            var platformWithdrawalCost = await _db.Withdrawals
+                .Where(w => w.IsPlatform && w.Status != WithdrawalStatus.Failed)
+                .SumAsync(w => w.AmountFcfa + w.FeesFcfa, ct);
+            var platformOutflows = manualOutflows + platformWithdrawalCost;
 
             var platform = new PlatformBalanceDto
             {
@@ -71,8 +79,16 @@ namespace Idara.API.Services
                 Surplus8PercentFcfa = surplus8,
                 SchoolPayoutFeesFcfa = schoolPayoutFees,
                 PlatformOutflowsFcfa = platformOutflows,
-                TotalFcfa = platformTotal
+                TotalFcfa = surplus8 + subscriptionRevenue - schoolPayoutFees - platformOutflows
             };
+
+            return (owedToSchools, platform);
+        }
+
+        public async Task<ReconciliationDto> ComputeReconciliationAsync(CancellationToken ct = default)
+        {
+            var (owedToSchools, platform) = await ComputeDebtAndPlatformAsync(ct);
+            var platformTotal = platform.TotalFcfa;
 
             // --- R : réserve marchand SenePay (live) ---
             long reserve = 0;
@@ -127,8 +143,9 @@ namespace Idara.API.Services
             _logger.LogInformation(
                 "[finance] Réconciliation : R={Reserve} D={Owed} P={Platform} (abo={Sub}, surplus8={Surplus}, "
                 + "fraisPayout=-{Fees}, sorties=-{Outflows}) écart={Discrepancy} couleur={Color}",
-                reserve, owedToSchools, platformTotal, subscriptionRevenue, surplus8,
-                schoolPayoutFees, platformOutflows, dto.DiscrepancyFcfa, dto.HealthColor);
+                reserve, owedToSchools, platformTotal, platform.SubscriptionRevenueFcfa,
+                platform.Surplus8PercentFcfa, platform.SchoolPayoutFeesFcfa,
+                platform.PlatformOutflowsFcfa, dto.DiscrepancyFcfa, dto.HealthColor);
 
             return dto;
         }

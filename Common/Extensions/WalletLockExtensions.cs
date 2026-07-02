@@ -41,5 +41,24 @@ namespace Idara.API.Common.Extensions
 
             return wallet;
         }
+
+        /// <summary>
+        /// Verrou pessimiste pour sérialiser les mouvements de GAINS PLATEFORME
+        /// (retraits plateforme concurrents). Comme le solde plateforme P est
+        /// recalculé (pas un wallet matérialisé), on n'a pas de ligne de solde à
+        /// verrouiller : on prend un <c>FOR UPDATE</c> sur la ligne singleton
+        /// <see cref="PlatformSettings"/> (Id = 1), qui existe toujours et n'est
+        /// mutée que rarement (édition des réglages). Un simple SELECT ne bloque
+        /// PAS sur ce verrou en PostgreSQL — seuls un autre retrait plateforme ou
+        /// un UPDATE des réglages attendent. DOIT être appelé dans une transaction.
+        /// </summary>
+        public static async Task LockPlatformAsync(
+            this AppDbContext db, CancellationToken ct = default)
+        {
+            _ = await db.PlatformSettings
+                .FromSqlInterpolated(
+                    $"SELECT * FROM \"PlatformSettings\" WHERE \"Id\" = {PlatformSettings.SingletonId} FOR UPDATE")
+                .ToListAsync(ct);
+        }
     }
 }

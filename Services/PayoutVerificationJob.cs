@@ -109,7 +109,7 @@ namespace Idara.API.Services
 
         private async Task VerifyOneAsync(
             AppDbContext db, ISenePayClient senepay, IPayoutSettlementService settlement,
-            int withdrawalId, int schoolId, DateTime? startedAt, CancellationToken ct)
+            int withdrawalId, int? schoolId, DateTime? startedAt, CancellationToken ct)
         {
             // external_id = Withdrawal.Id (cf. SchoolWalletController.Withdraw).
             DTOs.Senepay.SenePayPayoutStatusResponse? status;

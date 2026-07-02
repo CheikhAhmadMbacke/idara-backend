@@ -18,8 +18,20 @@ namespace Idara.API.Models
     {
         public int Id { get; set; }
 
-        public int SchoolId { get; set; }
-        public School School { get; set; } = null!;
+        /// <summary>
+        /// École propriétaire du retrait. NULL pour un retrait de GAINS PLATEFORME
+        /// (<see cref="IsPlatform"/> = true), qui ne débite aucun wallet école : la
+        /// plateforme puise dans ses propres gains (solde P dérivé).
+        /// </summary>
+        public int? SchoolId { get; set; }
+        public School? School { get; set; }
+
+        /// <summary>
+        /// true = retrait des gains plateforme (SuperAdmin), pas d'école. Le
+        /// règlement (§78) branche sur ce flag : côté plateforme, simple transition
+        /// de statut (P étant recalculé, aucun mouvement de wallet).
+        /// </summary>
+        public bool IsPlatform { get; set; }
 
         /// <summary>Montant débité du wallet école = net reçu par le bénéficiaire (FCFA).</summary>
         public long AmountFcfa { get; set; }
