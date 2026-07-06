@@ -70,8 +70,12 @@ namespace Idara.API.Services
             // via API (Withdrawal.IsPlatform). Un retrait plateforme NON-Failed
             // (Initiated/UnderVerification/Completed) sort de la réserve son montant
             // + les frais → réduit P dès sa création (réservation implicite, P dérivé).
+            // Sorties SOUSTRAITES de P : ajustements manuels dashboard + contrepartie
+            // d'un CRÉDIT manuel de wallet école (la plateforme finance le crédit sur
+            // ses gains). On EXCLUT les types ADDITIFS (CapitalInjection, SchoolDebitReturn).
             var manualOutflows = await _db.PlatformOutflows
-                .Where(o => o.Type != PlatformOutflowType.CapitalInjection)
+                .Where(o => o.Type != PlatformOutflowType.CapitalInjection
+                            && o.Type != PlatformOutflowType.SchoolDebitReturn)
                 .SumAsync(o => o.AmountFcfa, ct);
             var platformWithdrawalCost = await _db.Withdrawals
                 .Where(w => w.IsPlatform && w.Status != WithdrawalStatus.Failed)
@@ -84,6 +88,13 @@ namespace Idara.API.Services
                 .Where(o => o.Type == PlatformOutflowType.CapitalInjection)
                 .SumAsync(o => o.AmountFcfa, ct);
 
+            // Contrepartie des DÉBITS manuels de wallets école : le montant débité
+            // sans mouvement de réserve revient aux gains plateforme → AUGMENTE P
+            // (retirable pour se rembourser un retrait payé hors SenePay).
+            var schoolDebitReturns = await _db.PlatformOutflows
+                .Where(o => o.Type == PlatformOutflowType.SchoolDebitReturn)
+                .SumAsync(o => o.AmountFcfa, ct);
+
             var platform = new PlatformBalanceDto
             {
                 SubscriptionRevenueFcfa = subscriptionRevenue,
@@ -91,7 +102,8 @@ namespace Idara.API.Services
                 SchoolPayoutFeesFcfa = schoolPayoutFees,
                 PlatformOutflowsFcfa = platformOutflows,
                 CapitalInjectionsFcfa = capitalInjections,
-                TotalFcfa = surplus8 + subscriptionRevenue + capitalInjections
+                SchoolDebitReturnsFcfa = schoolDebitReturns,
+                TotalFcfa = surplus8 + subscriptionRevenue + capitalInjections + schoolDebitReturns
                     - schoolPayoutFees - platformOutflows
             };
 

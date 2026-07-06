@@ -63,6 +63,9 @@ namespace Idara.API.DTOs.Admin
 
         /// <summary>Injections de capital enregistrées (argent ajouté à la réserve, +P).</summary>
         public long CapitalInjectionsFcfa { get; set; }
+
+        /// <summary>Contreparties des débits manuels de wallets école (montant revenu aux gains, +P).</summary>
+        public long SchoolDebitReturnsFcfa { get; set; }
     }
 
     /// <summary>Solde d'une école (vue SuperAdmin).</summary>

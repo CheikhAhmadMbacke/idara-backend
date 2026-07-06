@@ -9,6 +9,7 @@ using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
 using Idara.API.Services;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -31,6 +32,7 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly ISenePayClient _senepay;
         private readonly IPayoutSettlementService _settlement;
+        private readonly INotificationService _notif;
         private readonly SenePaySettings _senepaySettings;
         private readonly IMemoryCache _cache;
         private readonly ILogger<PlatformFinanceController> _logger;
@@ -41,6 +43,7 @@ namespace Idara.API.Controllers
         public PlatformFinanceController(
             IPlatformFinanceService finance, AppDbContext context,
             ISenePayClient senepay, IPayoutSettlementService settlement,
+            INotificationService notif,
             IOptions<SenePaySettings> senepaySettings, IMemoryCache cache,
             ILogger<PlatformFinanceController> logger)
         {
@@ -48,6 +51,7 @@ namespace Idara.API.Controllers
             _context = context;
             _senepay = senepay;
             _settlement = settlement;
+            _notif = notif;
             _senepaySettings = senepaySettings.Value;
             _cache = cache;
             _logger = logger;
@@ -169,6 +173,169 @@ namespace Idara.API.Controllers
                 dto.AmountFcfa, entry.Id, userId.Value);
 
             return Ok(ApiResponse<object>.Ok(new { entry.Id }, "Injection de capital enregistrée."));
+        }
+
+        /// <summary>
+        /// Ajuste manuellement le solde d'un wallet école (crédit ou débit) —
+        /// écriture comptable directe sur la dette D, AUCUN mouvement SenePay.
+        /// Step-up mot de passe SuperAdmin. Sous verrou wallet + verrou plateforme
+        /// (atomicité D ↔ contrepartie P). Cas d'usage : corriger un paiement parent
+        /// réellement arrivé mais marqué failed (crédit), ou débiter un retrait payé
+        /// hors SenePay (débit → le montant revient aux gains plateforme, retirable).
+        /// </summary>
+        [HttpPost("schools/{schoolId:int}/wallet/adjust")]
+        public async Task<ActionResult<ApiResponse<AdjustSchoolWalletResultDto>>> AdjustSchoolWallet(
+            int schoolId, [FromBody] AdjustSchoolWalletDto dto, CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
+            if (admin == null) return Unauthorized();
+
+            // Step-up mot de passe (rate-limité, clé partagée avec /auth/verify-password).
+            var rlKey = $"pwdreauth:{userId.Value}";
+            if (_cache.TryGetValue(rlKey, out int attempts) && attempts >= 5)
+                return StatusCode(429, ApiResponse<AdjustSchoolWalletResultDto>.Fail(
+                    "Trop de tentatives. Réessaie dans quelques minutes."));
+            if (!BCrypt.Net.BCrypt.Verify(dto.Password, admin.PasswordHash))
+            {
+                _cache.Set(rlKey, attempts + 1, TimeSpan.FromMinutes(15));
+                return BadRequest(ApiResponse<AdjustSchoolWalletResultDto>.Fail("Mot de passe incorrect."));
+            }
+            _cache.Remove(rlKey);
+
+            var school = await _context.Schools
+                .Where(s => s.Id == schoolId)
+                .Select(s => new { s.Id, s.Name })
+                .FirstOrDefaultAsync(ct);
+            if (school == null)
+                return NotFound(ApiResponse<AdjustSchoolWalletResultDto>.Fail("École introuvable."));
+
+            var reason = dto.Reason.Trim();
+            var signedAmount = dto.IsCredit ? dto.AmountFcfa : -dto.AmountFcfa;
+
+            AdjustSchoolWalletResultDto result;
+            await using (var tx = await _context.Database.BeginTransactionAsync(ct))
+            {
+                // Verrou wallet PUIS verrou plateforme (aucune autre voie ne prend
+                // les deux → pas de risque d'inversion/deadlock). Le verrou plateforme
+                // sérialise contre un retrait de gains concurrent (la contrepartie P
+                // modifie le solde plateforme retirable).
+                var wallet = await _context.LockWalletAsync(schoolId, ct);
+                if (wallet == null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return StatusCode(500, ApiResponse<AdjustSchoolWalletResultDto>.Fail("Wallet introuvable."));
+                }
+                await _context.LockPlatformAsync(ct);
+
+                if (!dto.IsCredit)
+                {
+                    // Débit : jamais sous 0 (le garde-fou DB CK_SchoolWallets_NonNegative
+                    // est le dernier filet ; on rejette proprement avant).
+                    if (wallet.AvailableBalance < dto.AmountFcfa)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return BadRequest(ApiResponse<AdjustSchoolWalletResultDto>.Fail(
+                            $"Solde insuffisant. Disponible : {wallet.AvailableBalance} FCFA."));
+                    }
+                    wallet.AvailableBalance -= dto.AmountFcfa;
+                    // La poche « Don » ne peut pas dépasser le solde disponible : on
+                    // ampute d'abord la poche paiement, puis les dons si nécessaire.
+                    if (wallet.DonationBalanceFcfa > wallet.AvailableBalance)
+                        wallet.DonationBalanceFcfa = wallet.AvailableBalance;
+                }
+                else
+                {
+                    // Crédit : va sur la poche « paiement » (un crédit manuel n'est
+                    // pas un don) — DonationBalance inchangé, FeeBalance augmente.
+                    wallet.AvailableBalance += dto.AmountFcfa;
+                }
+                wallet.UpdatedAt = DateTime.UtcNow;
+
+                _context.WalletTransactions.Add(new WalletTransaction
+                {
+                    SchoolId = schoolId,
+                    Type = WalletTransactionType.Adjustment,
+                    Source = WalletSource.Adjustment,
+                    AmountFcfa = signedAmount,
+                    BalanceAfter = wallet.AvailableBalance,
+                    RelatedEntity = WalletRelatedEntity.Adjustment,
+                    RelatedId = null,
+                    Note = $"Ajustement SuperAdmin ({(dto.IsCredit ? "crédit" : "débit")}) : {reason}",
+                    OccurredAt = DateTime.UtcNow
+                });
+
+                // Contrepartie plateforme (garde R = D + P exact) : crédit → sortie
+                // (P baisse, ManualAdjustment) ; débit → retour (P monte, SchoolDebitReturn).
+                if (dto.CounterpartPlatformGains)
+                {
+                    _context.PlatformOutflows.Add(new PlatformOutflow
+                    {
+                        Type = dto.IsCredit
+                            ? PlatformOutflowType.ManualAdjustment
+                            : PlatformOutflowType.SchoolDebitReturn,
+                        AmountFcfa = dto.AmountFcfa,
+                        Note = $"Contrepartie ajustement wallet école #{schoolId} "
+                            + $"({(dto.IsCredit ? "crédit" : "débit")}) : {reason}",
+                        OccurredAt = DateTime.UtcNow,
+                        CreatedById = userId.Value,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
+
+                await _context.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                result = new AdjustSchoolWalletResultDto
+                {
+                    SchoolId = schoolId,
+                    AvailableBalanceFcfa = wallet.AvailableBalance,
+                    DonationBalanceFcfa = wallet.DonationBalanceFcfa,
+                    PendingBalanceFcfa = wallet.PendingBalance
+                };
+            }
+
+            _logger.LogInformation(
+                "[finance] Ajustement wallet école #{SchoolId} : {Sign}{Amount} FCFA (contrepartie P={Cp}) "
+                + "par user {User} — motif: {Reason}",
+                schoolId, dto.IsCredit ? "+" : "-", dto.AmountFcfa,
+                dto.CounterpartPlatformGains, userId.Value, reason);
+
+            // --- Notification push aux admins de l'école (post-commit, best-effort) ---
+            try
+            {
+                var sign = dto.IsCredit ? "+" : "-";
+                var msg = new BilingualMessage(
+                    Fr: $"Le solde de votre école a été ajusté de {sign}{Fmt(dto.AmountFcfa)} FCFA. "
+                        + $"Motif : {reason}. Nouveau solde : {Fmt(result.AvailableBalanceFcfa)} FCFA.",
+                    Ar: $"تم تعديل رصيد مدرستكم بمقدار {sign}{Fmt(dto.AmountFcfa)} FCFA. "
+                        + $"السبب: {reason}. الرصيد الجديد: {Fmt(result.AvailableBalanceFcfa)} FCFA.");
+                var admins = await _context.Users
+                    .Where(u => u.SchoolId == schoolId && !u.IsDeleted && u.Role == UserRoles.SchoolAdmin)
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync(ct);
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: "WALLET_ADJUSTED",
+                        RelatedEntityId: schoolId,
+                        PushRoute: "/payments/overview"), ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[finance] Échec notif ajustement wallet école #{SchoolId} — pas bloquant", schoolId);
+            }
+
+            return Ok(ApiResponse<AdjustSchoolWalletResultDto>.Ok(
+                result,
+                $"Solde de l'école {(dto.IsCredit ? "crédité" : "débité")} de {Fmt(dto.AmountFcfa)} FCFA."));
         }
 
         /// <summary>
@@ -357,5 +524,9 @@ namespace Idara.API.Controllers
             if (string.IsNullOrEmpty(phone) || phone.Length < 4) return "****";
             return phone[..2] + new string('*', phone.Length - 4) + phone[^2..];
         }
+
+        /// <summary>Formate un montant FCFA avec séparateur d'espace (12 345).</summary>
+        private static string Fmt(long v) => v.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)
+            .Replace(",", " ");
     }
 }

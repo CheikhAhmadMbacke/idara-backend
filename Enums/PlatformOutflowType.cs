@@ -23,6 +23,19 @@ namespace Idara.API.Enums
         /// convention, <see cref="PlatformOutflow.AmountFcfa"/> reste positif ; le
         /// calcul de P l'ADDITIONNE au lieu de le soustraire.
         /// </summary>
-        CapitalInjection = 2
+        CapitalInjection = 2,
+
+        /// <summary>
+        /// Contrepartie plateforme du DÉBIT manuel d'un wallet école (SuperAdmin).
+        /// Quand on débite une école de X sans que la réserve R ne bouge (ex :
+        /// retrait payé hors SenePay depuis l'argent perso de la plateforme, ou
+        /// correction), le montant X « revient » aux gains plateforme et devient
+        /// retirable (pour se rembourser). AUGMENTE P (mouvement ENTRANT, comme
+        /// <see cref="CapitalInjection"/>) : <see cref="PlatformOutflow.AmountFcfa"/>
+        /// reste positif, le calcul de P l'ADDITIONNE. Garde R = D + P exact quand
+        /// D baisse. La contrepartie SYMÉTRIQUE d'un CRÉDIT école (P baisse) réutilise
+        /// <see cref="ManualAdjustment"/> (montant soustrait de P).
+        /// </summary>
+        SchoolDebitReturn = 3
     }
 }
