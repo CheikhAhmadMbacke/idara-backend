@@ -50,7 +50,9 @@ namespace Idara.API.Services
 
             await using var tx = await _context.Database.BeginTransactionAsync(ct);
 
-            var payment = await _context.Payments.FirstOrDefaultAsync(p => p.Id == paymentId, ct)
+            var payment = await _context.Payments
+                    .Include(p => p.InvoiceAllocations)
+                    .FirstOrDefaultAsync(p => p.Id == paymentId, ct)
                 ?? throw new InvalidOperationException(
                     $"Payment.Id={paymentId} introuvable pour règlement (source={source}).");
 
@@ -177,10 +179,27 @@ namespace Idara.API.Services
                 OccurredAt = DateTime.UtcNow
             });
 
-            // Invoice : TOUJOURS créditée du montant CIBLE (dette de la famille),
-            // dans les 2 modes FeesPayer. NE JAMAIS créditer du net (sinon facture
-            // ZOMBIE jamais soldée en mode School). Cf. §106.
-            if (payment.InvoiceId is int invoiceId)
+            // Invoice(s) : TOUJOURS créditée(s) du montant CIBLE (dette de la
+            // famille), dans les 2 modes FeesPayer. NE JAMAIS créditer du net
+            // (sinon facture ZOMBIE jamais soldée en mode School). Cf. §106.
+            if (payment.InvoiceAllocations.Count > 0)
+            {
+                // Paiement CONSOLIDÉ : chaque facture reçoit son allocation figée
+                // à l'initiation (= son reste dû d'alors). all-or-nothing : ce
+                // crédit n'arrive qu'à la complétion du paiement unique.
+                var allocIds = payment.InvoiceAllocations.Select(a => a.InvoiceId).ToList();
+                var invoices = _context.Invoices.Where(i => allocIds.Contains(i.Id)).ToList();
+                foreach (var alloc in payment.InvoiceAllocations)
+                {
+                    var invoice = invoices.FirstOrDefault(i => i.Id == alloc.InvoiceId);
+                    if (invoice == null) continue;
+                    invoice.AmountPaidFcfa += alloc.AmountFcfa;
+                    invoice.UpdatedAt = DateTime.UtcNow;
+                    if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
+                        invoice.Status = InvoiceStatus.Paid;
+                }
+            }
+            else if (payment.InvoiceId is int invoiceId)
             {
                 var invoice = _context.Invoices.FirstOrDefault(i => i.Id == invoiceId);
                 if (invoice != null)
@@ -202,11 +221,32 @@ namespace Idara.API.Services
             var payment = await _context.Payments
                 .Include(p => p.Student)
                 .Include(p => p.Donor)
+                .Include(p => p.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
                 .FirstOrDefaultAsync(p => p.Id == paymentId, ct);
             if (payment == null || payment.Status != PaymentStatus.Completed)
                 return;
 
             var school0 = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
+
+            // Paiement CONSOLIDÉ (« paiement global » d'un parent) : lignes reçu +
+            // libellé « vos enfants » / nom de l'unique enfant réglé.
+            var isConsolidated = payment.InvoiceAllocations.Count > 0;
+            List<ReceiptConsolidatedLine>? consolidatedLines = isConsolidated
+                ? payment.InvoiceAllocations
+                    .OrderBy(a => a.Invoice.Student.FirstName)
+                    .Select(a => new ReceiptConsolidatedLine(
+                        $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
+                        FrenchMonthYear(a.Invoice.PeriodStart),
+                        a.AmountFcfa))
+                    .ToList()
+                : null;
+            var singleChildName = isConsolidated && payment.InvoiceAllocations.Count == 1
+                ? consolidatedLines![0].StudentName
+                : null;
+            // Libellé côté PARENT (« vos enfants ») et côté ÉCOLE (« plusieurs
+            // élèves ») quand le paiement règle >1 enfant.
+            var consolidatedChildLabel = isConsolidated ? (singleChildName ?? "vos enfants") : null;
+            var consolidatedSchoolLabel = isConsolidated ? (singleChildName ?? "plusieurs élèves") : null;
 
             // -------- Reçu PDF (best-effort) --------
             try
@@ -217,7 +257,7 @@ namespace Idara.API.Services
                 if (school0 != null)
                 {
                     var pdfPath = await _receiptPdf.GenerateAsync(
-                        payment, school0, payment.Student, invoice, payment.Donor);
+                        payment, school0, payment.Student, invoice, payment.Donor, consolidatedLines);
                     await _context.Payments
                         .Where(p => p.Id == payment.Id)
                         .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, pdfPath), ct);
@@ -299,9 +339,10 @@ namespace Idara.API.Services
                         u => u.Id == payment.GuardianId.Value && !u.IsDeleted, ct);
                     if (guardian?.PhoneNumber != null)
                     {
-                        var eleve = payment.Student != null
-                            ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
-                            : "votre enfant";
+                        var eleve = consolidatedChildLabel
+                            ?? (payment.Student != null
+                                ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
+                                : "votre enfant");
                         var platform = await _context.GetPlatformSettingsAsync(ct);
                         var msg = NotificationTemplates.PaymentReceived(eleve, shownAmount);
                         await _notif.SendSmsAsync(new NotificationSmsRequest(
@@ -338,9 +379,10 @@ namespace Idara.API.Services
                         var msg = isTopup
                             ? NotificationTemplates.WalletTopupReceived(shownAmount)
                             : NotificationTemplates.PaymentReceivedSchool(
-                                payment.Student != null
-                                    ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
-                                    : "un eleve",
+                                consolidatedSchoolLabel
+                                    ?? (payment.Student != null
+                                        ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
+                                        : "un eleve"),
                                 shownAmount);
                         foreach (var su in schoolUsers)
                         {
@@ -391,5 +433,14 @@ namespace Idara.API.Services
                     "[payin-settle] Retry abonnement École {SchoolId} échoué — pas bloquant", schoolId);
             }
         }
+
+        private static readonly string[] FrMonths =
+        {
+            "janvier", "fevrier", "mars", "avril", "mai", "juin",
+            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+        };
+
+        /// <summary>"juin 2026" — sans accent (GSM-7) ni dépendance culture.</summary>
+        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
     }
 }

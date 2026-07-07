@@ -42,6 +42,7 @@ namespace Idara.API.Data
         public DbSet<StudentFeeOverride> StudentFeeOverrides { get; set; }
         public DbSet<Invoice> Invoices { get; set; }
         public DbSet<Payment> Payments { get; set; }
+        public DbSet<PaymentInvoiceAllocation> PaymentInvoiceAllocations { get; set; }
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
         public DbSet<Withdrawal> Withdrawals { get; set; }
@@ -624,6 +625,31 @@ namespace Idara.API.Data
             // Vue Guardian : "mes paiements".
             modelBuilder.Entity<Payment>()
                 .HasIndex(p => new { p.GuardianId, p.InitiatedAt });
+
+            // --- PaymentInvoiceAllocation (paiement consolidé → N factures) ---
+            // Cascade depuis Payment (jamais supprimé hors purge d'école) et
+            // depuis Invoice (une suppression d'élève cascade ses factures → et
+            // donc ses allocations, sans bloquer la purge).
+            modelBuilder.Entity<PaymentInvoiceAllocation>()
+                .HasOne(a => a.Payment)
+                .WithMany(p => p.InvoiceAllocations)
+                .HasForeignKey(a => a.PaymentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<PaymentInvoiceAllocation>()
+                .HasOne(a => a.Invoice)
+                .WithMany()
+                .HasForeignKey(a => a.InvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Une facture ne peut être allouée qu'une fois par paiement.
+            modelBuilder.Entity<PaymentInvoiceAllocation>()
+                .HasIndex(a => new { a.PaymentId, a.InvoiceId })
+                .IsUnique();
+
+            // Lookup « quels paiements ont touché cette facture ».
+            modelBuilder.Entity<PaymentInvoiceAllocation>()
+                .HasIndex(a => a.InvoiceId);
 
             // --- SchoolWallet (1-1 avec School, PK = SchoolId) ---
             modelBuilder.Entity<SchoolWallet>()

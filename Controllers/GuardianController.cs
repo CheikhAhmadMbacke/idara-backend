@@ -530,6 +530,87 @@ namespace Idara.API.Controllers
             }));
         }
 
+        /// <summary>
+        /// « Paiement global » : total des mensualités impayées des enfants du
+        /// parent, REGROUPÉ PAR ÉCOLE (un paiement crédite un seul wallet). Seules
+        /// les écoles en mode FixedAmount ont des factures — les FreeAmount sont
+        /// donc naturellement absentes. Sert à afficher une carte « Tout payer »
+        /// par école côté parent.
+        /// </summary>
+        [HttpGet("outstanding")]
+        public async Task<ActionResult<IEnumerable<GuardianOutstandingSchoolDto>>> GetOutstanding(
+            CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var invoices = await _context.Invoices
+                .Include(i => i.Student).ThenInclude(s => s.School)
+                .Include(i => i.Student).ThenInclude(s => s.Class)
+                .Where(i => (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
+                            && i.AmountDueFcfa - i.AmountPaidFcfa > 0
+                            && _context.StudentGuardians.Any(sg =>
+                                sg.StudentId == i.StudentId
+                                && sg.GuardianId == userId.Value
+                                && !sg.Student.IsDeleted))
+                .ToListAsync(ct);
+
+            // Qui porte les frais par école + majoration courante (dynamique) :
+            // le montant réellement débité = cible × multiplier si FeesPayer=Parent,
+            // sinon la cible (école absorbe les frais). Calculé SERVEUR → l'écran
+            // de confirmation parent affiche le bon total sans calcul côté client.
+            var schoolIds = invoices.Select(i => i.SchoolId).Distinct().ToList();
+            var feesPayerBySchool = await _context.SchoolPaymentSettings
+                .Where(s => schoolIds.Contains(s.SchoolId))
+                .ToDictionaryAsync(s => s.SchoolId, s => s.FeesPayer, ct);
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+
+            var result = invoices
+                .GroupBy(i => i.SchoolId)
+                .Select(schoolGroup =>
+                {
+                    var first = schoolGroup.First();
+                    var totalDue = schoolGroup.Sum(i => i.AmountDueFcfa - i.AmountPaidFcfa);
+                    var feesPayer = feesPayerBySchool.TryGetValue(schoolGroup.Key, out var fp)
+                        ? fp : FeesPayer.Parent;
+                    var amountToCharge = feesPayer == FeesPayer.Parent
+                        ? (long)Math.Ceiling(totalDue * platform.ParentFeeMultiplier)
+                        : totalDue;
+                    var children = schoolGroup
+                        .GroupBy(i => i.StudentId)
+                        .Select(childGroup =>
+                        {
+                            var s = childGroup.First().Student;
+                            return new GuardianOutstandingChildDto
+                            {
+                                StudentId = childGroup.Key,
+                                StudentName = $"{s.FirstName} {s.LastName}".Trim(),
+                                ClassName = s.Class?.Name,
+                                DueFcfa = childGroup.Sum(i => i.AmountDueFcfa - i.AmountPaidFcfa),
+                                InvoiceCount = childGroup.Count()
+                            };
+                        })
+                        .OrderBy(c => c.StudentName)
+                        .ToList();
+
+                    return new GuardianOutstandingSchoolDto
+                    {
+                        SchoolId = schoolGroup.Key,
+                        SchoolName = first.Student.School.Name ?? string.Empty,
+                        TotalDueFcfa = totalDue,
+                        AmountToChargeFcfa = amountToCharge,
+                        FeesPayer = feesPayer,
+                        InvoiceCount = schoolGroup.Count(),
+                        ChildCount = children.Count,
+                        Children = children
+                    };
+                })
+                .OrderByDescending(s => s.TotalDueFcfa)
+                .ToList();
+
+            return Ok(result);
+        }
+
         private async Task<bool> IsLinked(int studentId)
         {
             var userId = User.GetUserId();
@@ -561,5 +642,35 @@ namespace Idara.API.Controllers
         /// pour décider d'afficher ou non l'option « paiement libre ».
         /// </summary>
         public BillingMode? SchoolBillingMode { get; set; }
+    }
+
+    /// <summary>Total des mensualités impayées d'un parent dans une école (paiement global).</summary>
+    public class GuardianOutstandingSchoolDto
+    {
+        public int SchoolId { get; set; }
+        public string SchoolName { get; set; } = string.Empty;
+
+        /// <summary>Total dû (dette de la famille, avant majoration).</summary>
+        public long TotalDueFcfa { get; set; }
+
+        /// <summary>Montant réellement débité au parent (= TotalDue × majoration si FeesPayer=Parent, sinon TotalDue).</summary>
+        public long AmountToChargeFcfa { get; set; }
+
+        /// <summary>Qui porte les frais (détermine si une majoration s'applique).</summary>
+        public FeesPayer FeesPayer { get; set; }
+
+        public int InvoiceCount { get; set; }
+        public int ChildCount { get; set; }
+        public List<GuardianOutstandingChildDto> Children { get; set; } = new();
+    }
+
+    /// <summary>Détail par enfant dans une carte « paiement global ».</summary>
+    public class GuardianOutstandingChildDto
+    {
+        public int StudentId { get; set; }
+        public string StudentName { get; set; } = string.Empty;
+        public string? ClassName { get; set; }
+        public long DueFcfa { get; set; }
+        public int InvoiceCount { get; set; }
     }
 }

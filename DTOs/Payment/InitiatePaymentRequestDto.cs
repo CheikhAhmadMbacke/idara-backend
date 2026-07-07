@@ -26,22 +26,21 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Montant FCFA voulu par le parent. Ignoré si InvoiceId — sinon obligatoire ≥ 200.</summary>
         public long? Amount { get; set; }
 
-        /// <summary>"wave" ou "orange" — seuls opérateurs supportés MVP Sénégal.</summary>
-        [Required]
-        [RegularExpression("^(wave|orange)$", ErrorMessage = "Operator must be 'wave' or 'orange'")]
-        public string Operator { get; set; } = string.Empty;
-
-        /// <summary>Numéro national 9 chiffres commençant par 7 (ex: "771234567"). On préfixe "+221" côté serveur.</summary>
-        [Required]
-        [RegularExpression(@"^7\d{8}$", ErrorMessage = "CustomerPhone must be a 9-digit Senegal mobile number starting with 7")]
-        public string CustomerPhone { get; set; } = string.Empty;
+        /// <summary>
+        /// DÉPRÉCIÉ (2026-07-07) — ignoré. Le paiement est désormais Wave
+        /// uniquement, forcé côté serveur. Champ gardé nullable pour la
+        /// rétro-compatibilité d'anciennes APK.
+        /// </summary>
+        public string? Operator { get; set; }
 
         /// <summary>
-        /// OTP Orange Money — 6 chiffres, REQUIS pour operator="orange",
-        /// IGNORÉ pour operator="wave". Le parent génère l'OTP côté
-        /// téléphone via le code USSD opérateur (ex: #144#391# pour Orange SN)
-        /// AVANT d'appeler cet endpoint.
+        /// DÉPRÉCIÉ (2026-07-07) — ignoré. Le numéro du payeur est désormais
+        /// récupéré en base (identité par téléphone). Gardé nullable pour la
+        /// rétro-compatibilité d'anciennes APK.
         /// </summary>
+        public string? CustomerPhone { get; set; }
+
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré (plus d'Orange, donc plus d'OTP).</summary>
         public string? OtpCode { get; set; }
     }
 }

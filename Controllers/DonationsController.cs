@@ -193,14 +193,13 @@ namespace Idara.API.Controllers
             var donorId = User.GetUserId()
                 ?? throw new UnauthorizedAccessException("UserId manquant du JWT.");
 
-            var opNorm = dto.Operator?.Trim().ToLowerInvariant();
-            if (opNorm != "wave" && opNorm != "orange")
+            // Numéro du donateur récupéré en base (identité par téléphone) — plus
+            // de saisie ni de choix d'opérateur : Wave uniquement (refonte 2026-07-07).
+            var donorPhone = await _context.Users.Where(u => u.Id == donorId)
+                .Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct);
+            if (string.IsNullOrWhiteSpace(donorPhone))
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Opérateur non supporté. Choisissez Wave ou Orange Money."));
-
-            if (opNorm == "orange" && string.IsNullOrWhiteSpace(dto.OtpCode))
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Pour Orange Money, l'OTP doit être généré sur le téléphone (#144#391#) puis fourni dans cette requête."));
+                    "Aucun numéro de téléphone n'est associé à votre compte."));
 
             // Le daara doit exister ET être validé (on ne donne pas à une école
             // non validée / rejetée / supprimée).
@@ -218,9 +217,9 @@ namespace Idara.API.Controllers
             await _context.EnsurePaymentFoundationsAsync(dto.SchoolId, ct);
 
             var targetAmount = dto.Amount;
-            // Le donateur porte les frais (+8 %) → le daara reçoit le montant plein.
+            // Le donateur porte les frais → le daara reçoit le montant plein.
             var amountToCharge = (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier);
-            var operatorEnum = ParseOperator(opNorm!);
+            var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
             var payment = new Payment
             {
@@ -246,7 +245,7 @@ namespace Idara.API.Controllers
             SenePayInitiatePaymentResponse resp;
             try
             {
-                resp = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(payment, opNorm!, dto.CustomerPhone, dto.OtpCode), ct);
+                resp = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(payment, donorPhone), ct);
             }
             catch (SenePayApiException ex)
             {
@@ -389,8 +388,7 @@ namespace Idara.API.Controllers
         // ===== Helpers =====
         // ====================================================================
 
-        private SenePayInitiatePaymentRequest BuildSenePayRequest(
-            Payment payment, string operatorStr, string customerPhoneNational, string? otpCode)
+        private SenePayInitiatePaymentRequest BuildSenePayRequest(Payment payment, string payerPhone)
         {
             var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
             var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
@@ -400,9 +398,9 @@ namespace Idara.API.Controllers
                 Amount = payment.AmountFcfa,
                 Currency = "XOF",
                 CountryCode = "SN",
-                Operator = operatorStr,
-                CustomerPhone = "+221" + customerPhoneNational,
-                OtpCode = otpCode,
+                Operator = "wave", // Wave uniquement (2026-07-07)
+                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
+                OtpCode = null,
                 OrderId = payment.Id.ToString(),
                 CustomerName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value,
                 WebhookUrl = _senepaySettings.WebhookPayinUrl,
@@ -410,12 +408,5 @@ namespace Idara.API.Controllers
                 CancelUrl = $"{resultBase}?status=cancel"
             };
         }
-
-        private static PaymentOperator ParseOperator(string op) => op switch
-        {
-            "wave" => PaymentOperator.Wave,
-            "orange" => PaymentOperator.Orange,
-            _ => throw new ArgumentOutOfRangeException(nameof(op), $"Opérateur non supporté : {op}")
-        };
     }
 }

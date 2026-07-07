@@ -35,7 +35,8 @@ namespace Idara.API.Services
         }
 
         public async Task<string> GenerateAsync(
-            Payment payment, School school, Student? student, Invoice? invoice, User? donor = null)
+            Payment payment, School school, Student? student, Invoice? invoice, User? donor = null,
+            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null)
         {
             var folder = Path.Combine(_env.WebRootPath, "uploads", "receipts");
             Directory.CreateDirectory(folder);
@@ -57,7 +58,7 @@ namespace Idara.API.Services
                         page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
 
                         page.Header().Element(c => ComposeHeader(c, school, payment, isDonation));
-                        page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation));
+                        page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation, consolidatedLines));
                         page.Footer().Element(ComposeFooter);
                     });
                 });
@@ -104,10 +105,35 @@ namespace Idara.API.Services
         }
 
         private static void ComposeContent(
-            IContainer container, Payment payment, Student? student, Invoice? invoice, User? donor, bool isDonation)
+            IContainer container, Payment payment, Student? student, Invoice? invoice, User? donor, bool isDonation,
+            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines)
         {
+            var isConsolidated = consolidatedLines is { Count: > 0 };
             container.Column(col =>
             {
+                // Paiement GLOBAL : tableau « élèves concernés » à la place du
+                // bloc élève unique.
+                if (isConsolidated)
+                {
+                    col.Item().Background(SurfaceVariant).Padding(10).Column(c =>
+                    {
+                        c.Item().Text(t =>
+                        {
+                            t.Span("Paiement groupé — ").SemiBold().FontColor(TextSecondary);
+                            t.Span($"{consolidatedLines!.Count} enfant(s)").Bold();
+                        });
+                    });
+                    col.Item().PaddingTop(8).Element(e => ComposeChildrenTable(e, consolidatedLines!));
+                    col.Item().PaddingTop(10).Element(el => ComposeAmountsTable(el, payment));
+                    col.Item().PaddingTop(14).Text(t =>
+                    {
+                        t.Span("Document généré électroniquement, sans signature. ").FontSize(8).FontColor(TextSecondary);
+                        if (payment.Status == PaymentStatus.Completed)
+                            t.Span("Ce reçu atteste de la bonne réception du paiement.").FontSize(8).FontColor(TextSecondary);
+                    });
+                    return;
+                }
+
                 // Bloc élève / objet du paiement — ou bloc DONATEUR pour un don.
                 col.Item().Background(SurfaceVariant).Padding(10).Column(c =>
                 {
@@ -185,6 +211,37 @@ namespace Idara.API.Services
             });
         }
 
+        private static void ComposeChildrenTable(
+            IContainer container, IReadOnlyList<ReceiptConsolidatedLine> lines)
+        {
+            container.Table(table =>
+            {
+                table.ColumnsDefinition(c =>
+                {
+                    c.RelativeColumn(3);
+                    c.RelativeColumn(2);
+                    c.RelativeColumn(2);
+                });
+
+                table.Cell().Background(PrimaryHex).PaddingVertical(4).PaddingHorizontal(6)
+                    .Text("Élève").FontColor(Colors.White).SemiBold().FontSize(9);
+                table.Cell().Background(PrimaryHex).PaddingVertical(4).PaddingHorizontal(6)
+                    .Text("Période").FontColor(Colors.White).SemiBold().FontSize(9);
+                table.Cell().Background(PrimaryHex).PaddingVertical(4).PaddingHorizontal(6).AlignRight()
+                    .Text("Montant").FontColor(Colors.White).SemiBold().FontSize(9);
+
+                foreach (var l in lines)
+                {
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6)
+                        .Text(l.StudentName).FontSize(9);
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6)
+                        .Text(l.PeriodLabel).FontSize(9).FontColor(TextSecondary);
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6).AlignRight()
+                        .Text($"{l.AmountFcfa:N0} FCFA").FontSize(9);
+                }
+            });
+        }
+
         private static void ComposeAmountsTable(IContainer container, Payment payment)
         {
             container.Table(table =>
@@ -201,10 +258,14 @@ namespace Idara.API.Services
                 table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
                     .Text($"{payment.AmountFcfa:N0} FCFA").FontColor(Colors.White).SemiBold();
 
-                // Détail frais (approximatif si FeesPayer=Parent)
+                // Détail frais (FeesPayer=Parent) : montant EXACT réellement majoré
+                // = débité − cible (indépendant du % courant, qui peut changer à
+                // tout moment). Fallback /1.08 pour d'anciens Payments sans cible.
                 if (payment.FeesPayer == FeesPayer.Parent)
                 {
-                    var approxFees = payment.AmountFcfa - (long)Math.Round(payment.AmountFcfa / 1.08m);
+                    var approxFees = payment.TargetAmountFcfa > 0
+                        ? payment.AmountFcfa - payment.TargetAmountFcfa
+                        : payment.AmountFcfa - (long)Math.Round(payment.AmountFcfa / 1.08m);
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6)
                         .Text("  dont frais transaction").FontSize(9).FontColor(TextSecondary);
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6).AlignRight()

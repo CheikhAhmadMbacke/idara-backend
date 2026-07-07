@@ -1,4 +1,5 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
@@ -64,6 +65,7 @@ namespace Idara.API.Controllers
 
             var p = await _context.Payments
                 .Include(x => x.Student)
+                .Include(x => x.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
                 .FirstOrDefaultAsync(x => x.Id == id && x.GuardianId == guardianId, ct);
             if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
             if (p.Status != PaymentStatus.Completed)
@@ -97,7 +99,16 @@ namespace Idara.API.Controllers
                     : null;
                 if (school == null) return NotFound();
 
-                var regenerated = await _receiptPdf.GenerateAsync(p, school, p.Student, invoice);
+                List<ReceiptConsolidatedLine>? consolidatedLines = p.InvoiceAllocations.Count > 0
+                    ? p.InvoiceAllocations
+                        .OrderBy(a => a.Invoice.Student.FirstName)
+                        .Select(a => new ReceiptConsolidatedLine(
+                            $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
+                            FrenchMonthYear(a.Invoice.PeriodStart),
+                            a.AmountFcfa))
+                        .ToList()
+                    : null;
+                var regenerated = await _receiptPdf.GenerateAsync(p, school, p.Student, invoice, null, consolidatedLines);
                 if (string.IsNullOrEmpty(p.ReceiptPdfPath))
                 {
                     await _context.Payments
@@ -157,11 +168,10 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
-        /// `POST /api/payments/initiate` — initie un paiement Wave ou Orange.
-        /// Un seul flow : { studentId, invoiceId? ou amount, operator,
-        /// customerPhone, otpCode? }. L'otpCode est obligatoire pour
-        /// operator="orange" (le parent doit le générer via #144#391# avant)
-        /// et ignoré pour operator="wave".
+        /// `POST /api/payments/initiate` — initie un paiement **Wave** (unique
+        /// moyen depuis 2026-07-07). Le numéro du parent est récupéré en base
+        /// (identité par téléphone) : plus rien à saisir. Corps utile :
+        /// { studentId, invoiceId? ou amount }.
         /// </summary>
         [HttpPost("initiate")]
         public async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> Initiate(
@@ -170,17 +180,6 @@ namespace Idara.API.Controllers
         {
             var guardianId = User.GetUserId()
                 ?? throw new UnauthorizedAccessException("UserId missing from JWT");
-
-            // Validation d'usage : Orange exige otpCode AU 1er appel.
-            // SenePay rejettera de toute façon avec 400 si absent, mais on
-            // donne un message clair côté Idara au lieu de laisser remonter
-            // le 400 SenePay tel quel.
-            if (string.Equals(dto.Operator, "orange", StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(dto.OtpCode))
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Pour Orange Money, l'OTP doit être généré sur le téléphone (#144#391#) puis fourni dans cette requête."));
-            }
 
             return await InitiateNewPaymentAsync(guardianId, dto, ct);
         }
@@ -289,7 +288,7 @@ namespace Idara.API.Controllers
                 ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
                 : targetAmount;
 
-            var operatorEnum = ParseOperator(dto.Operator);
+            var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
             // Création Payment AVANT l'appel SenePay : le webhook peut arriver
             // entre l'appel et notre SaveChanges si l'opérateur est très rapide.
@@ -319,45 +318,149 @@ namespace Idara.API.Controllers
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
 
-            // Appel SenePay.
-            // L'OTP est forward AU PREMIER appel si le client l'envoie (Orange
-            // demande OTP-direct en pratique, malgré ce que la doc SenePay dit
-            // sur un 2-step flow). Si le client a envoyé otpCode ici, on le
-            // passe ; sinon SenePay retournera nextAction=OTP_REQUIRED pour
-            // Orange, et un 2e appel via ResubmitWithOtpAsync prendra le relais.
+            return await FinalizeSenePayInitiateAsync(payment, ct);
+        }
+
+        // ====================================================================
+        // ===== Paiement CONSOLIDÉ (« paiement global » d'un parent) =====
+        // ====================================================================
+
+        /// <summary>
+        /// `POST /api/payments/initiate-consolidated` — règle en UNE fois le
+        /// total des mensualités dues de TOUS les enfants du parent dans une
+        /// école (mode FixedAmount). Le backend recalcule lui-même l'ensemble
+        /// des factures impayées (source de vérité, anti-falsification).
+        /// </summary>
+        [HttpPost("initiate-consolidated")]
+        public async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> InitiateConsolidated(
+            [FromBody] InitiateConsolidatedPaymentRequestDto dto,
+            CancellationToken ct)
+        {
+            var guardianId = User.GetUserId()
+                ?? throw new UnauthorizedAccessException("UserId missing from JWT");
+
+            if (dto.SchoolId is not int schoolId)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail("SchoolId est requis."));
+            }
+
+            await _context.EnsurePaymentFoundationsAsync(schoolId, ct);
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+
+            var settings = await _context.SchoolPaymentSettings
+                .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
+            if (settings == null)
+            {
+                _logger.LogError(
+                    "[payment/consolidated] SchoolPaymentSettings manquant pour SchoolId={SchoolId}", schoolId);
+                return StatusCode(500, ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Configuration de paiement de l'école introuvable. Contactez le support."));
+            }
+            if (settings.BillingMode != BillingMode.FixedAmount)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Le paiement global n'est disponible que pour les écoles en montant fixe."));
+            }
+
+            // Toutes les factures impayables du parent DANS cette école : enfants
+            // liés (non supprimés), factures Pending/Overdue, reste dû > 0.
+            // Le lien StudentGuardian garantit le cloisonnement multi-tenant.
+            var outstanding = await _context.Invoices
+                .Where(i => i.SchoolId == schoolId
+                            && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
+                            && i.AmountDueFcfa - i.AmountPaidFcfa > 0
+                            && _context.StudentGuardians.Any(sg =>
+                                sg.StudentId == i.StudentId
+                                && sg.GuardianId == guardianId
+                                && !sg.Student.IsDeleted))
+                .Select(i => new { i.Id, Remaining = i.AmountDueFcfa - i.AmountPaidFcfa })
+                .ToListAsync(ct);
+
+            if (outstanding.Count == 0)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Aucune mensualité à payer pour vos enfants dans cette école."));
+            }
+
+            var targetAmount = outstanding.Sum(o => o.Remaining);
+            if (targetAmount < platform.MinPayinFcfa)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    $"Le montant minimum est de {platform.MinPayinFcfa} FCFA."));
+            }
+
+            long amountToCharge = settings.FeesPayer == FeesPayer.Parent
+                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
+                : targetAmount;
+
+            var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
+
+            var payment = new Payment
+            {
+                SchoolId = schoolId,
+                StudentId = null,            // consolidé → pas d'élève unique
+                GuardianId = guardianId,
+                InvoiceId = null,            // consolidé → factures portées par les allocations
+                Purpose = PaymentPurpose.SchoolFee,
+                AmountFcfa = amountToCharge,
+                TargetAmountFcfa = targetAmount,
+                FeesFcfa = 0,
+                NetCreditedFcfa = 0,
+                Operator = operatorEnum,
+                FeesPayer = settings.FeesPayer,
+                Status = PaymentStatus.Pending,
+                InitiatedAt = DateTime.UtcNow,
+                PublicResultToken = GeneratePublicToken(),
+                InvoiceAllocations = outstanding
+                    .Select(o => new PaymentInvoiceAllocation { InvoiceId = o.Id, AmountFcfa = o.Remaining })
+                    .ToList()
+            };
+            _context.Payments.Add(payment);
+            await _context.SaveChangesAsync(ct);
+
+            return await FinalizeSenePayInitiateAsync(payment, ct);
+        }
+
+        /// <summary>
+        /// Tronc commun aux deux flows d'initiation (unitaire + consolidé) :
+        /// appelle SenePay, stocke les identifiants sur le Payment déjà persisté,
+        /// gère l'échec synchrone, et renvoie la réponse client. Le Payment est
+        /// créé AVANT (anti-race webhook) par l'appelant.
+        /// </summary>
+        private async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> FinalizeSenePayInitiateAsync(
+            Payment payment, CancellationToken ct)
+        {
+            // Numéro du parent récupéré en base (identité par téléphone) — plus
+            // aucune saisie côté client (refonte UX 2026-07-07).
+            var payerPhone = payment.GuardianId is int gid
+                ? await _context.Users.Where(u => u.Id == gid).Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct)
+                : null;
+            if (string.IsNullOrWhiteSpace(payerPhone))
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Aucun numéro de téléphone n'est associé à votre compte. Contactez votre école."));
+            }
+
             SenePayInitiatePaymentResponse senepayResponse;
             try
             {
-                senepayResponse = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(
-                    payment, dto.Operator, dto.CustomerPhone, otpCode: dto.OtpCode, customerName: GuardianName()), ct);
+                senepayResponse = await _senepay.InitiatePaymentAsync(
+                    BuildSenePayRequest(payment, payerPhone, customerName: GuardianName()), ct);
             }
             catch (SenePayApiException ex)
             {
                 _logger.LogError(ex,
-                    "[payment/initiate] SenePay error pour Payment {PaymentId}",
-                    payment.Id);
-                // Garder le Payment en Pending — un retry ultérieur via le même
-                // endpoint créera un nouveau Payment. Ce vieux Payment Pending
-                // expirera fonctionnellement (timeout UI = 90s côté Flutter).
+                    "[payment/initiate] SenePay error pour Payment {PaymentId}", payment.Id);
                 return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(
                     "SenePay temporairement indisponible. Réessayez dans quelques secondes."));
             }
 
-            // Stocke les IDs SenePay sur le Payment.
+            // Stocke les IDs SenePay sur le Payment (cf. commentaire d'origine :
+            // token court pour GET /status, internalId pour rapprochement).
             payment.SenePayInternalId = senepayResponse.InternalId;
-            // ATTENTION : token = SenePay payin token (afp_tx_...) — c'est ce
-            // qu'on stocke dans SenePayTransactionId (clé d'idempotence webhook).
-            // Le webhook nous renverra ce même token dans payload.transactionId
-            // (préfixé SENEPAY_PAYIN_xxx pour Direct API — différent du token afp_tx_).
-            // → On stocke les DEUX : token court (pour GET /status), internalId
-            // (pour rapprochement). Le webhook utilisera transactionId qu'on
-            // matchera via SenePayTransactionId ou via OrderReference=Payment.Id.
             payment.SenePayTransactionId = senepayResponse.Token;
             await _context.SaveChangesAsync(ct);
 
-            // Si SenePay a déjà tranché Failed sur la 1ère réponse (ex: numéro
-            // invalide), on met à jour le Payment immédiatement — pas besoin
-            // d'attendre un webhook.
             if (string.Equals(senepayResponse.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(senepayResponse.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
             {
@@ -378,7 +481,7 @@ namespace Idara.API.Controllers
                 OtpRequired = senepayResponse.OtpRequired,
                 ErrorCode = senepayResponse.ErrorCode,
                 FailureReason = senepayResponse.FailedReason,
-                AmountChargedFcfa = amountToCharge
+                AmountChargedFcfa = payment.AmountFcfa
             }));
         }
 
@@ -388,9 +491,7 @@ namespace Idara.API.Controllers
 
         private SenePayInitiatePaymentRequest BuildSenePayRequest(
             Payment payment,
-            string operatorStr,
-            string customerPhoneNational,
-            string? otpCode,
+            string payerPhone,
             string? customerName)
         {
             // URLs page HTML résultat (servies par PaymentPublicController).
@@ -404,9 +505,9 @@ namespace Idara.API.Controllers
                 Amount = payment.AmountFcfa,
                 Currency = "XOF",
                 CountryCode = "SN",
-                Operator = operatorStr.ToLowerInvariant(),
-                CustomerPhone = "+221" + customerPhoneNational,
-                OtpCode = otpCode,
+                Operator = "wave", // Wave uniquement (2026-07-07)
+                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
+                OtpCode = null,
                 OrderId = payment.Id.ToString(),
                 CustomerName = customerName,
                 WebhookUrl = _senepaySettings.WebhookPayinUrl,
@@ -423,15 +524,13 @@ namespace Idara.API.Controllers
         private static string GeneratePublicToken() =>
             Guid.NewGuid().ToString("N");
 
-        private static PaymentOperator ParseOperator(string op)
+        private static readonly string[] FrMonths =
         {
-            return op.ToLowerInvariant() switch
-            {
-                "wave" => PaymentOperator.Wave,
-                "orange" => PaymentOperator.Orange,
-                _ => throw new ArgumentOutOfRangeException(nameof(op), $"Opérateur non supporté : {op}")
-            };
-        }
+            "janvier", "fevrier", "mars", "avril", "mai", "juin",
+            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+        };
+
+        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
 
         private string? GuardianName()
         {

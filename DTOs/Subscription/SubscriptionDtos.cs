@@ -125,15 +125,13 @@ namespace Idara.API.DTOs.Subscription
         [Range(200, 100_000_000, ErrorMessage = "Le montant doit être d'au moins 200 FCFA.")]
         public long Amount { get; set; }
 
-        /// <summary>« wave » ou « orange ».</summary>
-        [Required]
-        public string Operator { get; set; } = string.Empty;
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré. Wave forcé côté serveur.</summary>
+        public string? Operator { get; set; }
 
-        /// <summary>Numéro national 9 chiffres (sans +221).</summary>
-        [Required, RegularExpression(@"^\d{9}$", ErrorMessage = "Numéro à 9 chiffres attendu.")]
-        public string Phone { get; set; } = string.Empty;
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré. Numéro de l'école récupéré en base.</summary>
+        public string? Phone { get; set; }
 
-        /// <summary>OTP Orange (généré via #144#391# sur le téléphone). Ignoré pour Wave.</summary>
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré (plus d'Orange).</summary>
         public string? OtpCode { get; set; }
     }
 

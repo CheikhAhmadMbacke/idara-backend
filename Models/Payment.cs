@@ -31,6 +31,14 @@ namespace Idara.API.Models
         public Invoice? Invoice { get; set; }
 
         /// <summary>
+        /// Lignes d'allocation pour un paiement CONSOLIDÉ (« paiement global »
+        /// d'un parent réglant plusieurs enfants en une fois). Dans ce cas
+        /// <see cref="InvoiceId"/> est null et ces lignes portent les N factures
+        /// réglées. Vide pour un paiement mono-facture, un topup ou un don.
+        /// </summary>
+        public List<PaymentInvoiceAllocation> InvoiceAllocations { get; set; } = new();
+
+        /// <summary>
         /// Nature métier du paiement (mensualité / topup / don). Explicite depuis
         /// l'ajout du module Donateur : le webhook payin ne DEVINE plus le topup
         /// d'après les champs null (un don a AUSSI Student/Guardian null, il

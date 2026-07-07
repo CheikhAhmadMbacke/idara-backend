@@ -1,4 +1,5 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
@@ -57,19 +58,20 @@ namespace Idara.API.Controllers
             if (schoolId == null)
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail("École introuvable."));
 
-            // Valide l'opérateur AVANT ParseOperator (qui lèverait sinon une
-            // ArgumentOutOfRangeException → 500). Réponse 400 propre.
-            var opNorm = dto.Operator?.Trim().ToLowerInvariant();
-            if (opNorm != "wave" && opNorm != "orange")
+            // Numéro récupéré en base : celui de l'admin qui recharge, à défaut
+            // celui de l'école. Plus de saisie ni de choix d'opérateur : Wave
+            // uniquement (refonte UX 2026-07-07).
+            var adminId = User.GetUserId();
+            var payerPhone = adminId != null
+                ? await _context.Users.Where(u => u.Id == adminId.Value)
+                    .Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct)
+                : null;
+            if (string.IsNullOrWhiteSpace(payerPhone))
+                payerPhone = await _context.Schools.Where(s => s.Id == schoolId.Value)
+                    .Select(s => s.PhoneNumber).FirstOrDefaultAsync(ct);
+            if (string.IsNullOrWhiteSpace(payerPhone))
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Opérateur non supporté. Choisissez Wave ou Orange Money."));
-
-            if (string.Equals(dto.Operator, "orange", StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(dto.OtpCode))
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Pour Orange Money, l'OTP doit être généré sur le téléphone (#144#391#) puis fourni dans cette requête."));
-            }
+                    "Aucun numéro de téléphone n'est associé à votre compte ni à votre école. Ajoutez-en un dans les paramètres de l'école."));
 
             var platform = await _context.GetPlatformSettingsAsync(ct);
             if (dto.Amount < platform.MinPayinFcfa)
@@ -81,7 +83,7 @@ namespace Idara.API.Controllers
             // Garantit le wallet (filet, comme pour un paiement parent).
             await _context.EnsurePaymentFoundationsAsync(schoolId.Value, ct);
 
-            var operatorEnum = ParseOperator(opNorm!); // opNorm validé "wave"/"orange" ci-dessus
+            var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
             // Majoration +8 % (comme un paiement parent, FeesPayer=Parent) : l'école
             // veut recevoir EXACTEMENT dto.Amount dans son wallet, donc on la débite
@@ -113,7 +115,7 @@ namespace Idara.API.Controllers
             SenePayInitiatePaymentResponse resp;
             try
             {
-                resp = await _senepay.InitiatePaymentAsync(BuildRequest(payment, dto), ct);
+                resp = await _senepay.InitiatePaymentAsync(BuildRequest(payment, payerPhone), ct);
             }
             catch (SenePayApiException ex)
             {
@@ -176,7 +178,7 @@ namespace Idara.API.Controllers
             }));
         }
 
-        private SenePayInitiatePaymentRequest BuildRequest(Payment payment, TopupRequestDto dto)
+        private SenePayInitiatePaymentRequest BuildRequest(Payment payment, string payerPhone)
         {
             var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
             var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
@@ -186,9 +188,9 @@ namespace Idara.API.Controllers
                 Amount = payment.AmountFcfa,
                 Currency = "XOF",
                 CountryCode = "SN",
-                Operator = dto.Operator.ToLowerInvariant(),
-                CustomerPhone = "+221" + dto.Phone,
-                OtpCode = dto.OtpCode,
+                Operator = "wave", // Wave uniquement (2026-07-07)
+                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
+                OtpCode = null,
                 OrderId = payment.Id.ToString(),
                 CustomerName = User.GetEmail(),
                 WebhookUrl = _senepaySettings.WebhookPayinUrl,
@@ -196,12 +198,5 @@ namespace Idara.API.Controllers
                 CancelUrl = $"{resultBase}?status=cancel"
             };
         }
-
-        private static PaymentOperator ParseOperator(string op) => op.ToLowerInvariant() switch
-        {
-            "wave" => PaymentOperator.Wave,
-            "orange" => PaymentOperator.Orange,
-            _ => throw new ArgumentOutOfRangeException(nameof(op), $"Opérateur non supporté : {op}")
-        };
     }
 }

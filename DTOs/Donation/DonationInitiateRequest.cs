@@ -17,15 +17,13 @@ namespace Idara.API.DTOs.Donation
         [Range(1, long.MaxValue, ErrorMessage = "Le montant doit être positif.")]
         public long Amount { get; set; }
 
-        /// <summary>"wave" ou "orange".</summary>
-        [Required(ErrorMessage = "L'opérateur est obligatoire.")]
-        public string Operator { get; set; } = string.Empty;
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré. Wave forcé côté serveur.</summary>
+        public string? Operator { get; set; }
 
-        /// <summary>Numéro national du donateur (9 chiffres, sans indicatif).</summary>
-        [Required(ErrorMessage = "Le numéro de téléphone est obligatoire.")]
-        public string CustomerPhone { get; set; } = string.Empty;
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré. Numéro du donateur récupéré en base.</summary>
+        public string? CustomerPhone { get; set; }
 
-        /// <summary>OTP Orange (généré via #144#391# avant l'appel). Ignoré pour Wave.</summary>
+        /// <summary>DÉPRÉCIÉ (2026-07-07) — ignoré (plus d'Orange).</summary>
         public string? OtpCode { get; set; }
     }
 }

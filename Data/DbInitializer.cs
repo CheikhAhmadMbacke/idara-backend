@@ -40,10 +40,12 @@ namespace Idara.API.Data
         // Le reviewer s'en sert pour ouvrir l'app ; sans login fonctionnel = rejet.
         // Ne JAMAIS supprimer ces comptes tant que l'app est publiée (re-review à
         // chaque mise à jour). Données 100 % fictives.
-        private const string DemoSchoolAdminEmail = "demo.ecole@idara.sn";
-        private const string DemoSchoolAdminPassword = "DemoIdara2026!";
-        private const string DemoGuardianPhone = "+221770000000";
-        private const string DemoGuardianCode = "123456";
+        // Source unique des identifiants démo : Constants/DemoAccounts.cs
+        // (partagé avec le back-office SuperAdmin qui les affiche).
+        private const string DemoSchoolAdminEmail = DemoAccounts.SchoolAdminEmail;
+        private const string DemoSchoolAdminPassword = DemoAccounts.SchoolAdminPassword;
+        private const string DemoGuardianPhone = DemoAccounts.GuardianPhone;
+        private const string DemoGuardianCode = DemoAccounts.GuardianCode;
 
         /// <summary>
         /// Seed d'une école de démonstration complète (école validée + SchoolAdmin
