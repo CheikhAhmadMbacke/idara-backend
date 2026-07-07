@@ -57,14 +57,17 @@ namespace Idara.API.Controllers
             var schoolIds = students.Select(s => s.SchoolId).Distinct().ToList();
             if (schoolIds.Count > 0)
             {
-                var modes = await _context.SchoolPaymentSettings
+                var settings = await _context.SchoolPaymentSettings
                     .Where(sps => schoolIds.Contains(sps.SchoolId))
-                    .ToDictionaryAsync(sps => sps.SchoolId, sps => sps.BillingMode);
+                    .ToDictionaryAsync(
+                        sps => sps.SchoolId,
+                        sps => new { sps.BillingMode, sps.FeesPayer });
                 foreach (var s in students)
                 {
-                    if (modes.TryGetValue(s.SchoolId, out var mode))
+                    if (settings.TryGetValue(s.SchoolId, out var cfg))
                     {
-                        s.SchoolBillingMode = mode;
+                        s.SchoolBillingMode = cfg.BillingMode;
+                        s.SchoolFeesPayer = cfg.FeesPayer;
                     }
                 }
             }
@@ -642,6 +645,14 @@ namespace Idara.API.Controllers
         /// pour décider d'afficher ou non l'option « paiement libre ».
         /// </summary>
         public BillingMode? SchoolBillingMode { get; set; }
+
+        /// <summary>
+        /// Qui porte les frais dans l'école de cet enfant. Le client l'utilise
+        /// pour n'afficher la note « frais de service inclus » que si le parent
+        /// les porte (FeesPayer=Parent) — utile au flux « paiement libre » où le
+        /// montant global (qui, lui, porte déjà FeesPayer) n'est pas disponible.
+        /// </summary>
+        public FeesPayer? SchoolFeesPayer { get; set; }
     }
 
     /// <summary>Total des mensualités impayées d'un parent dans une école (paiement global).</summary>

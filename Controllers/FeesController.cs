@@ -29,15 +29,18 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly MonthlyInvoiceGenerationJob _invoiceJob;
+        private readonly IInvoiceRepricingService _repricing;
         private readonly ILogger<FeesController> _logger;
 
         public FeesController(
             AppDbContext context,
             MonthlyInvoiceGenerationJob invoiceJob,
+            IInvoiceRepricingService repricing,
             ILogger<FeesController> logger)
         {
             _context = context;
             _invoiceJob = invoiceJob;
+            _repricing = repricing;
             _logger = logger;
         }
 
@@ -109,6 +112,12 @@ namespace Idara.API.Controllers
             _logger.LogInformation(
                 "[fees] SchoolId={SchoolId} settings updated: Mode={Mode} FeesPayer={Payer} DueDay={Day}",
                 schoolId, dto.BillingMode, dto.FeesPayer, dto.MonthlyDueDay);
+
+            // Le tarif général a pu changer → re-tarifer les factures impayées
+            // (portée = toute l'école ; le résolveur ignore les élèves à override
+            // ou tarif classe, qui gardent leur montant).
+            await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, null, ct);
+
             return Ok(MapSettings(settings));
         }
 
@@ -248,6 +257,14 @@ namespace Idara.API.Controllers
                 "[fees] ClassFee créé : SchoolId={SchoolId} ClassId={ClassId} Amount={Amount} EffectiveFrom={From:yyyy-MM-dd}",
                 schoolId, classId, dto.AmountFcfa, effectiveFrom);
 
+            // Nouveau tarif courant pour la classe → re-tarifer les factures
+            // impayées de ses élèves (sauf ceux à override, préservés par le résolveur).
+            var classStudentIds = await _context.Students
+                .Where(s => s.ClassId == classId && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Select(s => s.Id)
+                .ToListAsync(ct);
+            await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, classStudentIds, ct);
+
             return Ok(new ClassFeeDto
             {
                 Id = fee.Id,
@@ -331,6 +348,9 @@ namespace Idara.API.Controllers
                 "[fees] StudentFeeOverride upsert SchoolId={SchoolId} StudentId={StudentId} Amount={Amount} (new={IsNew})",
                 schoolId, studentId, dto.AmountFcfa, isNew);
 
+            // Override modifié → re-tarifer les factures impayées de cet élève.
+            await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, new[] { studentId }, ct);
+
             return Ok(new StudentFeeOverrideDto
             {
                 StudentId = ov.StudentId,
@@ -359,6 +379,11 @@ namespace Idara.API.Controllers
             _logger.LogInformation(
                 "[fees] StudentFeeOverride supprimé SchoolId={SchoolId} StudentId={StudentId}",
                 schoolId, studentId);
+
+            // Override retiré → l'élève retombe sur le tarif classe/général :
+            // re-tarifer ses factures impayées au nouveau montant résolu.
+            await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, new[] { studentId }, ct);
+
             return NoContent();
         }
 

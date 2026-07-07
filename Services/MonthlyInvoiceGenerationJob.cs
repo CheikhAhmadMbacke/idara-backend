@@ -302,44 +302,14 @@ namespace Idara.API.Services
                     .ToListAsync(ct))
                 .GroupBy(g => g.StudentId)
                 .ToDictionary(g => g.Key, g => g.ToList());
-            var overrides = await db.StudentFeeOverrides
-                .Where(o => studentIds.Contains(o.StudentId))
-                .ToDictionaryAsync(o => o.StudentId, o => o.AmountFcfa, ct);
 
-            // 4) ClassFee courant par classe (max EffectiveFrom <= today).
-            //    Un GROUP BY ClassId / MAX EffectiveFrom suffit puisque la
-            //    table est append-only et SchoolId est dénormalisé.
-            var classIds = students
-                .Where(s => s.ClassId.HasValue)
-                .Select(s => s.ClassId!.Value)
-                .Distinct()
-                .ToList();
-
-            Dictionary<int, long> classFeeByClassId = new();
-            if (classIds.Count > 0)
-            {
-                var feesQuery = await db.ClassFees
-                    .Where(f =>
-                        f.SchoolId == schoolId &&
-                        classIds.Contains(f.ClassId) &&
-                        f.EffectiveFrom <= today)
-                    .GroupBy(f => f.ClassId)
-                    .Select(g => new
-                    {
-                        ClassId = g.Key,
-                        // ORDER BY EffectiveFrom DESC, Id DESC LIMIT 1 équivalent.
-                        // Le ThenByDescending(Id) départage les tarifs de même
-                        // date (plusieurs saisies le même jour) de façon
-                        // déterministe : la dernière saisie gagne. Sans lui,
-                        // l'ordre était indéfini → un tarif erroné saisi le même
-                        // jour pouvait être choisi (bug du 200 FCFA, 2026-06-24).
-                        Amount = g.OrderByDescending(f => f.EffectiveFrom)
-                                  .ThenByDescending(f => f.Id)
-                                  .First().AmountFcfa
-                    })
-                    .ToListAsync(ct);
-                classFeeByClassId = feesQuery.ToDictionary(x => x.ClassId, x => x.Amount);
-            }
+            // 4) Tarif résolu par élève (hiérarchie override > classe > général).
+            //    Logique PARTAGÉE avec la re-tarification des factures impayées
+            //    (InvoiceRepricingService) via FeeResolver → jamais de divergence
+            //    entre une facture générée et une facture re-tarifée.
+            var fees = await FeeResolver.ResolveAsync(
+                db, schoolId, generalFee,
+                students.Select(s => (s.Id, s.ClassId)).ToList(), today, ct);
 
             // 5) Pour chaque élève, résout son montant et insère l'Invoice.
             //    INSERT individuel (pas AddRange + un seul SaveChanges) : on
@@ -353,20 +323,8 @@ namespace Idara.API.Services
                     continue;
                 }
 
-                // Hiérarchie : override élève > tarif classe > tarif général école.
-                long? amount = null;
-                if (overrides.TryGetValue(s.Id, out var ov))
-                {
-                    amount = ov;
-                }
-                else if (s.ClassId.HasValue && classFeeByClassId.TryGetValue(s.ClassId.Value, out var cf))
-                {
-                    amount = cf;
-                }
-                else if (generalFee is > 0)
-                {
-                    amount = generalFee;
-                }
+                // Tarif résolu (override > classe > général) via FeeResolver.
+                long? amount = fees.TryGetValue(s.Id, out var f) ? f : null;
 
                 if (amount is null or <= 0)
                 {

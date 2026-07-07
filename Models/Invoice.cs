@@ -7,8 +7,11 @@ namespace Idara.API.Models
     /// En FreeAmount, aucune Invoice n'est pré-générée — les Payment sont créés
     /// directement sans InvoiceId.
     ///
-    /// AmountDueFcfa est SNAPSHOTÉ à la génération : un changement ultérieur du
-    /// ClassFee ou du StudentFeeOverride n'impacte pas les Invoices déjà émises.
+    /// AmountDueFcfa est snapshoté à la génération, MAIS re-tarifé dynamiquement
+    /// tant que la facture est IMPAYÉE : un changement de tarif (général, classe,
+    /// override) met à jour les factures impayées via InvoiceRepricingService
+    /// (décision produit 2026-07-07). Les factures payées/partiellement payées/
+    /// annulées, et celles avec un paiement en cours, restent figées.
     /// </summary>
     public class Invoice
     {
