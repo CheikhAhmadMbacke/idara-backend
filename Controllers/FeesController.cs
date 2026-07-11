@@ -67,6 +67,7 @@ namespace Idara.API.Controllers
                     SchoolId = schoolId.Value,
                     BillingMode = BillingMode.FixedAmount,
                     FeesPayer = FeesPayer.Parent,
+                    DonationFeesPayer = FeesPayer.School,
                     MonthlyDueDay = 5,
                     BillingPeriod = BillingPeriod.Monthly,
                     CreatedAt = DateTime.UtcNow
@@ -101,6 +102,7 @@ namespace Idara.API.Controllers
 
             settings.BillingMode = dto.BillingMode;
             settings.FeesPayer = dto.FeesPayer;
+            settings.DonationFeesPayer = dto.DonationFeesPayer;
             settings.MonthlyDueDay = dto.MonthlyDueDay;
             settings.BillingPeriod = dto.BillingPeriod;
             // 0 est traité comme "pas de tarif général" → on normalise en null.
@@ -918,6 +920,7 @@ namespace Idara.API.Controllers
             SchoolId = s.SchoolId,
             BillingMode = s.BillingMode,
             FeesPayer = s.FeesPayer,
+            DonationFeesPayer = s.DonationFeesPayer,
             MonthlyDueDay = s.MonthlyDueDay,
             BillingPeriod = s.BillingPeriod,
             GeneralMonthlyFeeFcfa = s.GeneralMonthlyFeeFcfa,

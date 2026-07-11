@@ -174,7 +174,12 @@ namespace Idara.API.Controllers
                 {
                     Id = s.Id,
                     Name = s.Name ?? $"Daara #{s.Id}",
-                    Address = s.Address
+                    Address = s.Address,
+                    // Frais au donateur ? (null = pas de settings → daara paie = false)
+                    DonorPaysFees = _context.SchoolPaymentSettings
+                        .Where(ps => ps.SchoolId == s.Id)
+                        .Select(ps => (FeesPayer?)ps.DonationFeesPayer)
+                        .FirstOrDefault() == FeesPayer.Parent
                 })
                 .ToListAsync(ct);
 
@@ -216,9 +221,19 @@ namespace Idara.API.Controllers
             // Garantit les fondations paiement (wallet) du daara avant tout crédit.
             await _context.EnsurePaymentFoundationsAsync(dto.SchoolId, ct);
 
+            // Qui paie les frais du don ? Réglable par le daara (défaut = daara
+            // paie, décision produit 2026-07-11). School → le donateur donne le
+            // montant EXACT, le daara reçoit le NET (settlement §106). Parent →
+            // majoration, le daara reçoit le montant plein (settlement §82).
+            var donationFeesPayer = await _context.SchoolPaymentSettings
+                .Where(s => s.SchoolId == dto.SchoolId)
+                .Select(s => (FeesPayer?)s.DonationFeesPayer)
+                .FirstOrDefaultAsync(ct) ?? FeesPayer.School;
+
             var targetAmount = dto.Amount;
-            // Le donateur porte les frais → le daara reçoit le montant plein.
-            var amountToCharge = (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier);
+            var amountToCharge = donationFeesPayer == FeesPayer.Parent
+                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier) // donateur paie
+                : targetAmount;                                                   // daara paie (exact)
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
             var payment = new Payment
@@ -234,7 +249,7 @@ namespace Idara.API.Controllers
                 FeesFcfa = 0,
                 NetCreditedFcfa = 0,
                 Operator = operatorEnum,
-                FeesPayer = FeesPayer.Parent, // le donateur porte les frais
+                FeesPayer = donationFeesPayer, // pilote le crédit cible/net au settlement
                 Status = PaymentStatus.Pending,
                 InitiatedAt = DateTime.UtcNow,
                 PublicResultToken = Guid.NewGuid().ToString("N")

@@ -8,6 +8,9 @@ namespace Idara.API.DTOs.Payment
         public int SchoolId { get; set; }
         public BillingMode BillingMode { get; set; }
         public FeesPayer FeesPayer { get; set; }
+
+        /// <summary>Qui paie les frais sur les DONS (Parent=donateur, School=daara).</summary>
+        public FeesPayer DonationFeesPayer { get; set; }
         public int MonthlyDueDay { get; set; }
         public BillingPeriod BillingPeriod { get; set; }
 
@@ -25,6 +28,10 @@ namespace Idara.API.DTOs.Payment
 
         [Required]
         public FeesPayer FeesPayer { get; set; }
+
+        /// <summary>Qui paie les frais sur les DONS (Parent=donateur, School=daara).</summary>
+        [Required]
+        public FeesPayer DonationFeesPayer { get; set; }
 
         /// <summary>Jour du mois (1..28) où le cron génère les Invoices. Borné à 28 pour
         /// éviter les mois courts (février) sans tarif.</summary>

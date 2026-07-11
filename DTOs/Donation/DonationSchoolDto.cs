@@ -10,5 +10,10 @@ namespace Idara.API.DTOs.Donation
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string? Address { get; set; }
+
+        /// <summary>true si CE daara fait porter les frais au donateur (majoration).
+        /// false (défaut) = le daara paie les frais, le donateur donne le montant
+        /// exact. Sert au client à n'afficher la note de frais que si pertinent.</summary>
+        public bool DonorPaysFees { get; set; }
     }
 }
