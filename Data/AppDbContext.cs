@@ -52,6 +52,7 @@ namespace Idara.API.Data
         public DbSet<PayoutAlert> PayoutAlerts { get; set; }
         public DbSet<PlatformOutflow> PlatformOutflows { get; set; }
         public DbSet<CashLedgerEntry> CashLedgerEntries { get; set; }
+        public DbSet<CashCategory> CashCategories { get; set; }
 
         // ----- Abonnement plateforme (Phase 4) -----
         public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
@@ -760,9 +761,16 @@ namespace Idara.API.Data
                 .IsUnique()
                 .HasFilter("\"SenePayReference\" IS NOT NULL");
 
-            // ===== Livre de caisse (gestion financière daara, F1) =====
+            // ===== Livre de caisse (gestion financière daara, F1/F2) =====
             modelBuilder.Entity<CashLedgerEntry>()
                 .HasIndex(e => new { e.SchoolId, e.OccurredAt });
+            modelBuilder.Entity<CashLedgerEntry>()
+                .HasOne(e => e.CategoryRef)
+                .WithMany()
+                .HasForeignKey(e => e.CategoryId)
+                .OnDelete(DeleteBehavior.Restrict); // catégorie archivée, jamais supprimée
+            modelBuilder.Entity<CashCategory>()
+                .HasIndex(c => new { c.SchoolId, c.Type });
 
             // ===== Abonnement plateforme (Phase 4) =====
 

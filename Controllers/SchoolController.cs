@@ -313,7 +313,8 @@ namespace Idara.API.Controllers
             await _context.SchoolWallets.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.SchoolPaymentSettings.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.PayoutAlerts.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
-            await _context.CashLedgerEntries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.CashLedgerEntries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct); // avant CashCategories (FK Restrict)
+            await _context.CashCategories.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             // Abonnement plateforme (factures → abo → deals custom de l'école).
             await _context.SubscriptionInvoices.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.Subscriptions.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);

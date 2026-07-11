@@ -10,6 +10,7 @@ namespace Idara.API.DTOs.Finance
         public CashEntryType Type { get; set; }
         public long AmountFcfa { get; set; }
         public string? Category { get; set; }
+        public int? CategoryId { get; set; }
         public DateTime OccurredAt { get; set; }
         public string? Note { get; set; }
         public DateTime CreatedAt { get; set; }
@@ -22,6 +23,9 @@ namespace Idara.API.DTOs.Finance
 
         [Range(1, 100_000_000_000, ErrorMessage = "Le montant doit être positif.")]
         public long AmountFcfa { get; set; }
+
+        /// <summary>Catégorie gérée (F2). Si fournie, prime sur le texte libre.</summary>
+        public int? CategoryId { get; set; }
 
         [StringLength(80)]
         public string? Category { get; set; }

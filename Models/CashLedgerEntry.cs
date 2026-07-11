@@ -28,8 +28,13 @@ namespace Idara.API.Models
         /// <summary>Montant en FCFA (toujours positif ; le sens vient de <see cref="Type"/>).</summary>
         public long AmountFcfa { get; set; }
 
-        /// <summary>Catégorie libre (F1) — remplacée/enrichie par les catégories gérées en F2.</summary>
+        /// <summary>Nom de la catégorie (dénormalisé pour l'affichage) : soit le
+        /// texte libre (F1), soit le nom de la <see cref="CashCategory"/> liée (F2).</summary>
         public string? Category { get; set; }
+
+        /// <summary>Catégorie gérée liée (F2) — null si texte libre (entrées F1).</summary>
+        public int? CategoryId { get; set; }
+        public CashCategory? CategoryRef { get; set; }
 
         /// <summary>Date du mouvement (jour civil, tronqué UTC).</summary>
         public DateTime OccurredAt { get; set; }

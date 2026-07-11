@@ -49,6 +49,7 @@ namespace Idara.API.Controllers
                     Type = e.Type,
                     AmountFcfa = e.AmountFcfa,
                     Category = e.Category,
+                    CategoryId = e.CategoryId,
                     OccurredAt = e.OccurredAt,
                     Note = e.Note,
                     CreatedAt = e.CreatedAt
@@ -113,12 +114,14 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            var (catId, catName) = await ResolveCategoryAsync(dto, schoolId.Value, ct);
             var entry = new CashLedgerEntry
             {
                 SchoolId = schoolId.Value,
                 Type = dto.Type,
                 AmountFcfa = dto.AmountFcfa,
-                Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim(),
+                Category = catName,
+                CategoryId = catId,
                 OccurredAt = (dto.OccurredAt ?? DateTime.UtcNow).ToUtcDay(),
                 Note = string.IsNullOrWhiteSpace(dto.Note) ? null : dto.Note.Trim(),
                 CreatedById = User.GetUserId(),
@@ -142,9 +145,11 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(e => e.Id == id && e.SchoolId == schoolId.Value && !e.IsDeleted, ct);
             if (entry == null) return NotFound(ApiResponse<bool>.Fail("Écriture introuvable."));
 
+            var (catId, catName) = await ResolveCategoryAsync(dto, schoolId.Value, ct);
             entry.Type = dto.Type;
             entry.AmountFcfa = dto.AmountFcfa;
-            entry.Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim();
+            entry.Category = catName;
+            entry.CategoryId = catId;
             entry.OccurredAt = (dto.OccurredAt ?? entry.OccurredAt).ToUtcDay();
             entry.Note = string.IsNullOrWhiteSpace(dto.Note) ? null : dto.Note.Trim();
             entry.UpdatedAt = DateTime.UtcNow;
@@ -168,12 +173,28 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<bool>.Ok(true, "Écriture supprimée."));
         }
 
+        private async Task<(int? id, string? name)> ResolveCategoryAsync(
+            CreateCashLedgerEntryDto dto, int schoolId, CancellationToken ct)
+        {
+            if (dto.CategoryId is { } cid)
+            {
+                var cat = await _context.CashCategories
+                    .Where(c => c.Id == cid && c.SchoolId == schoolId && !c.IsArchived)
+                    .Select(c => new { c.Id, c.Name })
+                    .FirstOrDefaultAsync(ct);
+                if (cat != null) return (cat.Id, cat.Name);
+            }
+            var free = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim();
+            return (null, free);
+        }
+
         private static CashLedgerEntryDto Map(CashLedgerEntry e) => new()
         {
             Id = e.Id,
             Type = e.Type,
             AmountFcfa = e.AmountFcfa,
             Category = e.Category,
+            CategoryId = e.CategoryId,
             OccurredAt = e.OccurredAt,
             Note = e.Note,
             CreatedAt = e.CreatedAt
