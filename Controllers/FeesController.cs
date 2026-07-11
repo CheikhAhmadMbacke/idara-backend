@@ -30,17 +30,23 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly MonthlyInvoiceGenerationJob _invoiceJob;
         private readonly IInvoiceRepricingService _repricing;
+        private readonly IReceiptPdfService _receiptPdf;
+        private readonly IWebHostEnvironment _env;
         private readonly ILogger<FeesController> _logger;
 
         public FeesController(
             AppDbContext context,
             MonthlyInvoiceGenerationJob invoiceJob,
             IInvoiceRepricingService repricing,
+            IReceiptPdfService receiptPdf,
+            IWebHostEnvironment env,
             ILogger<FeesController> logger)
         {
             _context = context;
             _invoiceJob = invoiceJob;
             _repricing = repricing;
+            _receiptPdf = receiptPdf;
+            _env = env;
             _logger = logger;
         }
 
@@ -122,6 +128,118 @@ namespace Idara.API.Controllers
 
             return Ok(MapSettings(settings));
         }
+
+        // ========================================================
+        // ===== Masquage d'historique (affichage seul) =====
+        // ========================================================
+
+        /// <summary>
+        /// `POST /api/fees/payments/{id}/hide` — masque un paiement de l'affichage
+        /// école (le daara ne veut pas que cette ligne, souvent un échec, soit
+        /// comptabilisée par ses partenaires). NON destructif : la ligne reste en
+        /// base (aucun impact compta/réconciliation) et sort seulement des listes.
+        /// Non réversible côté UI (décision produit 2026-07-11).
+        /// </summary>
+        [HttpPost("payments/{id:int}/hide")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<bool>>> HidePayment(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var n = await _context.Payments
+                .Where(p => p.Id == id && p.SchoolId == schoolId.Value)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.IsHidden, true), ct);
+            if (n == 0) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
+
+            return Ok(ApiResponse<bool>.Ok(true, "Transaction masquée."));
+        }
+
+        /// <summary>
+        /// `POST /api/fees/wallet/transactions/{id}/hide` — masque une transaction
+        /// wallet de l'affichage (même principe : cosmétique, ne touche pas au solde).
+        /// </summary>
+        [HttpPost("wallet/transactions/{id:int}/hide")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<bool>>> HideWalletTransaction(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var n = await _context.WalletTransactions
+                .Where(t => t.Id == id && t.SchoolId == schoolId.Value)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.IsHidden, true), ct);
+            if (n == 0) return NotFound(ApiResponse<bool>.Fail("Transaction introuvable."));
+
+            return Ok(ApiResponse<bool>.Ok(true, "Transaction masquée."));
+        }
+
+        /// <summary>
+        /// `GET /api/fees/payments/{id}/receipt` — reçu PDF d'un paiement, côté
+        /// ÉCOLE (SchoolAdmin/Staff), scopé à SON école. Sert au daara à partager
+        /// le reçu (WhatsApp). Génère à la volée si le fichier manque (recovery).
+        /// </summary>
+        [HttpGet("payments/{id:int}/receipt")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> DownloadPaymentReceipt(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var p = await _context.Payments
+                .Include(x => x.Student)
+                .Include(x => x.Donor)
+                .Include(x => x.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
+                .FirstOrDefaultAsync(x => x.Id == id && x.SchoolId == schoolId.Value, ct);
+            if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
+            if (p.Status != PaymentStatus.Completed)
+                return BadRequest(ApiResponse<bool>.Fail("Reçu disponible uniquement pour les paiements complétés."));
+
+            var relativePath = p.ReceiptPdfPath ?? $"/uploads/receipts/receipt-{p.Id}.pdf";
+            var webRootFull = Path.GetFullPath(_env.WebRootPath);
+            var fullPath = Path.GetFullPath(Path.Combine(
+                webRootFull, relativePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            if (!fullPath.StartsWith(webRootFull, StringComparison.Ordinal))
+                return BadRequest(ApiResponse<bool>.Fail("Chemin de reçu invalide."));
+
+            if (!System.IO.File.Exists(fullPath))
+            {
+                // Recovery : régénère selon la nature (parent / consolidé / don / topup).
+                var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == p.SchoolId, ct);
+                if (school == null) return NotFound();
+
+                var invoice = p.InvoiceId.HasValue
+                    ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == p.InvoiceId.Value, ct)
+                    : null;
+                List<ReceiptConsolidatedLine>? lines = p.InvoiceAllocations.Count > 0
+                    ? p.InvoiceAllocations
+                        .OrderBy(a => a.Invoice.Student.FirstName)
+                        .Select(a => new ReceiptConsolidatedLine(
+                            $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
+                            FrenchMonthYear(a.Invoice.PeriodStart),
+                            a.AmountFcfa))
+                        .ToList()
+                    : null;
+
+                var regenerated = await _receiptPdf.GenerateAsync(
+                    p, school, p.Student, invoice, p.Donor, lines);
+                if (string.IsNullOrEmpty(p.ReceiptPdfPath))
+                    await _context.Payments.Where(x => x.Id == p.Id)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.ReceiptPdfPath, regenerated), ct);
+                fullPath = Path.GetFullPath(Path.Combine(
+                    webRootFull, regenerated.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            }
+
+            var bytes = await System.IO.File.ReadAllBytesAsync(fullPath, ct);
+            return File(bytes, "application/pdf", $"recu-idara-{p.Id:D6}.pdf");
+        }
+
+        private static readonly string[] FrMonths =
+        {
+            "janvier", "fevrier", "mars", "avril", "mai", "juin",
+            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+        };
+        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
 
         // ========================================================
         // ===== ClassFee =====
@@ -653,6 +771,7 @@ namespace Idara.API.Controllers
 
             var recentRaw = await _context.WalletTransactions
                 .Where(t => t.SchoolId == schoolId.Value)
+                .Where(t => !t.IsHidden) // masquées par le daara → jamais affichées
                 .OrderByDescending(t => t.OccurredAt)
                 .Take(50)
                 .Select(t => new
@@ -770,7 +889,8 @@ namespace Idara.API.Controllers
             if (schoolId == null) return Unauthorized();
 
             var query = _context.Payments
-                .Where(p => p.SchoolId == schoolId.Value);
+                .Where(p => p.SchoolId == schoolId.Value)
+                .Where(p => !p.IsHidden); // masqués par le daara → jamais affichés (ni Observateur)
 
             if (status.HasValue)
                 query = query.Where(p => p.Status == status.Value);

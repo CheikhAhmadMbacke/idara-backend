@@ -96,5 +96,14 @@ namespace Idara.API.Models
         /// voler les reçus des autres.
         /// </summary>
         public string? PublicResultToken { get; set; }
+
+        /// <summary>
+        /// Masqué de l'AFFICHAGE côté école (le daara ne veut pas voir cette ligne
+        /// dans son historique / que ses partenaires la comptabilisent). Flag
+        /// purement cosmétique : n'affecte JAMAIS la compta, la réconciliation
+        /// (§112), les soldes ou le règlement — seulement les listes d'affichage
+        /// école. La ligne reste en base (jamais de suppression, décision produit).
+        /// </summary>
+        public bool IsHidden { get; set; }
     }
 }

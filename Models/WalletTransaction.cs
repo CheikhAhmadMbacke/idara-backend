@@ -39,5 +39,13 @@ namespace Idara.API.Models
         public string? Note { get; set; }
 
         public DateTime OccurredAt { get; set; }
+
+        /// <summary>
+        /// Masquée de l'AFFICHAGE de l'historique wallet côté école. Flag cosmétique
+        /// uniquement : n'affecte JAMAIS le solde (porté par SchoolWallet), la
+        /// compta ni la réconciliation — seulement la liste affichée. La ligne
+        /// reste en base (append-only, jamais supprimée).
+        /// </summary>
+        public bool IsHidden { get; set; }
     }
 }
