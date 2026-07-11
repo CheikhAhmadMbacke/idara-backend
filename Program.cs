@@ -133,6 +133,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MonthlyInvoiceGene
 builder.Services.AddSingleton<OverdueInvoiceReminderJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OverdueInvoiceReminderJob>());
 
+// Rappel push quotidien (08:30 UTC) des abonnements à échéance proche (J-3),
+// pour que l'école recharge AVANT le passage en lecture seule. 1 seul par cycle.
+builder.Services.AddSingleton<SubscriptionRenewalReminderJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionRenewalReminderJob>());
+
 // Vérifie en continu (~60s) les retraits restés en UnderVerification (issue
 // indéterminée) via GET /payouts/{id} autoritatif, avec back-off. Anti double
 // dépense : ne restitue jamais sur un état ambigu.

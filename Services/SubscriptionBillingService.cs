@@ -295,6 +295,7 @@ namespace Idara.API.Services
                 // Facture PDF + email SchoolAdmin — best-effort, HORS transaction
                 // (un échec PDF/SMTP ne doit jamais annuler un prélèvement encaissé).
                 await EmitInvoiceDocsAsync(invoice, sub, ct);
+                await NotifyChargedAsync(sub, amount, ct);
                 if (autoUpgradedTo != null)
                     await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
                 return BillingOutcome.Paid;
@@ -337,6 +338,40 @@ namespace Idara.API.Services
             if (autoUpgradedTo != null)
                 await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
             return outcome;
+        }
+
+        /// <summary>
+        /// Notifie (push, best-effort) le SchoolAdmin + personnel que l'abonnement
+        /// vient d'être prélevé avec succès (confirmation APRÈS coup, en plus de la
+        /// facture PDF envoyée par email). Ne lève jamais. Appelée post-commit.
+        /// </summary>
+        private async Task NotifyChargedAsync(Subscription sub, long amount, CancellationToken ct)
+        {
+            try
+            {
+                var admins = await _db.Users
+                    .Where(u => u.SchoolId == sub.SchoolId && !u.IsDeleted
+                        && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync(ct);
+                var msg = Notifications.NotificationTemplates.SubscriptionCharged(amount, sub.NextBillingAt);
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new Notifications.PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: "SUBSCRIPTION_CHARGED",
+                        RelatedEntityId: sub.Id,
+                        PushRoute: "/school/subscription"), ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[subscription-billing] Notif prélèvement échouée École {SchoolId} (non bloquant)",
+                    sub.SchoolId);
+            }
         }
 
         /// <summary>

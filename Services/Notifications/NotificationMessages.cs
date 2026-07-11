@@ -113,6 +113,24 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : votre effectif ({effectif} eleves) depasse votre ancien plan. Vous etes passe au plan {nouveauPlan} ({montantFcfa} FCFA).",
             Ar: $"Idara: عدد تلاميذكم ({effectif}) تجاوز خطتكم السابقة. تم ترقيتكم إلى خطة {nouveauPlan} ({montantFcfa} FCFA).");
 
+        // Rappel de renouvellement d'abonnement (push) quelques jours AVANT
+        // l'échéance. Deux variantes selon que le wallet couvre déjà le
+        // prélèvement (rassurant, aucune action) ou non (inciter à recharger).
+        public static BilingualMessage SubscriptionDueSoon(long montantFcfa, DateTime dueDate, bool walletCovers) =>
+            walletCovers
+                ? new(
+                    Fr: $"Idara : votre abonnement de {montantFcfa} FCFA sera preleve automatiquement de votre wallet le {dueDate:dd/MM}. Aucune action requise.",
+                    Ar: $"Idara: سيُخصم اشتراككم بمبلغ {montantFcfa} FCFA تلقائيا من محفظتكم يوم {dueDate:dd/MM}. لا يلزم أي إجراء.")
+                : new(
+                    Fr: $"Idara : votre abonnement de {montantFcfa} FCFA sera preleve le {dueDate:dd/MM}. Solde insuffisant : rechargez votre wallet pour eviter l'interruption.",
+                    Ar: $"Idara: اشتراككم بمبلغ {montantFcfa} FCFA سيُخصم يوم {dueDate:dd/MM}. رصيدكم غير كاف: اشحنوا محفظتكم لتفادي توقف الخدمة.");
+
+        // Prélèvement d'abonnement RÉUSSI (push, après coup) : confirme le débit et
+        // la date de validité, en plus de la facture PDF envoyée par email.
+        public static BilingualMessage SubscriptionCharged(long montantFcfa, DateTime nextBilling) => new(
+            Fr: $"Idara : abonnement de {montantFcfa} FCFA preleve de votre wallet. Votre compte est actif jusqu'au {nextBilling:dd/MM}.",
+            Ar: $"Idara: تم خصم اشتراك بمبلغ {montantFcfa} FCFA من محفظتكم. حسابكم فعّال حتى {nextBilling:dd/MM}.");
+
         // Don reçu côté école (push) : prévient l'admin + le personnel. Le nom du
         // donateur est fourni déjà formaté par l'appelant (identité toujours visible).
         public static BilingualMessage DonationReceivedSchool(string donateur, long montantFcfa) => new(
