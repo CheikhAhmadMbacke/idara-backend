@@ -31,6 +31,7 @@ namespace Idara.API.Controllers
         private readonly MonthlyInvoiceGenerationJob _invoiceJob;
         private readonly IInvoiceRepricingService _repricing;
         private readonly IReceiptPdfService _receiptPdf;
+        private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<FeesController> _logger;
 
@@ -39,6 +40,7 @@ namespace Idara.API.Controllers
             MonthlyInvoiceGenerationJob invoiceJob,
             IInvoiceRepricingService repricing,
             IReceiptPdfService receiptPdf,
+            IExportPdfService exportPdf,
             IWebHostEnvironment env,
             ILogger<FeesController> logger)
         {
@@ -46,6 +48,7 @@ namespace Idara.API.Controllers
             _invoiceJob = invoiceJob;
             _repricing = repricing;
             _receiptPdf = receiptPdf;
+            _exportPdf = exportPdf;
             _env = env;
             _logger = logger;
         }
@@ -582,11 +585,18 @@ namespace Idara.API.Controllers
             if (month < 1 || month > 12 || year < 2020 || year > 2100)
                 return BadRequest(ApiResponse<bool>.Fail("Mois ou année invalide."));
 
+            return Ok(await BuildRosterAsync(schoolId.Value, year, month, ct));
+        }
+
+        /// <summary>Calcule le roster d'un mois (partagé par la vue JSON et l'export PDF).</summary>
+        private async Task<PaymentRosterResponseDto> BuildRosterAsync(
+            int schoolId, int year, int month, CancellationToken ct)
+        {
             var periodStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
             var todayUtc = DateTime.UtcNow.Date;
 
             var students = await _context.Students
-                .Where(s => s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => s.SchoolId == schoolId && !s.IsDeleted)
                 .Select(s => new
                 {
                     s.Id,
@@ -600,7 +610,7 @@ namespace Idara.API.Controllers
             // Factures du mois (hors annulées) — matérialisées pour faire la
             // comparaison d'échéance en mémoire (évite tout souci de traduction).
             var invoices = await _context.Invoices
-                .Where(i => i.SchoolId == schoolId.Value
+                .Where(i => i.SchoolId == schoolId
                     && i.PeriodStart == periodStart
                     && i.Status != InvoiceStatus.Cancelled)
                 .Select(i => new
@@ -662,7 +672,7 @@ namespace Idara.API.Controllers
                 .ThenBy(e => e.StudentFirstName)
                 .ToList();
 
-            return Ok(new PaymentRosterResponseDto
+            return new PaymentRosterResponseDto
             {
                 Year = year,
                 Month = month,
@@ -671,7 +681,107 @@ namespace Idara.API.Controllers
                 OverdueCount = entries.Count(e => e.Status == RosterPaymentStatus.Overdue),
                 NoInvoiceCount = entries.Count(e => e.Status == RosterPaymentStatus.NoInvoice),
                 Entries = entries
-            });
+            };
+        }
+
+        /// <summary>
+        /// `GET /api/fees/roster/pdf?year&month` — le suivi des mensualités en PDF
+        /// (tableau façon Excel) à partager sur WhatsApp. SchoolAdmin + Staff.
+        /// </summary>
+        [HttpGet("roster/pdf")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetPaymentRosterPdf(
+            [FromQuery] int year, [FromQuery] int month, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+            if (month < 1 || month > 12 || year < 2020 || year > 2100)
+                return BadRequest(ApiResponse<bool>.Fail("Mois ou année invalide."));
+
+            var roster = await BuildRosterAsync(schoolId.Value, year, month, ct);
+            var schoolName = await _context.Schools.Where(s => s.Id == schoolId.Value)
+                .Select(s => s.Name).FirstOrDefaultAsync(ct) ?? "Ecole";
+
+            var bytes = _exportPdf.BuildRosterPdf(schoolName, year, month, roster);
+            return File(bytes, "application/pdf", $"suivi-paiements-{year}-{month:D2}.pdf");
+        }
+
+        // ========================================================
+        // ===== Dons reçus (côté école) : liste donateurs + rapport =====
+        // ========================================================
+
+        /// <summary>
+        /// `GET /api/fees/donations/donors?from&to` — donateurs ayant fait un don
+        /// (complété) au daara sur la période, avec cumul. SchoolAdmin + Staff.
+        /// </summary>
+        [HttpGet("donations/donors")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<ActionResult<List<DTOs.Donation.DonationDonorSummaryDto>>> GetDonationDonors(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var q = _context.Payments.Where(p => p.SchoolId == schoolId.Value
+                && p.Purpose == PaymentPurpose.Donation
+                && p.Status == PaymentStatus.Completed
+                && p.DonorId != null);
+            if (from.HasValue) q = q.Where(p => p.PaidAt >= from.Value.ToUtcDay());
+            if (to.HasValue) q = q.Where(p => p.PaidAt < to.Value.ToUtcDay().AddDays(1));
+
+            var donors = await q
+                .GroupBy(p => new { p.DonorId, Name = p.Donor!.FullName })
+                .Select(g => new DTOs.Donation.DonationDonorSummaryDto
+                {
+                    DonorId = g.Key.DonorId!.Value,
+                    DonorName = g.Key.Name ?? "Donateur",
+                    DonationCount = g.Count(),
+                    TotalFcfa = g.Sum(p => p.TargetAmountFcfa)
+                })
+                .OrderByDescending(d => d.TotalFcfa)
+                .ToListAsync(ct);
+
+            return Ok(donors);
+        }
+
+        /// <summary>
+        /// `GET /api/fees/donations/report/pdf?donorId&from&to` — rapport PDF des
+        /// dons reçus d'UN donateur sur la période (dons datés + total). Sert au
+        /// rapport annuel du daara à son donateur (ex. Nafsi wa dini).
+        /// </summary>
+        [HttpGet("donations/report/pdf")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetDonorReportPdf(
+            [FromQuery] int donorId, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var q = _context.Payments.Where(p => p.SchoolId == schoolId.Value
+                && p.Purpose == PaymentPurpose.Donation
+                && p.Status == PaymentStatus.Completed
+                && p.DonorId == donorId);
+            if (from.HasValue) q = q.Where(p => p.PaidAt >= from.Value.ToUtcDay());
+            if (to.HasValue) q = q.Where(p => p.PaidAt < to.Value.ToUtcDay().AddDays(1));
+
+            var rows = await q
+                .OrderBy(p => p.PaidAt)
+                .Select(p => new { p.PaidAt, p.TargetAmountFcfa })
+                .ToListAsync(ct);
+
+            var donorName = await _context.Users.Where(u => u.Id == donorId)
+                .Select(u => u.FullName).FirstOrDefaultAsync(ct) ?? "Donateur";
+            var schoolName = await _context.Schools.Where(s => s.Id == schoolId.Value)
+                .Select(s => s.Name).FirstOrDefaultAsync(ct) ?? "Ecole";
+
+            var donations = rows
+                .Select(r => (Date: r.PaidAt ?? DateTime.UtcNow, Amount: r.TargetAmountFcfa))
+                .ToList();
+            var total = donations.Sum(d => d.Amount);
+
+            var bytes = _exportPdf.BuildDonorReportPdf(schoolName, donorName, from, to, donations, total);
+            return File(bytes, "application/pdf", $"rapport-dons-{donorId}.pdf");
         }
 
         /// <summary>
