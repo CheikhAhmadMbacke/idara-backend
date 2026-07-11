@@ -17,6 +17,25 @@ namespace Idara.API.Services
         byte[] BuildDonorReportPdf(
             string schoolName, string donorName, DateTime? from, DateTime? to,
             IReadOnlyList<(DateTime Date, long Amount)> donations, long total);
+
+        /// <summary>
+        /// Reçu de virement (F3) : daara → bénéficiaire (salaire / charge). Rendu
+        /// en mémoire (byte[]), partageable WhatsApp par le bénéficiaire.
+        /// </summary>
+        byte[] BuildTransferReceiptPdf(
+            string schoolName, int transferId, string beneficiaryName, long amountFcfa,
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date);
+
+        /// <summary>
+        /// Rapport financier périodique (F4) : total entrées / sorties / net +
+        /// ventilation par catégorie + rappel wallet SenePay + solde global.
+        /// </summary>
+        byte[] BuildFinanceReportPdf(
+            string schoolName, DateTime? from, DateTime? to,
+            IReadOnlyList<(string Category, long Amount)> incomeByCategory,
+            IReadOnlyList<(string Category, long Amount)> expenseByCategory,
+            long totalIncome, long totalExpense,
+            long walletAvailableFcfa, long globalBalanceFcfa);
     }
 
     public class ExportPdfService : IExportPdfService
@@ -117,6 +136,17 @@ namespace Idara.API.Services
             });
         }
 
+        // Variante « montant » : affiche un texte formaté (ex. "12 000 FCFA")
+        // au lieu d'un simple compteur entier.
+        private static void MoneyCounter(RowDescriptor row, string label, string value, string color)
+        {
+            row.RelativeItem().PaddingRight(4).Background(SurfaceVariant).Padding(6).Column(c =>
+            {
+                c.Item().Text($"{value} FCFA").Bold().FontSize(13).FontColor(color);
+                c.Item().Text(label).FontSize(8).FontColor(TextSecondary);
+            });
+        }
+
         public byte[] BuildDonorReportPdf(
             string schoolName, string donorName, DateTime? from, DateTime? to,
             IReadOnlyList<(DateTime Date, long Amount)> donations, long total)
@@ -182,6 +212,191 @@ namespace Idara.API.Services
 
                 if (donations.Count == 0)
                     col.Item().PaddingTop(10).Text("Aucun don sur la periode.").FontColor(TextSecondary).Italic();
+            });
+        }
+
+        public byte[] BuildTransferReceiptPdf(
+            string schoolName, int transferId, string beneficiaryName, long amountFcfa,
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date)
+        {
+            var doc = Document.Create(container =>
+            {
+                container.Page(page =>
+                {
+                    page.Size(PageSizes.A5);
+                    page.Margin(1.5f, Unit.Centimetre);
+                    page.PageColor(Colors.White);
+                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+
+                    page.Header().Element(c => Header(c, schoolName, "Recu de virement", $"N {transferId:D6}"));
+                    page.Content().Element(c => TransferContent(
+                        c, beneficiaryName, amountFcfa, operatorLabel, categoryLabel, statusLabel, date));
+                    page.Footer().Element(Footer);
+                });
+            });
+            return doc.GeneratePdf();
+        }
+
+        private static void TransferContent(
+            IContainer container, string beneficiaryName, long amountFcfa,
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date)
+        {
+            container.Column(col =>
+            {
+                col.Item().Background(SurfaceVariant).Padding(10).Column(c =>
+                {
+                    c.Item().Text(t =>
+                    {
+                        t.Span("Beneficiaire : ").SemiBold().FontColor(TextSecondary);
+                        t.Span(beneficiaryName).Bold();
+                    });
+                    c.Item().Text(t =>
+                    {
+                        t.Span("Nature : ").SemiBold().FontColor(TextSecondary);
+                        t.Span(categoryLabel);
+                    });
+                    c.Item().Text(t =>
+                    {
+                        t.Span("Date : ").SemiBold().FontColor(TextSecondary);
+                        t.Span($"{date:dd/MM/yyyy}");
+                    });
+                });
+
+                col.Item().PaddingTop(10).Table(table =>
+                {
+                    table.ColumnsDefinition(c =>
+                    {
+                        c.RelativeColumn(2);
+                        c.RelativeColumn(1);
+                    });
+
+                    table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6)
+                        .Text("Montant recu").FontColor(Colors.White).SemiBold();
+                    table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
+                        .Text($"{amountFcfa:N0} FCFA").FontColor(Colors.White).SemiBold();
+
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
+                        .Text("Moyen");
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
+                        .Text(operatorLabel);
+
+                    table.Cell().PaddingVertical(6).PaddingHorizontal(6).Text("Statut").Bold();
+                    table.Cell().PaddingVertical(6).PaddingHorizontal(6).AlignRight()
+                        .Text(statusLabel).Bold().FontColor(PrimaryHex);
+                });
+
+                col.Item().PaddingTop(14).Text(
+                    "Document genere electroniquement, sans signature. Ce recu atteste du virement recu.")
+                    .FontSize(8).FontColor(TextSecondary);
+            });
+        }
+
+        public byte[] BuildFinanceReportPdf(
+            string schoolName, DateTime? from, DateTime? to,
+            IReadOnlyList<(string Category, long Amount)> incomeByCategory,
+            IReadOnlyList<(string Category, long Amount)> expenseByCategory,
+            long totalIncome, long totalExpense,
+            long walletAvailableFcfa, long globalBalanceFcfa)
+        {
+            var period = (from.HasValue ? from.Value.ToString("dd/MM/yyyy") : "...") + " -> " +
+                         (to.HasValue ? to.Value.ToString("dd/MM/yyyy") : "...");
+            var doc = Document.Create(container =>
+            {
+                container.Page(page =>
+                {
+                    page.Size(PageSizes.A4);
+                    page.Margin(1.5f, Unit.Centimetre);
+                    page.PageColor(Colors.White);
+                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+
+                    page.Header().Element(c => Header(c, schoolName, "Rapport financier", period));
+                    page.Content().Element(c => FinanceContent(
+                        c, incomeByCategory, expenseByCategory, totalIncome, totalExpense,
+                        walletAvailableFcfa, globalBalanceFcfa));
+                    page.Footer().Element(Footer);
+                });
+            });
+            return doc.GeneratePdf();
+        }
+
+        private static void FinanceContent(
+            IContainer container,
+            IReadOnlyList<(string Category, long Amount)> incomeByCategory,
+            IReadOnlyList<(string Category, long Amount)> expenseByCategory,
+            long totalIncome, long totalExpense, long walletAvailableFcfa, long globalBalanceFcfa)
+        {
+            var net = totalIncome - totalExpense;
+            container.Column(col =>
+            {
+                // Bandeau de synthèse
+                col.Item().PaddingBottom(8).Row(row =>
+                {
+                    MoneyCounter(row, "Entrees", $"{totalIncome:N0}", PrimaryHex);
+                    MoneyCounter(row, "Sorties", $"{totalExpense:N0}", RedHex);
+                    MoneyCounter(row, "Net", $"{net:N0}", net >= 0 ? PrimaryHex : RedHex);
+                });
+
+                CategoryTable(col, "Entrees par categorie", incomeByCategory, totalIncome, PrimaryHex);
+                col.Item().PaddingTop(10);
+                CategoryTable(col, "Sorties par categorie", expenseByCategory, totalExpense, RedHex);
+
+                col.Item().PaddingTop(14).Background(SurfaceVariant).Padding(10).Column(c =>
+                {
+                    c.Item().Row(r =>
+                    {
+                        r.RelativeItem().Text("Wallet SenePay disponible").FontColor(TextSecondary);
+                        r.ConstantItem(120).AlignRight().Text($"{walletAvailableFcfa:N0} FCFA").SemiBold();
+                    });
+                    c.Item().PaddingTop(4).Row(r =>
+                    {
+                        r.RelativeItem().Text("Solde global du daara").Bold();
+                        r.ConstantItem(120).AlignRight().Text($"{globalBalanceFcfa:N0} FCFA").Bold().FontColor(PrimaryHex);
+                    });
+                });
+            });
+        }
+
+        private static void CategoryTable(
+            ColumnDescriptor col, string title,
+            IReadOnlyList<(string Category, long Amount)> rows, long total, string color)
+        {
+            col.Item().Text(title).SemiBold().FontColor(TextSecondary).FontSize(11);
+            col.Item().PaddingTop(4).Table(table =>
+            {
+                table.ColumnsDefinition(c =>
+                {
+                    c.RelativeColumn(3);
+                    c.RelativeColumn(2);
+                });
+
+                table.Header(header =>
+                {
+                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(6)
+                        .Text("Categorie").FontColor(Colors.White).SemiBold();
+                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(6)
+                        .AlignRight().Text("Montant").FontColor(Colors.White).SemiBold();
+                });
+
+                if (rows.Count == 0)
+                {
+                    table.Cell().ColumnSpan(2).BorderBottom(1).BorderColor(Border)
+                        .PaddingVertical(4).PaddingHorizontal(6)
+                        .Text("Aucun mouvement.").FontColor(TextSecondary).Italic().FontSize(9);
+                }
+                else
+                {
+                    foreach (var (cat, amount) in rows)
+                    {
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(6)
+                            .Text(string.IsNullOrWhiteSpace(cat) ? "Sans categorie" : cat).FontSize(9);
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(6)
+                            .AlignRight().Text($"{amount:N0} FCFA").FontSize(9);
+                    }
+                }
+
+                table.Cell().PaddingVertical(5).PaddingHorizontal(6).Text("Total").Bold();
+                table.Cell().PaddingVertical(5).PaddingHorizontal(6).AlignRight()
+                    .Text($"{total:N0} FCFA").Bold().FontColor(color);
             });
         }
 

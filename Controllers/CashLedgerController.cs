@@ -23,8 +23,13 @@ namespace Idara.API.Controllers
     public class CashLedgerController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly Services.IExportPdfService _exportPdf;
 
-        public CashLedgerController(AppDbContext context) => _context = context;
+        public CashLedgerController(AppDbContext context, Services.IExportPdfService exportPdf)
+        {
+            _context = context;
+            _exportPdf = exportPdf;
+        }
 
         /// <summary>`GET /api/cash-ledger?from&to&type` — écritures de caisse (filtrables).</summary>
         [HttpGet]
@@ -104,6 +109,68 @@ namespace Idara.API.Controllers
                 CashBalanceAllTimeFcfa = cashBalanceAllTime,
                 GlobalBalanceFcfa = walletAvailable + cashBalanceAllTime
             });
+        }
+
+        /// <summary>
+        /// `GET /api/cash-ledger/report/pdf?from&to` — rapport financier PDF (F4)
+        /// partageable WhatsApp : total entrées / sorties / net + ventilation par
+        /// catégorie sur la période + rappel wallet SenePay + solde global.
+        /// </summary>
+        [HttpGet("report/pdf")]
+        public async Task<IActionResult> ReportPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var schoolName = await _context.Schools
+                .Where(s => s.Id == schoolId.Value)
+                .Select(s => s.Name)
+                .FirstOrDefaultAsync(ct) ?? "Daara";
+
+            var walletAvailable = await _context.SchoolWallets
+                .Where(w => w.SchoolId == schoolId.Value)
+                .Select(w => (long?)w.AvailableBalance)
+                .FirstOrDefaultAsync(ct) ?? 0;
+
+            var all = _context.CashLedgerEntries
+                .Where(e => e.SchoolId == schoolId.Value && !e.IsDeleted);
+
+            // Solde caisse cumulé (toutes périodes) → solde global.
+            var allIncome = await all.Where(e => e.Type == CashEntryType.Income)
+                .SumAsync(e => (long?)e.AmountFcfa, ct) ?? 0;
+            var allExpense = await all.Where(e => e.Type == CashEntryType.Expense)
+                .SumAsync(e => (long?)e.AmountFcfa, ct) ?? 0;
+            var globalBalance = walletAvailable + (allIncome - allExpense);
+
+            // Écritures de la période, groupées par catégorie et par type.
+            var periodQ = all;
+            if (from.HasValue) periodQ = periodQ.Where(e => e.OccurredAt >= from.Value.ToUtcDay());
+            if (to.HasValue) periodQ = periodQ.Where(e => e.OccurredAt < to.Value.ToUtcDay().AddDays(1));
+
+            var grouped = await periodQ
+                .GroupBy(e => new { e.Type, e.Category })
+                .Select(g => new { g.Key.Type, g.Key.Category, Amount = g.Sum(x => x.AmountFcfa) })
+                .ToListAsync(ct);
+
+            var incomeRows = grouped
+                .Where(g => g.Type == CashEntryType.Income)
+                .OrderByDescending(g => g.Amount)
+                .Select(g => (g.Category ?? "Sans categorie", g.Amount))
+                .ToList();
+            var expenseRows = grouped
+                .Where(g => g.Type == CashEntryType.Expense)
+                .OrderByDescending(g => g.Amount)
+                .Select(g => (g.Category ?? "Sans categorie", g.Amount))
+                .ToList();
+            var totalIncome = incomeRows.Sum(r => r.Item2);
+            var totalExpense = expenseRows.Sum(r => r.Item2);
+
+            var bytes = _exportPdf.BuildFinanceReportPdf(
+                schoolName, from, to, incomeRows, expenseRows,
+                totalIncome, totalExpense, walletAvailable, globalBalance);
+
+            return File(bytes, "application/pdf", "rapport-financier-idara.pdf");
         }
 
         /// <summary>`POST /api/cash-ledger` — ajoute une écriture de caisse.</summary>
