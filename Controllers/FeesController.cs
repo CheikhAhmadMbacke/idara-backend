@@ -649,7 +649,7 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(w => w.SchoolId == schoolId.Value, ct);
             if (wallet == null) return NotFound(ApiResponse<bool>.Fail("Wallet introuvable."));
 
-            var recentTx = await _context.WalletTransactions
+            var recentRaw = await _context.WalletTransactions
                 .Where(t => t.SchoolId == schoolId.Value)
                 .OrderByDescending(t => t.OccurredAt)
                 .Take(50)
@@ -666,6 +666,74 @@ namespace Idara.API.Controllers
                     t.OccurredAt
                 })
                 .ToListAsync(ct);
+
+            // Libellés lisibles (read-time) : on résout les NOMS des entités liées
+            // — paiement → élève/payeur, don → donateur, retrait → bénéficiaire —
+            // pour ne plus afficher la référence technique SenePay comme titre
+            // (cf. §2d). La réf reste dans `Note` (visible dans les détails). Ceci
+            // nettoie l'historique EXISTANT sans migration (le libellé est calculé
+            // à la lecture). Les catégories génériques (recharge, abonnement…) sont
+            // laissées à null → traduites côté client selon `Source`.
+            var payIds = recentRaw
+                .Where(t => t.Source == WalletSource.Payment || t.Source == WalletSource.Donation)
+                .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
+            var payNames = await _context.Payments
+                .Where(p => payIds.Contains(p.Id))
+                .Select(p => new
+                {
+                    p.Id,
+                    Student = p.Student != null ? (p.Student.FirstName + " " + p.Student.LastName) : null,
+                    Guardian = p.Guardian != null ? p.Guardian.FullName : null,
+                    Donor = p.Donor != null ? p.Donor.FullName : null
+                })
+                .ToDictionaryAsync(p => p.Id, ct);
+
+            var wIds = recentRaw
+                .Where(t => t.Source == WalletSource.Withdrawal)
+                .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
+            var wNames = await _context.Withdrawals
+                .Where(w => wIds.Contains(w.Id))
+                .Select(w => new { w.Id, w.RecipientName })
+                .ToDictionaryAsync(w => w.Id, ct);
+
+            string? ResolveLabel(WalletSource source, int? relatedId)
+            {
+                switch (source)
+                {
+                    case WalletSource.Payment:
+                        if (relatedId != null && payNames.TryGetValue(relatedId.Value, out var pp))
+                            return !string.IsNullOrWhiteSpace(pp.Student) ? pp.Student!.Trim()
+                                 : !string.IsNullOrWhiteSpace(pp.Guardian) ? pp.Guardian
+                                 : null;
+                        return null;
+                    case WalletSource.Donation:
+                        if (relatedId != null && payNames.TryGetValue(relatedId.Value, out var dp)
+                            && !string.IsNullOrWhiteSpace(dp.Donor))
+                            return dp.Donor;
+                        return null;
+                    case WalletSource.Withdrawal:
+                        if (relatedId != null && wNames.TryGetValue(relatedId.Value, out var w)
+                            && !string.IsNullOrWhiteSpace(w.RecipientName))
+                            return w.RecipientName;
+                        return null;
+                    default:
+                        return null; // Topup / Subscription / Adjustment / Other → i18n client
+                }
+            }
+
+            var recentTx = recentRaw.Select(t => new
+            {
+                t.Id,
+                t.Type,
+                t.Source,
+                t.AmountFcfa,
+                t.BalanceAfter,
+                t.RelatedEntity,
+                t.RelatedId,
+                t.Note,
+                t.OccurredAt,
+                Label = ResolveLabel(t.Source, t.RelatedId)
+            }).ToList();
 
             return Ok(new
             {
@@ -726,6 +794,7 @@ namespace Idara.API.Controllers
                     StudentLastName = p.Student != null ? p.Student.LastName : null,
                     StudentNumber = p.Student != null ? p.Student.StudentNumber : null,
                     GuardianId = p.GuardianId,
+                    GuardianName = p.Guardian != null ? p.Guardian.FullName : null,
                     InvoiceId = p.InvoiceId,
                     Purpose = p.Purpose,
                     DonorId = p.DonorId,

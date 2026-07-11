@@ -18,6 +18,9 @@ namespace Idara.API.DTOs.Payment
         public string? StudentNumber { get; set; }
 
         public int? GuardianId { get; set; }
+        /// <summary>Nom du payeur (responsable) — sert de libellé quand le paiement
+        /// n'a pas d'élève unique (paiement consolidé multi-enfants).</summary>
+        public string? GuardianName { get; set; }
         public int? InvoiceId { get; set; }
 
         /// <summary>Nature (mensualité / recharge / DON) — pour le badge côté école.</summary>
