@@ -45,7 +45,6 @@ namespace Idara.API.Services
         private const string TextSecondary = "#475569";
         private const string Border = "#E2E8F0";
         private const string SurfaceVariant = "#F8FAFC";
-        private const string AmberHex = "#B45309";
         private const string RedHex = "#B91C1C";
 
         private static readonly string[] FrMonths =
@@ -53,6 +52,9 @@ namespace Idara.API.Services
             "janvier", "fevrier", "mars", "avril", "mai", "juin",
             "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
         };
+
+        /// <summary>Date en français long : « 15 juin 2026 » (le Sénégal est à l'heure UTC).</summary>
+        private static string FrLongDate(DateTime d) => $"{d.Day} {FrMonths[d.Month - 1]} {d.Year}";
 
         public byte[] BuildRosterPdf(string schoolName, int year, int month, PaymentRosterResponseDto roster)
         {
@@ -76,54 +78,74 @@ namespace Idara.API.Services
 
         private static void RosterContent(IContainer container, PaymentRosterResponseDto roster)
         {
+            // Deux groupes seulement (demande école) : ceux qui ont PAYÉ, et ceux
+            // qui n'ont PAS ENCORE payé (facture émise non soldée = en attente OU
+            // en retard). Les élèves « sans facture » (pas de tarif ce mois) sont
+            // exclus : ils n'ont rien à payer, donc hors du suivi de paiement.
+            var paid = roster.Entries
+                .Where(e => e.Status == RosterPaymentStatus.Paid)
+                .ToList();
+            var unpaid = roster.Entries
+                .Where(e => e.Status == RosterPaymentStatus.Pending
+                         || e.Status == RosterPaymentStatus.Overdue)
+                .ToList();
+
             container.Column(col =>
             {
                 col.Item().PaddingBottom(8).Row(row =>
                 {
-                    Counter(row, "A jour", roster.PaidCount, PrimaryHex);
-                    Counter(row, "En attente", roster.PendingCount, AmberHex);
-                    Counter(row, "En retard", roster.OverdueCount, RedHex);
-                    Counter(row, "Sans facture", roster.NoInvoiceCount, TextSecondary);
+                    Counter(row, "Paye", paid.Count, PrimaryHex);
+                    Counter(row, "Pas encore paye", unpaid.Count, RedHex);
                 });
 
-                col.Item().Table(table =>
+                RosterSection(col, "Paye", paid, PrimaryHex, showPaidAmount: true, topPad: 0);
+                RosterSection(col, "Pas encore paye", unpaid, RedHex, showPaidAmount: false, topPad: 14);
+            });
+        }
+
+        /// <summary>Une section du roster : titre + tableau (Élève / Classe / montant).</summary>
+        private static void RosterSection(
+            ColumnDescriptor col, string title, List<PaymentRosterEntryDto> entries,
+            string color, bool showPaidAmount, float topPad)
+        {
+            col.Item().PaddingTop(topPad).PaddingBottom(4)
+                .Text($"{title} ({entries.Count})").SemiBold().FontSize(11).FontColor(color);
+
+            if (entries.Count == 0)
+            {
+                col.Item().Text("Aucun eleve.").Italic().FontSize(9).FontColor(TextSecondary);
+                return;
+            }
+
+            col.Item().Table(table =>
+            {
+                table.ColumnsDefinition(c =>
                 {
-                    table.ColumnsDefinition(c =>
-                    {
-                        c.RelativeColumn(3);
-                        c.RelativeColumn(2);
-                        c.RelativeColumn(2);
-                        c.RelativeColumn(2);
-                        c.RelativeColumn(2);
-                    });
-
-                    table.Header(header =>
-                    {
-                        void H(string s) => header.Cell().Background(PrimaryHex)
-                            .PaddingVertical(4).PaddingHorizontal(5).Text(s).FontColor(Colors.White).SemiBold();
-                        H("Eleve");
-                        H("Classe");
-                        H("Statut");
-                        header.Cell().Background(PrimaryHex).PaddingVertical(4).PaddingHorizontal(5)
-                            .AlignRight().Text("Du").FontColor(Colors.White).SemiBold();
-                        header.Cell().Background(PrimaryHex).PaddingVertical(4).PaddingHorizontal(5)
-                            .AlignRight().Text("Paye").FontColor(Colors.White).SemiBold();
-                    });
-
-                    foreach (var e in roster.Entries)
-                    {
-                        var name = $"{e.StudentFirstName} {e.StudentLastName}".Trim();
-                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5).Text(name);
-                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                            .Text(e.ClassName ?? "-").FontSize(8);
-                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                            .Text(StatusLabel(e.Status)).FontColor(StatusColor(e.Status)).SemiBold().FontSize(8);
-                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                            .AlignRight().Text($"{e.AmountDueFcfa:N0}").FontSize(8);
-                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                            .AlignRight().Text($"{e.AmountPaidFcfa:N0}").FontSize(8);
-                    }
+                    c.RelativeColumn(4);
+                    c.RelativeColumn(3);
+                    c.RelativeColumn(2);
                 });
+
+                table.Header(header =>
+                {
+                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
+                        .Text("Eleve").FontColor(Colors.White).SemiBold();
+                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
+                        .Text("Classe").FontColor(Colors.White).SemiBold();
+                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
+                        .AlignRight().Text(showPaidAmount ? "Paye" : "Du").FontColor(Colors.White).SemiBold();
+                });
+
+                foreach (var e in entries)
+                {
+                    var name = $"{e.StudentFirstName} {e.StudentLastName}".Trim();
+                    var amount = showPaidAmount ? e.AmountPaidFcfa : e.AmountDueFcfa;
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5).Text(name);
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
+                        .Text(e.ClassName ?? "-").FontSize(8);
+                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
+                        .AlignRight().Text($"{amount:N0}").FontSize(8);
+                }
             });
         }
 
@@ -415,6 +437,8 @@ namespace Idara.API.Services
                     {
                         c.Item().AlignRight().Text(title).Bold().FontSize(12).FontColor(PrimaryHex);
                         c.Item().AlignRight().Text(subtitle).FontSize(9).FontColor(TextSecondary);
+                        c.Item().AlignRight().Text($"Genere le {FrLongDate(DateTime.UtcNow)}")
+                            .FontSize(8).FontColor(TextSecondary);
                     });
                 });
                 col.Item().PaddingTop(6).LineHorizontal(1).LineColor(PrimaryHex);
@@ -440,21 +464,5 @@ namespace Idara.API.Services
                 });
             });
         }
-
-        private static string StatusLabel(RosterPaymentStatus s) => s switch
-        {
-            RosterPaymentStatus.Paid => "A jour",
-            RosterPaymentStatus.Pending => "En attente",
-            RosterPaymentStatus.Overdue => "En retard",
-            _ => "Sans facture"
-        };
-
-        private static string StatusColor(RosterPaymentStatus s) => s switch
-        {
-            RosterPaymentStatus.Paid => PrimaryHex,
-            RosterPaymentStatus.Pending => AmberHex,
-            RosterPaymentStatus.Overdue => RedHex,
-            _ => TextSecondary
-        };
     }
 }
