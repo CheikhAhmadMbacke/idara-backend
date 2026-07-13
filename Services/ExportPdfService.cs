@@ -79,13 +79,13 @@ namespace Idara.API.Services
         private static void RosterContent(IContainer container, PaymentRosterResponseDto roster)
         {
             // Deux groupes seulement (demande école) : ceux qui ont PAYÉ, et ceux
-            // qui n'ont PAS ENCORE payé (facture émise non soldée = en attente OU
-            // en retard). Les élèves « sans facture » (pas de tarif ce mois) sont
-            // exclus : ils n'ont rien à payer, donc hors du suivi de paiement.
+            // EN RETARD (facture du mois non soldée). La facture n'étant générée
+            // qu'à l'échéance mensuelle, un impayé = un retard. Les élèves « sans
+            // facture » (pas de tarif ce mois, rien à payer) sont exclus.
             var paid = roster.Entries
                 .Where(e => e.Status == RosterPaymentStatus.Paid)
                 .ToList();
-            var unpaid = roster.Entries
+            var overdue = roster.Entries
                 .Where(e => e.Status == RosterPaymentStatus.Pending
                          || e.Status == RosterPaymentStatus.Overdue)
                 .ToList();
@@ -95,11 +95,11 @@ namespace Idara.API.Services
                 col.Item().PaddingBottom(8).Row(row =>
                 {
                     Counter(row, "Paye", paid.Count, PrimaryHex);
-                    Counter(row, "Pas encore paye", unpaid.Count, RedHex);
+                    Counter(row, "En retard", overdue.Count, RedHex);
                 });
 
                 RosterSection(col, "Paye", paid, PrimaryHex, showPaidAmount: true, topPad: 0);
-                RosterSection(col, "Pas encore paye", unpaid, RedHex, showPaidAmount: false, topPad: 14);
+                RosterSection(col, "En retard", overdue, RedHex, showPaidAmount: false, topPad: 14);
             });
         }
 
