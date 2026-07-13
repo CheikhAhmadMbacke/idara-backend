@@ -50,6 +50,16 @@ namespace Idara.API.Models
         /// </summary>
         public bool SubscriptionEnforcementEnabled { get; set; } = false;
 
+        /// <summary>
+        /// Rôles (CSV, ex. "SchoolAdmin,SchoolStaff") pour lesquels l'installation
+        /// de la DERNIÈRE version Android est OBLIGATOIRE (modal bloquant in-app).
+        /// Les rôles absents ne voient qu'un bandeau doux « mise à jour disponible ».
+        /// Vide (défaut) = personne n'est forcé. Édité par le SuperAdmin via
+        /// l'endpoint dédié <c>/api/app-version/config</c> (PAS via le PUT des
+        /// réglages plateforme, pour ne pas être écrasé par un ancien client).
+        /// </summary>
+        public string AndroidForcedUpdateRoles { get; set; } = string.Empty;
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>

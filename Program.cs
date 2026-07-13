@@ -28,6 +28,7 @@ builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(Uplo
 builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
 builder.Services.Configure<AfricasTalkingSettings>(builder.Configuration.GetSection(AfricasTalkingSettings.SectionName));
 builder.Services.Configure<FcmSettings>(builder.Configuration.GetSection(FcmSettings.SectionName));
+builder.Services.Configure<AppDistributionSettings>(builder.Configuration.GetSection(AppDistributionSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException("Section 'Jwt' manquante dans la configuration.");
