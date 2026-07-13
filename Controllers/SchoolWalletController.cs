@@ -38,6 +38,7 @@ namespace Idara.API.Controllers
         private readonly SenePaySettings _senepaySettings;
         private readonly IPayoutSettlementService _settlement;
         private readonly IMemoryCache _cache;
+        private readonly IExportPdfService _exportPdf;
         private readonly ILogger<SchoolWalletController> _logger;
 
         // Montant minimum de retrait et frais payout (%) ne sont plus codés en
@@ -49,6 +50,7 @@ namespace Idara.API.Controllers
             IOptions<SenePaySettings> senepaySettings,
             IPayoutSettlementService settlement,
             IMemoryCache cache,
+            IExportPdfService exportPdf,
             ILogger<SchoolWalletController> logger)
         {
             _context = context;
@@ -56,6 +58,7 @@ namespace Idara.API.Controllers
             _senepaySettings = senepaySettings.Value;
             _settlement = settlement;
             _cache = cache;
+            _exportPdf = exportPdf;
             _logger = logger;
         }
 
@@ -392,11 +395,81 @@ namespace Idara.API.Controllers
 
             var items = await _context.Withdrawals
                 .Where(w => w.SchoolId == schoolId.Value)
+                .Where(w => !w.IsHidden) // masqués par le daara → jamais affichés
                 .OrderByDescending(w => w.CreatedAt)
                 .Take(limit)
                 .ToListAsync(ct);
 
             return Ok(items.Select(MapToDto));
+        }
+
+        /// <summary>
+        /// `POST /api/school/wallet/withdrawals/{id}/hide` — masque un retrait de
+        /// l'affichage école (cosmétique, comme les paiements/transactions ; ne
+        /// touche NI au solde NI à la compta). Non réversible côté UI.
+        /// </summary>
+        [HttpPost("withdrawals/{id:int}/hide")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<bool>>> HideWithdrawal(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var n = await _context.Withdrawals
+                .Where(w => w.Id == id && w.SchoolId == schoolId.Value && !w.IsPlatform)
+                .ExecuteUpdateAsync(s => s.SetProperty(w => w.IsHidden, true), ct);
+            if (n == 0) return NotFound(ApiResponse<bool>.Fail("Retrait introuvable."));
+
+            return Ok(ApiResponse<bool>.Ok(true, "Retrait masqué."));
+        }
+
+        /// <summary>
+        /// `GET /api/school/wallet/withdrawals/{id}/receipt` — reçu PDF d'un retrait
+        /// / virement COMPLÉTÉ, côté ÉCOLE (SchoolAdmin/Staff), scopé à son école.
+        /// Sert au daara à partager la preuve d'un salaire/charge (WhatsApp).
+        /// Réutilise le rendu du reçu de virement (même document que côté bénéficiaire).
+        /// </summary>
+        [HttpGet("withdrawals/{id:int}/receipt")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> DownloadWithdrawalReceipt(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var w = await _context.Withdrawals
+                .Include(x => x.School)
+                .FirstOrDefaultAsync(x => x.Id == id
+                                          && x.SchoolId == schoolId.Value
+                                          && !x.IsPlatform
+                                          && x.Status == WithdrawalStatus.Completed, ct);
+            if (w == null)
+                return NotFound(ApiResponse<bool>.Fail("Reçu indisponible (retrait non complété)."));
+
+            var categoryLabel = w.Category == TransferCategory.Other
+                    && !string.IsNullOrWhiteSpace(w.CategoryLabel)
+                ? w.CategoryLabel!.Trim()
+                : w.Category switch
+                {
+                    TransferCategory.TeacherSalary => "Salaire enseignant",
+                    TransferCategory.StaffSalary => "Salaire personnel",
+                    TransferCategory.Rent => "Loyer",
+                    TransferCategory.Supplier => "Fournisseur",
+                    TransferCategory.Utilities => "Charges",
+                    TransferCategory.Other => "Autre",
+                    _ => "Retrait"
+                };
+
+            var bytes = _exportPdf.BuildTransferReceiptPdf(
+                w.School?.Name ?? "Daara",
+                w.Id,
+                string.IsNullOrWhiteSpace(w.RecipientName) ? "Beneficiaire" : w.RecipientName,
+                w.AmountFcfa,
+                w.Operator == PaymentOperator.Orange ? "Orange Money" : "Wave",
+                categoryLabel,
+                "Effectue",
+                w.CompletedAt ?? w.CreatedAt);
+
+            return File(bytes, "application/pdf", $"recu-retrait-idara-{w.Id:D6}.pdf");
         }
 
         // ====================================================================

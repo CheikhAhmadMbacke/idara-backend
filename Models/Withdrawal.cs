@@ -127,5 +127,13 @@ namespace Idara.API.Models
         public DateTime CreatedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
         public DateTime? FailedAt { get; set; }
+
+        /// <summary>
+        /// Masqué de l'affichage école (cosmétique, comme Payment/WalletTransaction) :
+        /// le daara ne veut plus voir cette ligne (souvent un échec) dans son
+        /// historique de retraits. NON destructif — la ligne reste en base (aucun
+        /// impact compta/réconciliation), elle sort seulement des listes.
+        /// </summary>
+        public bool IsHidden { get; set; }
     }
 }
