@@ -45,6 +45,7 @@ namespace Idara.API.Services
             var fullPath = Path.Combine(folder, fileName);
 
             var isDonation = payment.Purpose == PaymentPurpose.Donation;
+            var logoBytes = LoadLogoBytes(school.LogoUrl);
 
             try
             {
@@ -57,7 +58,7 @@ namespace Idara.API.Services
                         page.PageColor(Colors.White);
                         page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
 
-                        page.Header().Element(c => ComposeHeader(c, school, payment, isDonation));
+                        page.Header().Element(c => ComposeHeader(c, school, payment, isDonation, logoBytes));
                         page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation, consolidatedLines));
                         page.Footer().Element(ComposeFooter);
                     });
@@ -76,19 +77,49 @@ namespace Idara.API.Services
 
         // ===== Composition QuestPDF =====
 
-        private static void ComposeHeader(IContainer container, School school, Payment payment, bool isDonation)
+        /// <summary>
+        /// Charge les bytes du logo du daara depuis le disque (best-effort, défense
+        /// path-traversal). Renvoie null si absent/hors wwwroot/illisible → le reçu
+        /// s'affiche alors sans logo (comportement inchangé).
+        /// </summary>
+        private byte[]? LoadLogoBytes(string? logoUrl)
+        {
+            if (string.IsNullOrWhiteSpace(logoUrl)) return null;
+            try
+            {
+                var webRoot = Path.GetFullPath(_env.WebRootPath);
+                var full = Path.GetFullPath(Path.Combine(
+                    webRoot, logoUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+                if (!full.StartsWith(webRoot, StringComparison.Ordinal) || !File.Exists(full))
+                    return null;
+                return File.ReadAllBytes(full);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Logo daara illisible pour le reçu ({Url}) — reçu sans logo", logoUrl);
+                return null;
+            }
+        }
+
+        private static void ComposeHeader(IContainer container, School school, Payment payment, bool isDonation, byte[]? logoBytes)
         {
             container.Column(col =>
             {
                 col.Item().Row(row =>
                 {
-                    row.RelativeItem().Column(c =>
+                    row.RelativeItem().Row(left =>
                     {
-                        c.Item().Text(school.Name ?? "École").Bold().FontSize(13).FontColor(PrimaryHex);
-                        if (!string.IsNullOrWhiteSpace(school.Address))
-                            c.Item().Text(school.Address).FontSize(8).FontColor(TextSecondary);
-                        if (!string.IsNullOrWhiteSpace(school.PhoneNumber))
-                            c.Item().Text(school.PhoneNumber).FontSize(8).FontColor(TextSecondary);
+                        if (logoBytes != null)
+                            left.ConstantItem(42).PaddingRight(8).AlignMiddle()
+                                .Height(42).Image(logoBytes).FitArea();
+                        left.RelativeItem().Column(c =>
+                        {
+                            c.Item().Text(school.Name ?? "École").Bold().FontSize(13).FontColor(PrimaryHex);
+                            if (!string.IsNullOrWhiteSpace(school.Address))
+                                c.Item().Text(school.Address).FontSize(8).FontColor(TextSecondary);
+                            if (!string.IsNullOrWhiteSpace(school.PhoneNumber))
+                                c.Item().Text(school.PhoneNumber).FontSize(8).FontColor(TextSecondary);
+                        });
                     });
                     row.ConstantItem(150).AlignRight().Column(c =>
                     {

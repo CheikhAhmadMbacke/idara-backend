@@ -175,6 +175,7 @@ namespace Idara.API.Controllers
                     Id = s.Id,
                     Name = s.Name ?? $"Daara #{s.Id}",
                     Address = s.Address,
+                    LogoUrl = s.LogoUrl,
                     // Frais au donateur ? (null = pas de settings → daara paie = false)
                     DonorPaysFees = _context.SchoolPaymentSettings
                         .Where(ps => ps.SchoolId == s.Id)
@@ -315,6 +316,7 @@ namespace Idara.API.Controllers
                     Id = p.Id,
                     SchoolId = p.SchoolId,
                     SchoolName = _context.Schools.Where(s => s.Id == p.SchoolId).Select(s => s.Name).FirstOrDefault(),
+                    SchoolLogoUrl = _context.Schools.Where(s => s.Id == p.SchoolId).Select(s => s.LogoUrl).FirstOrDefault(),
                     AmountFcfa = p.TargetAmountFcfa,
                     AmountChargedFcfa = p.AmountFcfa,
                     Operator = p.Operator,
@@ -341,14 +343,15 @@ namespace Idara.API.Controllers
                                           && x.Purpose == PaymentPurpose.Donation, ct);
             if (p == null) return NotFound(ApiResponse<DonationDto>.Fail("Don introuvable."));
 
-            var schoolName = await _context.Schools.Where(s => s.Id == p.SchoolId)
-                .Select(s => s.Name).FirstOrDefaultAsync(ct);
+            var schoolInfo = await _context.Schools.Where(s => s.Id == p.SchoolId)
+                .Select(s => new { s.Name, s.LogoUrl }).FirstOrDefaultAsync(ct);
 
             return Ok(ApiResponse<DonationDto>.Ok(new DonationDto
             {
                 Id = p.Id,
                 SchoolId = p.SchoolId,
-                SchoolName = schoolName,
+                SchoolName = schoolInfo?.Name,
+                SchoolLogoUrl = schoolInfo?.LogoUrl,
                 AmountFcfa = p.TargetAmountFcfa,
                 AmountChargedFcfa = p.AmountFcfa,
                 Operator = p.Operator,

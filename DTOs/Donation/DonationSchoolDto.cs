@@ -10,6 +10,8 @@ namespace Idara.API.DTOs.Donation
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string? Address { get; set; }
+        /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher dans la liste + l'écran de don.</summary>
+        public string? LogoUrl { get; set; }
 
         /// <summary>true si CE daara fait porter les frais au donateur (majoration).
         /// false (défaut) = le daara paie les frais, le donateur donne le montant

@@ -154,6 +154,26 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Branding d'un daara par son id — pour tout utilisateur AUTHENTIFIÉ, afin
+        /// d'afficher la carte de bienvenue personnalisée dans un écran rattaché à
+        /// ce daara précis alors que l'utilisateur n'y est pas rattaché par son JWT :
+        /// parent (fiche enfant / accueil), donateur (écran de don), SuperAdmin
+        /// (fiche école). Faible sensibilité : le nom est déjà public (liste des
+        /// dons), logo/couleur/sous-titre sont cosmétiques. Ne renvoie que les
+        /// écoles existantes.
+        /// </summary>
+        [HttpGet("{schoolId:int}/branding")]
+        public async Task<ActionResult<SchoolBrandingDto>> GetBrandingById(int schoolId, CancellationToken ct)
+        {
+            var school = await _context.Schools
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == schoolId, ct);
+            if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
+
+            return Ok(MapToBrandingDto(school));
+        }
+
+        /// <summary>
         /// Met à jour le branding de MON école (SchoolAdmin only) : logo, sous-titre,
         /// couleur et/ou image de couverture. Le nom (titre) s'édite via my-info.
         /// </summary>

@@ -445,6 +445,7 @@ namespace Idara.API.Controllers
                 Id = i.Id,
                 SchoolId = i.SchoolId,
                 SchoolName = i.Student.School.Name,
+                SchoolLogoUrl = i.Student.School.LogoUrl,
                 StudentId = i.StudentId,
                 StudentFirstName = i.Student.FirstName,
                 StudentLastName = i.Student.LastName,
@@ -508,10 +509,20 @@ namespace Idara.API.Controllers
                     .ToList();
             }
 
+            // Nom + logo du daara par ligne (le parent peut avoir des paiements
+            // dans plusieurs daaras) — un seul lookup en lot, mappé par schoolId.
+            var paySchoolIds = items.Select(p => p.SchoolId).Distinct().ToList();
+            var paySchools = await _context.Schools
+                .Where(s => paySchoolIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Name, s.LogoUrl })
+                .ToDictionaryAsync(s => s.Id, ct);
+
             return Ok(items.Select(p => new PaymentDto
             {
                 Id = p.Id,
                 SchoolId = p.SchoolId,
+                SchoolName = paySchools.TryGetValue(p.SchoolId, out var ps) ? ps.Name : null,
+                SchoolLogoUrl = paySchools.TryGetValue(p.SchoolId, out var pl) ? pl.LogoUrl : null,
                 StudentId = p.StudentId,
                 StudentFirstName = p.Student?.FirstName,
                 StudentLastName = p.Student?.LastName,
@@ -600,6 +611,7 @@ namespace Idara.API.Controllers
                     {
                         SchoolId = schoolGroup.Key,
                         SchoolName = first.Student.School.Name ?? string.Empty,
+                        SchoolLogoUrl = first.Student.School.LogoUrl,
                         TotalDueFcfa = totalDue,
                         AmountToChargeFcfa = amountToCharge,
                         FeesPayer = feesPayer,
@@ -660,6 +672,8 @@ namespace Idara.API.Controllers
     {
         public int SchoolId { get; set; }
         public string SchoolName { get; set; } = string.Empty;
+        /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher sur la carte « à payer ».</summary>
+        public string? SchoolLogoUrl { get; set; }
 
         /// <summary>Total dû (dette de la famille, avant majoration).</summary>
         public long TotalDueFcfa { get; set; }

@@ -11,6 +11,8 @@ namespace Idara.API.DTOs.Payment
         public int Id { get; set; }
         public int SchoolId { get; set; }
         public string? SchoolName { get; set; }
+        /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher sur chaque ligne côté parent.</summary>
+        public string? SchoolLogoUrl { get; set; }
 
         public int? StudentId { get; set; }
         public string? StudentFirstName { get; set; }
