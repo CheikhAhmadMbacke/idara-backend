@@ -1,7 +1,9 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
+using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -603,7 +605,20 @@ namespace Idara.API.Controllers
                     s.FirstName,
                     s.LastName,
                     s.StudentNumber,
-                    ClassName = s.Class != null ? s.Class.Name : null
+                    ClassName = s.Class != null ? s.Class.Name : null,
+                    // Parent à contacter : le responsable LIÉ au compte (celui qui
+                    // paie dans l'app) d'abord — principal s'il y en a un —, sinon
+                    // le père puis la mère du dossier élève.
+                    LinkedGuardian = s.StudentGuardians
+                        .Where(g => !g.Guardian.IsDeleted)
+                        .OrderByDescending(g => g.IsPrimaryGuardian)
+                        .ThenBy(g => g.GuardianId)
+                        .Select(g => new { g.Guardian.FullName, g.Guardian.PhoneNumber })
+                        .FirstOrDefault(),
+                    s.FatherFullName,
+                    s.FatherPhone,
+                    s.MotherFullName,
+                    s.MotherPhone
                 })
                 .ToListAsync(ct);
 
@@ -628,6 +643,26 @@ namespace Idara.API.Controllers
                 .GroupBy(i => i.StudentId)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // Date du dernier paiement COMPLÉTÉ imputé à chaque facture : soit un
+            // paiement direct (InvoiceId), soit une part de paiement global
+            // consolidé (allocation). Les deux chemins existent depuis le
+            // « paiement global » parent — n'en oublier aucun sinon des élèves
+            // payés apparaîtraient sans date.
+            var invoiceIds = invoices.Select(i => i.Id).ToList();
+            var paidDirect = await _context.Payments
+                .Where(p => p.InvoiceId != null && invoiceIds.Contains(p.InvoiceId.Value)
+                            && p.Status == PaymentStatus.Completed && p.PaidAt != null)
+                .Select(p => new { InvoiceId = p.InvoiceId!.Value, p.PaidAt })
+                .ToListAsync(ct);
+            var paidAllocated = await _context.PaymentInvoiceAllocations
+                .Where(a => invoiceIds.Contains(a.InvoiceId)
+                            && a.Payment.Status == PaymentStatus.Completed && a.Payment.PaidAt != null)
+                .Select(a => new { a.InvoiceId, a.Payment.PaidAt })
+                .ToListAsync(ct);
+            var paidAtByInvoice = paidDirect.Concat(paidAllocated)
+                .GroupBy(x => x.InvoiceId)
+                .ToDictionary(g => g.Key, g => g.Max(x => x.PaidAt));
+
             var entries = new List<PaymentRosterEntryDto>(students.Count);
             foreach (var s in students)
             {
@@ -642,6 +677,16 @@ namespace Idara.API.Controllers
                 else
                     status = RosterPaymentStatus.Pending;
 
+                // Cascade parent : responsable lié au compte > père > mère. Le nom
+                // et le numéro viennent TOUJOURS de la même source (sinon on
+                // afficherait le nom du père avec le numéro de la mère).
+                var guardianName = s.LinkedGuardian?.FullName;
+                var guardianPhone = s.LinkedGuardian?.PhoneNumber;
+                if (string.IsNullOrWhiteSpace(guardianName))
+                    (guardianName, guardianPhone) = (s.FatherFullName, s.FatherPhone);
+                if (string.IsNullOrWhiteSpace(guardianName))
+                    (guardianName, guardianPhone) = (s.MotherFullName, s.MotherPhone);
+
                 entries.Add(new PaymentRosterEntryDto
                 {
                     StudentId = s.Id,
@@ -653,7 +698,10 @@ namespace Idara.API.Controllers
                     AmountDueFcfa = inv?.AmountDueFcfa ?? 0,
                     AmountPaidFcfa = inv?.AmountPaidFcfa ?? 0,
                     InvoiceId = inv?.Id,
-                    DueDate = inv?.DueDate
+                    DueDate = inv?.DueDate,
+                    GuardianFullName = string.IsNullOrWhiteSpace(guardianName) ? null : guardianName.Trim(),
+                    GuardianPhone = string.IsNullOrWhiteSpace(guardianPhone) ? null : guardianPhone.Trim(),
+                    PaidAt = inv != null && paidAtByInvoice.TryGetValue(inv.Id, out var pa) ? pa : null
                 });
             }
 
@@ -879,11 +927,57 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(w => w.SchoolId == schoolId.Value, ct);
             if (wallet == null) return NotFound(ApiResponse<bool>.Fail("Wallet introuvable."));
 
-            var recentRaw = await _context.WalletTransactions
-                .Where(t => t.SchoolId == schoolId.Value)
-                .Where(t => !t.IsHidden) // masquées par le daara → jamais affichées
+            var recentTx = await LoadWalletTransactionsAsync(schoolId.Value, null, null, 50, ct);
+
+            return Ok(new
+            {
+                wallet.SchoolId,
+                wallet.AvailableBalance,
+                wallet.PendingBalance,
+                // Deux poches du solde disponible (remarque produit) :
+                //  - Solde don   = DonationBalanceFcfa
+                //  - Solde paiement = Available − Don (dérivé)
+                DonationBalance = wallet.DonationBalanceFcfa,
+                FeeBalance = wallet.AvailableBalance - wallet.DonationBalanceFcfa,
+                wallet.TotalCreditedLifetime,
+                wallet.TotalWithdrawnLifetime,
+                wallet.UpdatedAt,
+                RecentTransactions = recentTx
+            });
+        }
+
+        /// <summary>
+        /// Une ligne d'historique wallet, libellé et STATUT déjà résolus.
+        ///
+        /// <para><c>Status</c> ("Completed" / "Pending" / "Failed") est indispensable
+        /// à l'affichage : sans lui, le client ne pouvait colorer une ligne que par
+        /// le SENS du montant (débit = rouge), et un retrait RÉUSSI apparaissait en
+        /// rouge — lu comme un échec par les écoles (retour terrain 2026-07-26).
+        /// La couleur d'une transaction porte son STATUT, jamais son sens (gotcha §118).</para>
+        /// </summary>
+        private sealed record WalletTxRow(
+            int Id, WalletTransactionType Type, WalletSource Source, long AmountFcfa, long BalanceAfter,
+            WalletRelatedEntity RelatedEntity, int? RelatedId, string? Note, DateTime OccurredAt, string? Label,
+            string Status);
+
+        /// <summary>
+        /// Charge l'historique wallet visible d'une école (récent d'abord), libellés
+        /// résolus. SOURCE UNIQUE de l'onglet « Wallet » et de son export PDF : les
+        /// deux affichent donc exactement les mêmes lignes et les mêmes noms.
+        /// </summary>
+        private async Task<List<WalletTxRow>> LoadWalletTransactionsAsync(
+            int schoolId, DateTime? from, DateTime? to, int take, CancellationToken ct)
+        {
+            var query = _context.WalletTransactions
+                .Where(t => t.SchoolId == schoolId)
+                .Where(t => !t.IsHidden); // masquées par le daara → jamais affichées
+
+            if (from.HasValue) query = query.Where(t => t.OccurredAt >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(t => t.OccurredAt < to.Value.ToUtcDay().AddDays(1));
+
+            var recentRaw = await query
                 .OrderByDescending(t => t.OccurredAt)
-                .Take(50)
+                .Take(take)
                 .Select(t => new
                 {
                     t.Id,
@@ -924,7 +1018,7 @@ namespace Idara.API.Controllers
                 .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
             var wNames = await _context.Withdrawals
                 .Where(w => wIds.Contains(w.Id))
-                .Select(w => new { w.Id, w.RecipientName })
+                .Select(w => new { w.Id, w.RecipientName, w.Status })
                 .ToDictionaryAsync(w => w.Id, ct);
 
             string? ResolveLabel(WalletSource source, int? relatedId)
@@ -952,35 +1046,159 @@ namespace Idara.API.Controllers
                 }
             }
 
-            var recentTx = recentRaw.Select(t => new
+            // Statut de la ligne (gotcha §118). Une écriture wallet est append-only :
+            // elle n'existe QUE si l'opération a abouti — sauf pour un retrait, dont
+            // la réservation est posée AVANT que l'opérateur ne tranche. Une ligne de
+            // retrait porte donc le statut du retrait lié (en cours / réussi / échoué),
+            // tout le reste est réussi par construction.
+            string ResolveStatus(WalletSource source, int? relatedId)
             {
-                t.Id,
-                t.Type,
-                t.Source,
-                t.AmountFcfa,
-                t.BalanceAfter,
-                t.RelatedEntity,
-                t.RelatedId,
-                t.Note,
-                t.OccurredAt,
-                Label = ResolveLabel(t.Source, t.RelatedId)
+                if (source != WalletSource.Withdrawal) return "Completed";
+                // Retrait introuvable (purgé / donnée ancienne) : l'écriture existe,
+                // on ne l'affiche pas comme un échec.
+                if (relatedId == null || !wNames.TryGetValue(relatedId.Value, out var w))
+                    return "Completed";
+                return w.Status switch
+                {
+                    Enums.WithdrawalStatus.Completed => "Completed",
+                    Enums.WithdrawalStatus.Initiated => "Pending",
+                    Enums.WithdrawalStatus.UnderVerification => "Pending",
+                    _ => "Failed" // Failed / Cancelled : la restitution suit (ligne Release)
+                };
+            }
+
+            return recentRaw.Select(t => new WalletTxRow(
+                t.Id, t.Type, t.Source, t.AmountFcfa, t.BalanceAfter,
+                t.RelatedEntity, t.RelatedId, t.Note, t.OccurredAt,
+                ResolveLabel(t.Source, t.RelatedId),
+                ResolveStatus(t.Source, t.RelatedId))).ToList();
+        }
+
+        /// <summary>
+        /// `GET /api/fees/wallet/transactions/pdf?from&to` — l'historique des
+        /// mouvements du wallet en PDF (tableau), à partager/archiver. Mêmes
+        /// lignes que l'onglet « Wallet », sur la période choisie.
+        /// </summary>
+        [HttpGet("wallet/transactions/pdf")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetWalletTransactionsPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var txs = await LoadWalletTransactionsAsync(
+                schoolId.Value, from, to, FinanceLabels.MaxExportRows, ct);
+
+            var rows = txs.Select(t => new TransactionPdfRow
+            {
+                Date = t.OccurredAt,
+                Title = FinanceLabels.WalletSource(t.Source),
+                Subtitle = t.Label,
+                // Le type n'est précisé que quand il ne va pas de soi (une
+                // réservation ou une restitution, sinon c'est juste un crédit/débit).
+                Method = t.Type is WalletTransactionType.Credit or WalletTransactionType.Debit
+                    ? null
+                    : FinanceLabels.WalletTransactionType(t.Type),
+                Reference = t.Note,
+                // Le PDF dit la MÊME chose que l'écran : un mouvement non abouti est
+                // annoncé comme tel, jamais juste par son solde (gotcha §116 + §118).
+                Status = t.Status == "Completed"
+                    ? $"Solde : {t.BalanceAfter:N0}"
+                    : $"{(t.Status == "Pending" ? "En cours" : "Echoue")} - solde : {t.BalanceAfter:N0}",
+                AmountFcfa = t.AmountFcfa
             }).ToList();
 
-            return Ok(new
+            var schoolName = await GetSchoolNameAsync(schoolId.Value, ct);
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                schoolName,
+                FinanceLabels.ExportTitle("Historique du wallet", rows.Count),
+                from, to, rows, BuildFlowSummary(rows));
+
+            return File(bytes, "application/pdf", "historique-wallet-idara.pdf");
+        }
+
+        /// <summary>
+        /// `GET /api/fees/payments/pdf?from&to&status` — l'historique des paiements
+        /// reçus (parents, dons, recharges) en PDF. Reprend EXACTEMENT le filtrage
+        /// de l'onglet « Paiements » (échecs masqués, tentatives regroupées).
+        /// </summary>
+        [HttpGet("payments/pdf")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetSchoolPaymentsPdf(
+            [FromQuery] PaymentStatus? status,
+            [FromQuery] DateTime? from,
+            [FromQuery] DateTime? to,
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var payments = await LoadSchoolPaymentsAsync(schoolId.Value, status, from, to,
+                FinanceLabels.MaxExportRows, ct);
+
+            var rows = payments.Select(p => new TransactionPdfRow
             {
-                wallet.SchoolId,
-                wallet.AvailableBalance,
-                wallet.PendingBalance,
-                // Deux poches du solde disponible (remarque produit) :
-                //  - Solde don   = DonationBalanceFcfa
-                //  - Solde paiement = Available − Don (dérivé)
-                DonationBalance = wallet.DonationBalanceFcfa,
-                FeeBalance = wallet.AvailableBalance - wallet.DonationBalanceFcfa,
-                wallet.TotalCreditedLifetime,
-                wallet.TotalWithdrawnLifetime,
-                wallet.UpdatedAt,
-                RecentTransactions = recentTx
-            });
+                Date = p.PaidAt ?? p.InitiatedAt,
+                Title = FinanceLabels.PaymentPurpose(p.Purpose),
+                Subtitle = PayerLabel(p),
+                Method = FinanceLabels.Operator(p.Operator),
+                Reference = p.SenePayTransactionId,
+                Status = FinanceLabels.PaymentStatus(p.Status),
+                // Vu du daara, un paiement reçu est une ENTRÉE : on liste ce que la
+                // famille a réglé (le montant cible), pas le net après frais SenePay.
+                AmountFcfa = p.TargetAmountFcfa > 0 ? p.TargetAmountFcfa : p.AmountFcfa
+            }).ToList();
+
+            var completed = payments
+                .Where(p => p.Status == PaymentStatus.Completed)
+                .Sum(p => p.TargetAmountFcfa > 0 ? p.TargetAmountFcfa : p.AmountFcfa);
+            var summary = new List<(string, string, bool)>
+            {
+                ("Total encaisse", $"{completed:N0}", false),
+                ("Transactions", $"{rows.Count:N0}", false)
+            };
+
+            var schoolName = await GetSchoolNameAsync(schoolId.Value, ct);
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                schoolName,
+                FinanceLabels.ExportTitle("Historique des paiements recus", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "historique-paiements-idara.pdf");
+        }
+
+        /// <summary>Qui a payé : élève (+ classe) pour une mensualité, donateur pour un don.</summary>
+        private static string? PayerLabel(Payment p)
+        {
+            if (p.Purpose == PaymentPurpose.Donation)
+                return p.Donor?.FullName;
+            var student = $"{p.Student?.FirstName} {p.Student?.LastName}".Trim();
+            if (!string.IsNullOrWhiteSpace(student))
+                return string.IsNullOrWhiteSpace(p.Student?.Class?.Name)
+                    ? student
+                    : $"{student} - {p.Student!.Class!.Name}";
+            return p.Guardian?.FullName;
+        }
+
+        /// <summary>Nom de l'école (repli neutre) pour l'en-tête des documents.</summary>
+        private async Task<string> GetSchoolNameAsync(int schoolId, CancellationToken ct) =>
+            await _context.Schools.Where(s => s.Id == schoolId)
+                .Select(s => s.Name).FirstOrDefaultAsync(ct) ?? "Daara";
+
+        /// <summary>Bandeau Entrées / Sorties / Net d'une liste de mouvements signés.</summary>
+        private static List<(string Label, string Value, bool Danger)> BuildFlowSummary(
+            IReadOnlyList<TransactionPdfRow> rows)
+        {
+            var credits = rows.Where(r => r.AmountFcfa > 0).Sum(r => r.AmountFcfa);
+            var debits = rows.Where(r => r.AmountFcfa < 0).Sum(r => -r.AmountFcfa);
+            var net = credits - debits;
+            return new List<(string, string, bool)>
+            {
+                ("Entrees", $"{credits:N0}", false),
+                ("Sorties", $"{debits:N0}", true),
+                ("Net", $"{net:N0}", net < 0)
+            };
         }
 
         // ========================================================
@@ -998,8 +1216,53 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            var payments = await LoadSchoolPaymentsAsync(schoolId.Value, status, from, to, 500, ct);
+
+            return Ok(payments.Select(p => new PaymentDto
+            {
+                Id = p.Id,
+                SchoolId = p.SchoolId,
+                StudentId = p.StudentId,
+                StudentFirstName = p.Student?.FirstName,
+                StudentLastName = p.Student?.LastName,
+                StudentNumber = p.Student?.StudentNumber,
+                GuardianId = p.GuardianId,
+                GuardianName = p.Guardian?.FullName,
+                InvoiceId = p.InvoiceId,
+                Purpose = p.Purpose,
+                DonorId = p.DonorId,
+                DonorName = p.Donor?.FullName,
+                DonorType = p.Donor?.DonorType,
+                AmountFcfa = p.AmountFcfa,
+                FeesFcfa = p.FeesFcfa,
+                NetCreditedFcfa = p.NetCreditedFcfa,
+                Operator = p.Operator,
+                FeesPayer = p.FeesPayer,
+                Status = p.Status,
+                SenePayTransactionId = p.SenePayTransactionId,
+                FailureReason = p.FailureReason,
+                InitiatedAt = p.InitiatedAt,
+                PaidAt = p.PaidAt,
+                FailedAt = p.FailedAt,
+                ReceiptPdfUrl = p.ReceiptPdfPath
+            }));
+        }
+
+        /// <summary>
+        /// Charge les paiements reçus d'une école avec le filtrage EXACT de la vue
+        /// « Paiements » : masqués exclus, échecs cachés par défaut, tentatives
+        /// multiples d'une même facture regroupées en une ligne. SOURCE UNIQUE de
+        /// l'onglet et de son export PDF — les deux ne peuvent pas diverger.
+        /// </summary>
+        private async Task<List<Payment>> LoadSchoolPaymentsAsync(
+            int schoolId, PaymentStatus? status, DateTime? from, DateTime? to,
+            int take, CancellationToken ct)
+        {
             var query = _context.Payments
-                .Where(p => p.SchoolId == schoolId.Value)
+                .Include(p => p.Student).ThenInclude(s => s!.Class)
+                .Include(p => p.Guardian)
+                .Include(p => p.Donor)
+                .Where(p => p.SchoolId == schoolId)
                 .Where(p => !p.IsHidden); // masqués par le daara → jamais affichés (ni Observateur)
 
             if (status.HasValue)
@@ -1011,40 +1274,14 @@ namespace Idara.API.Controllers
                 query = query.Where(p =>
                     p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.Pending);
 
-            if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcSafe());
-            if (to.HasValue) query = query.Where(p => p.InitiatedAt <= to.Value.ToUtcSafe());
+            // Bornes en JOUR CIVIL (le client envoie une date, pas un instant) :
+            // `to` inclut donc toute sa journée.
+            if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(p => p.InitiatedAt < to.Value.ToUtcDay().AddDays(1));
 
             var items = await query
                 .OrderByDescending(p => p.InitiatedAt)
-                .Take(500)
-                .Select(p => new PaymentDto
-                {
-                    Id = p.Id,
-                    SchoolId = p.SchoolId,
-                    StudentId = p.StudentId,
-                    StudentFirstName = p.Student != null ? p.Student.FirstName : null,
-                    StudentLastName = p.Student != null ? p.Student.LastName : null,
-                    StudentNumber = p.Student != null ? p.Student.StudentNumber : null,
-                    GuardianId = p.GuardianId,
-                    GuardianName = p.Guardian != null ? p.Guardian.FullName : null,
-                    InvoiceId = p.InvoiceId,
-                    Purpose = p.Purpose,
-                    DonorId = p.DonorId,
-                    DonorName = p.Donor != null ? p.Donor.FullName : null,
-                    DonorType = p.Donor != null ? p.Donor.DonorType : null,
-                    AmountFcfa = p.AmountFcfa,
-                    FeesFcfa = p.FeesFcfa,
-                    NetCreditedFcfa = p.NetCreditedFcfa,
-                    Operator = p.Operator,
-                    FeesPayer = p.FeesPayer,
-                    Status = p.Status,
-                    SenePayTransactionId = p.SenePayTransactionId,
-                    FailureReason = p.FailureReason,
-                    InitiatedAt = p.InitiatedAt,
-                    PaidAt = p.PaidAt,
-                    FailedAt = p.FailedAt,
-                    ReceiptPdfUrl = p.ReceiptPdfPath
-                })
+                .Take(take)
                 .ToListAsync(ct);
 
             // Vue par défaut : regroupe les tentatives multiples d'une même
@@ -1064,7 +1301,7 @@ namespace Idara.API.Controllers
                     .ToList();
             }
 
-            return Ok(items);
+            return items;
         }
 
         // ========================================================

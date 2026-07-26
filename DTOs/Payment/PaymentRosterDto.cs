@@ -25,6 +25,22 @@ namespace Idara.API.DTOs.Payment
         public long AmountPaidFcfa { get; set; }
         public int? InvoiceId { get; set; }
         public System.DateTime? DueDate { get; set; }
+
+        /// <summary>
+        /// Nom complet du parent à contacter : le responsable LIÉ au compte de
+        /// l'app en priorité (c'est lui qui paie), sinon le père puis la mère
+        /// renseignés dans le dossier de l'élève. Null si aucun des trois.
+        /// </summary>
+        public string? GuardianFullName { get; set; }
+
+        /// <summary>Numéro du même parent (même cascade) — sert à relancer par WhatsApp.</summary>
+        public string? GuardianPhone { get; set; }
+
+        /// <summary>
+        /// Date du dernier paiement COMPLÉTÉ imputé à la facture du mois (paiement
+        /// direct ou part d'un paiement global consolidé). Null si non payé.
+        /// </summary>
+        public System.DateTime? PaidAt { get; set; }
     }
 
     /// <summary>Roster complet d'un mois + compteurs par statut.</summary>

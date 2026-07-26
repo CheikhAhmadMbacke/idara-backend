@@ -29,6 +29,14 @@ namespace Idara.API.Models
         /// <summary>Catégorie par défaut proposée quand on paie ce bénéficiaire.</summary>
         public TransferCategory DefaultCategory { get; set; } = TransferCategory.Other;
 
+        /// <summary>
+        /// Nom de la nature quand <see cref="DefaultCategory"/> == Other — même
+        /// rôle que <see cref="Withdrawal.CategoryLabel"/>, pré-rempli au
+        /// transfert. Sans lui, choisir « Autre » au carnet ne permettait de rien
+        /// préciser du tout.
+        /// </summary>
+        public string? DefaultCategoryLabel { get; set; }
+
         /// <summary>Note libre optionnelle (poste, rôle…).</summary>
         public string? Note { get; set; }
 

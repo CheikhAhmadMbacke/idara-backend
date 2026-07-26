@@ -57,8 +57,19 @@ namespace Idara.API.Models
         /// <summary>
         /// Libellé libre saisi quand <see cref="Category"/> == Other (sinon null).
         /// Permet à l'école de nommer une nature de transfert hors liste fixe.
+        /// ⚠️ C'est le NOM d'une nature (« Ndogou »), PAS le motif détaillé de
+        /// l'opération — celui-ci va dans <see cref="Motif"/>.
         /// </summary>
         public string? CategoryLabel { get; set; }
+
+        /// <summary>
+        /// Motif / détails libres de CE transfert précis (« avance pour l'achat
+        /// de 3 tablettes »). Optionnel. Séparé de la catégorie exprès : sans ce
+        /// champ, les écoles écrivaient le motif dans le libellé de catégorie
+        /// « Autre », ce qui polluait l'affichage des listes.
+        /// Affiché uniquement dans le détail de la transaction, le reçu et les exports.
+        /// </summary>
+        public string? Motif { get; set; }
 
         /// <summary>
         /// Bénéficiaire du carnet utilisé (null = saisie ponctuelle). On snapshote

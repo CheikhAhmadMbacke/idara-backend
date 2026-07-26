@@ -33,9 +33,15 @@ namespace Idara.API.DTOs.Payment
         /// </summary>
         public WithdrawalSource Source { get; set; } = WithdrawalSource.Total;
 
-        /// <summary>Libellé libre obligatoire quand Category == Other (sinon ignoré).</summary>
+        /// <summary>Nom de la nature, obligatoire quand Category == Other (sinon ignoré).</summary>
         [StringLength(120, ErrorMessage = "La catégorie ne doit pas dépasser 120 caractères.")]
         public string? CategoryLabel { get; set; }
+
+        /// <summary>
+        /// Motif / détails de l'opération (optionnel) — distinct de la catégorie.
+        /// </summary>
+        [StringLength(300, ErrorMessage = "Le motif ne doit pas dépasser 300 caractères.")]
+        public string? Motif { get; set; }
 
         /// <summary>Bénéficiaire du carnet. Null = saisie manuelle ponctuelle.</summary>
         public int? BeneficiaryId { get; set; }

@@ -17,10 +17,15 @@ namespace Idara.API.DTOs.Payment
         public TransferCategory Category { get; set; }
         /// <summary>Poche puisée (Total / Paiements / Dons) — pour l'affichage.</summary>
         public WithdrawalSource Source { get; set; }
-        /// <summary>Libellé libre quand Category == Other (sinon null).</summary>
+        /// <summary>Nom de la nature quand Category == Other (sinon null).</summary>
         public string? CategoryLabel { get; set; }
+        /// <summary>Motif / détails de l'opération (affiché dans le détail, pas dans les listes).</summary>
+        public string? Motif { get; set; }
         public string RecipientName { get; set; } = string.Empty;
+        /// <summary>Conservé pour les anciennes versions de l'app — préférer <see cref="RecipientPhone"/>.</summary>
         public string RecipientPhoneMasked { get; set; } = string.Empty;
+        /// <summary>Numéro complet du bénéficiaire (l'école l'a saisi elle-même).</summary>
+        public string RecipientPhone { get; set; } = string.Empty;
         public WithdrawalStatus Status { get; set; }
         public string? FailureReason { get; set; }
         public DateTime CreatedAt { get; set; }

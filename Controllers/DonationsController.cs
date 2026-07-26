@@ -42,6 +42,7 @@ namespace Idara.API.Controllers
         private readonly ISenePayClient _senepay;
         private readonly SenePaySettings _senepaySettings;
         private readonly IReceiptPdfService _receiptPdf;
+        private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
         private readonly IMemoryCache _cache;
         private readonly ILogger<DonationsController> _logger;
@@ -53,6 +54,7 @@ namespace Idara.API.Controllers
             ISenePayClient senepay,
             IOptions<SenePaySettings> senepaySettings,
             IReceiptPdfService receiptPdf,
+            IExportPdfService exportPdf,
             IWebHostEnvironment env,
             IMemoryCache cache,
             ILogger<DonationsController> logger)
@@ -63,6 +65,7 @@ namespace Idara.API.Controllers
             _senepay = senepay;
             _senepaySettings = senepaySettings.Value;
             _receiptPdf = receiptPdf;
+            _exportPdf = exportPdf;
             _env = env;
             _cache = cache;
             _logger = logger;
@@ -310,6 +313,12 @@ namespace Idara.API.Controllers
 
             var items = await _context.Payments
                 .Where(p => p.DonorId == donorId && p.Purpose == PaymentPurpose.Donation)
+                // Un donateur ne voit que ses dons ABOUTIS ou EN COURS : une
+                // tentative échouée / annulée / expirée n'a rien prélevé, l'afficher
+                // ne fait qu'inquiéter (même contrat que l'historique parent,
+                // GuardianController.LoadMyPaymentsAsync — gotcha §118).
+                .Where(p => p.Status == PaymentStatus.Completed
+                         || p.Status == PaymentStatus.Pending)
                 .OrderByDescending(p => p.InitiatedAt)
                 .Select(p => new DonationDto
                 {
@@ -329,6 +338,77 @@ namespace Idara.API.Controllers
                 .ToListAsync(ct);
 
             return Ok(ApiResponse<List<DonationDto>>.Ok(items));
+        }
+
+        /// <summary>
+        /// `GET /api/donations/mine/pdf?from&to` — l'historique complet des dons du
+        /// donateur en PDF (tableau), en plus du reçu de don unitaire.
+        /// </summary>
+        [HttpGet("mine/pdf")]
+        public async Task<IActionResult> ExportMinePdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var donorId = User.GetUserId()
+                ?? throw new UnauthorizedAccessException("UserId manquant du JWT.");
+
+            var query = _context.Payments
+                .Where(p => p.DonorId == donorId && p.Purpose == PaymentPurpose.Donation)
+                // MÊME filtre que l'écran « Mes dons » : un export ne doit jamais
+                // faire réapparaître des lignes que la vue masque (§116).
+                .Where(p => p.Status == PaymentStatus.Completed
+                         || p.Status == PaymentStatus.Pending);
+
+            if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(p => p.InitiatedAt < to.Value.ToUtcDay().AddDays(1));
+
+            var items = await query
+                .OrderByDescending(p => p.InitiatedAt)
+                .Take(FinanceLabels.MaxExportRows)
+                .Select(p => new
+                {
+                    p.Id,
+                    SchoolName = _context.Schools.Where(s => s.Id == p.SchoolId)
+                        .Select(s => s.Name).FirstOrDefault(),
+                    p.TargetAmountFcfa,
+                    p.AmountFcfa,
+                    p.Operator,
+                    p.Status,
+                    p.SenePayTransactionId,
+                    p.InitiatedAt,
+                    p.PaidAt
+                })
+                .ToListAsync(ct);
+
+            var rows = items.Select(d => new DTOs.Export.TransactionPdfRow
+            {
+                Date = d.PaidAt ?? d.InitiatedAt,
+                Title = "Don",
+                Subtitle = d.SchoolName,
+                Method = FinanceLabels.Operator(d.Operator),
+                Reference = d.SenePayTransactionId,
+                Status = FinanceLabels.PaymentStatus(d.Status),
+                // Le DON = ce que le daara reçoit (montant cible) ; les frais que le
+                // donateur a payés en plus figurent dans le total débité, en tête.
+                AmountFcfa = d.TargetAmountFcfa > 0 ? d.TargetAmountFcfa : d.AmountFcfa
+            }).ToList();
+
+            var completed = items.Where(d => d.Status == PaymentStatus.Completed).ToList();
+            var summary = new List<(string, string, bool)>
+            {
+                ("Total des dons", $"{completed.Sum(d => d.TargetAmountFcfa):N0}", false),
+                ("Total debite", $"{completed.Sum(d => d.AmountFcfa):N0}", false),
+                ("Dons", $"{completed.Count:N0}", false)
+            };
+
+            var donorName = await _context.Users
+                .Where(u => u.Id == donorId).Select(u => u.FullName).FirstOrDefaultAsync(ct) ?? "Donateur";
+
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                donorName,
+                FinanceLabels.ExportTitle("Historique de mes dons", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "mes-dons-idara.pdf");
         }
 
         /// <summary>`GET /api/donations/{id}` — statut d'un don (poll côté Flutter).</summary>

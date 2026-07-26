@@ -1,11 +1,15 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
+using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Operations;
 using Idara.API.DTOs.Payment;
 using Idara.API.DTOs.Student;
 using Idara.API.Enums;
+using Idara.API.Models;
+using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -23,7 +27,13 @@ namespace Idara.API.Controllers
     public class GuardianController : ControllerBase
     {
         private readonly AppDbContext _context;
-        public GuardianController(AppDbContext context) => _context = context;
+        private readonly IExportPdfService _exportPdf;
+
+        public GuardianController(AppDbContext context, IExportPdfService exportPdf)
+        {
+            _context = context;
+            _exportPdf = exportPdf;
+        }
 
         [HttpGet("my-children")]
         public async Task<IActionResult> GetMyChildren()
@@ -473,41 +483,7 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
-            var query = _context.Payments
-                .Include(p => p.Student)
-                .Where(p => p.GuardianId == userId.Value);
-            if (status.HasValue)
-                query = query.Where(p => p.Status == status.Value);
-            else
-                // Par défaut : masquer les paiements échoués / annulés / expirés
-                // (un essai Wave raté puis réessayé affiche un « ÉCHEC » anxiogène
-                // au parent) — uniquement réussis + en cours.
-                query = query.Where(p =>
-                    p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.Pending);
-
-            var items = await query
-                .OrderByDescending(p => p.InitiatedAt)
-                .Take(100)
-                .ToListAsync(ct);
-
-            // Vue par défaut : on REGROUPE les tentatives multiples pour une même
-            // facture (un parent qui réessaie crée plusieurs Payment) → on n'affiche
-            // qu'UNE ligne par facture : le paiement Complété s'il existe, sinon la
-            // tentative la plus récente (« en cours »). Évite la duplication des
-            // badges « en cours » signalée côté parent. Les paiements sans facture
-            // (montant libre / topup) gardent une clé unique → jamais regroupés.
-            // Si un statut explicite est demandé, on ne regroupe pas (liste brute).
-            if (!status.HasValue)
-            {
-                items = items
-                    .GroupBy(p => p.InvoiceId ?? -p.Id)
-                    .Select(g => g
-                        .OrderByDescending(p => p.Status == PaymentStatus.Completed)
-                        .ThenByDescending(p => p.InitiatedAt)
-                        .First())
-                    .OrderByDescending(p => p.InitiatedAt)
-                    .ToList();
-            }
+            var items = await LoadMyPaymentsAsync(userId.Value, status, null, null, 100, ct);
 
             // Nom + logo du daara par ligne (le parent peut avoir des paiements
             // dans plusieurs daaras) — un seul lookup en lot, mappé par schoolId.
@@ -542,6 +518,141 @@ namespace Idara.API.Controllers
                 FailedAt = p.FailedAt,
                 ReceiptPdfUrl = p.ReceiptPdfPath
             }));
+        }
+
+        /// <summary>
+        /// Charge les paiements d'un parent avec le filtrage EXACT de la vue
+        /// « Historique » : échecs masqués par défaut, tentatives multiples d'une
+        /// même facture regroupées. SOURCE UNIQUE de l'onglet et de son export PDF.
+        /// </summary>
+        private async Task<List<Payment>> LoadMyPaymentsAsync(
+            int guardianId, PaymentStatus? status, DateTime? from, DateTime? to,
+            int take, CancellationToken ct)
+        {
+            var query = _context.Payments
+                .Include(p => p.Student)
+                .Where(p => p.GuardianId == guardianId);
+
+            if (status.HasValue)
+                query = query.Where(p => p.Status == status.Value);
+            else
+                // Par défaut : masquer les paiements échoués / annulés / expirés
+                // (un essai Wave raté puis réessayé affiche un « ÉCHEC » anxiogène
+                // au parent) — uniquement réussis + en cours.
+                query = query.Where(p =>
+                    p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.Pending);
+
+            // Bornes en jour civil : `to` inclut toute sa journée.
+            if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(p => p.InitiatedAt < to.Value.ToUtcDay().AddDays(1));
+
+            var items = await query
+                .OrderByDescending(p => p.InitiatedAt)
+                .Take(take)
+                .ToListAsync(ct);
+
+            // Vue par défaut : on REGROUPE les tentatives multiples pour une même
+            // facture (un parent qui réessaie crée plusieurs Payment) → on n'affiche
+            // qu'UNE ligne par facture : le paiement Complété s'il existe, sinon la
+            // tentative la plus récente (« en cours »). Évite la duplication des
+            // badges « en cours » signalée côté parent. Les paiements sans facture
+            // (montant libre / topup) gardent une clé unique → jamais regroupés.
+            // Si un statut explicite est demandé, on ne regroupe pas (liste brute).
+            if (!status.HasValue)
+            {
+                items = items
+                    .GroupBy(p => p.InvoiceId ?? -p.Id)
+                    .Select(g => g
+                        .OrderByDescending(p => p.Status == PaymentStatus.Completed)
+                        .ThenByDescending(p => p.InitiatedAt)
+                        .First())
+                    .OrderByDescending(p => p.InitiatedAt)
+                    .ToList();
+            }
+
+            return items;
+        }
+
+        /// <summary>
+        /// `GET /api/guardian/payments/pdf?from&to` — l'historique de paiements du
+        /// parent en PDF (tableau), à conserver ou montrer à l'école. Reprend le
+        /// même filtrage que l'onglet « Historique » (échecs masqués, réessais
+        /// regroupés), borné à la période choisie.
+        /// </summary>
+        [HttpGet("payments/pdf")]
+        public async Task<IActionResult> ExportMyPaymentsPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var items = await LoadMyPaymentsAsync(
+                userId.Value, null, from, to, FinanceLabels.MaxExportRows, ct);
+
+            // Nom du/des enfant(s) pour les paiements GLOBAUX (StudentId null,
+            // factures portées par les allocations) : c'est devenu le mode de
+            // paiement par défaut, sans ça ces lignes n'auraient aucun libellé.
+            var consolidatedIds = items.Where(p => p.StudentId == null).Select(p => p.Id).ToList();
+            var childrenByPayment = new Dictionary<int, string>();
+            if (consolidatedIds.Count > 0)
+            {
+                var allocs = await _context.PaymentInvoiceAllocations
+                    .Where(a => consolidatedIds.Contains(a.PaymentId))
+                    .Select(a => new
+                    {
+                        a.PaymentId,
+                        Name = a.Invoice.Student.FirstName + " " + a.Invoice.Student.LastName
+                    })
+                    .ToListAsync(ct);
+                childrenByPayment = allocs
+                    .GroupBy(a => a.PaymentId)
+                    .ToDictionary(g => g.Key, g => string.Join(", ", g.Select(x => x.Name.Trim()).Distinct()));
+            }
+
+            var schoolIds = items.Select(p => p.SchoolId).Distinct().ToList();
+            var schoolNames = await _context.Schools
+                .Where(s => schoolIds.Contains(s.Id))
+                .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+
+            var rows = items.Select(p =>
+            {
+                var child = p.Student != null
+                    ? $"{p.Student.FirstName} {p.Student.LastName}".Trim()
+                    : childrenByPayment.TryGetValue(p.Id, out var kids) ? kids : null;
+                var school = schoolNames.TryGetValue(p.SchoolId, out var sn) ? sn : null;
+                var subtitle = string.Join(" - ",
+                    new[] { child, school }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+                return new TransactionPdfRow
+                {
+                    Date = p.PaidAt ?? p.InitiatedAt,
+                    Title = FinanceLabels.PaymentPurpose(p.Purpose),
+                    Subtitle = string.IsNullOrWhiteSpace(subtitle) ? null : subtitle,
+                    Method = FinanceLabels.Operator(p.Operator),
+                    Reference = p.SenePayTransactionId,
+                    Status = FinanceLabels.PaymentStatus(p.Status),
+                    // Côté parent : ce qui a été RÉELLEMENT débité (frais inclus).
+                    AmountFcfa = p.AmountFcfa
+                };
+            }).ToList();
+
+            var paid = items.Where(p => p.Status == PaymentStatus.Completed).Sum(p => p.AmountFcfa);
+            var summary = new List<(string, string, bool)>
+            {
+                ("Total paye", $"{paid:N0}", false),
+                ("Paiements", $"{rows.Count:N0}", false)
+            };
+
+            var myName = await _context.Users
+                .Where(u => u.Id == userId.Value).Select(u => u.FullName).FirstOrDefaultAsync(ct)
+                ?? "Parent";
+
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                myName,
+                FinanceLabels.ExportTitle("Historique de mes paiements", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "mes-paiements-idara.pdf");
         }
 
         /// <summary>

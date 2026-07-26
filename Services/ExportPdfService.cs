@@ -1,3 +1,4 @@
+using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -24,7 +25,8 @@ namespace Idara.API.Services
         /// </summary>
         byte[] BuildTransferReceiptPdf(
             string schoolName, int transferId, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date);
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
+            string? motif = null);
 
         /// <summary>
         /// Rapport financier périodique (F4) : total entrées / sorties / net +
@@ -36,6 +38,22 @@ namespace Idara.API.Services
             IReadOnlyList<(string Category, long Amount)> expenseByCategory,
             long totalIncome, long totalExpense,
             long walletAvailableFcfa, long globalBalanceFcfa);
+
+        /// <summary>
+        /// Export GÉNÉRIQUE d'un historique de transactions (feedback école) :
+        /// même document pour tous les écrans qui listent des mouvements —
+        /// wallet, paiements reçus, retraits/virements, caisse, paiements du
+        /// parent, dons, virements reçus. Table à 3 colonnes (Date / Détail /
+        /// Montant) : les détails longs (référence SenePay) sont EMPILÉS dans la
+        /// colonne « Détail » et coupés à la ligne, jamais tronqués ni débordants.
+        /// </summary>
+        /// <param name="ownerName">À qui appartient l'historique (daara, parent, donateur…).</param>
+        /// <param name="title">Titre du document (« Historique des paiements reçus »).</param>
+        /// <param name="summary">Bandeau de synthèse en tête : (libellé, valeur formatée, en rouge ?).</param>
+        byte[] BuildTransactionsPdf(
+            string ownerName, string title, DateTime? from, DateTime? to,
+            IReadOnlyList<TransactionPdfRow> rows,
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary);
     }
 
     public class ExportPdfService : IExportPdfService
@@ -103,7 +121,12 @@ namespace Idara.API.Services
             });
         }
 
-        /// <summary>Une section du roster : titre + tableau (Élève / Classe / montant).</summary>
+        /// <summary>
+        /// Une section du roster : titre + tableau
+        /// (Élève / Classe / Parent / Téléphone / Montant [/ Date de paiement]).
+        /// Le parent et son numéro servent à relancer directement depuis le PDF
+        /// partagé sur WhatsApp ; la date de paiement n'a de sens que pour les payés.
+        /// </summary>
         private static void RosterSection(
             ColumnDescriptor col, string title, List<PaymentRosterEntryDto> entries,
             string color, bool showPaidAmount, float topPad)
@@ -121,32 +144,67 @@ namespace Idara.API.Services
             {
                 table.ColumnsDefinition(c =>
                 {
-                    c.RelativeColumn(4);
-                    c.RelativeColumn(3);
-                    c.RelativeColumn(2);
+                    c.RelativeColumn(3.0f);   // Élève
+                    c.RelativeColumn(2.4f);   // Classe (les noms de classe sont longs : TOUBA NIVEAU AVANCE)
+                    c.RelativeColumn(2.9f);   // Parent
+                    c.RelativeColumn(2.0f);   // Téléphone
+                    c.RelativeColumn(1.6f);   // Montant
+                    if (showPaidAmount) c.RelativeColumn(1.3f); // Date de paiement
                 });
 
                 table.Header(header =>
                 {
-                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
-                        .Text("Eleve").FontColor(Colors.White).SemiBold();
-                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
-                        .Text("Classe").FontColor(Colors.White).SemiBold();
-                    header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(5)
-                        .AlignRight().Text(showPaidAmount ? "Paye" : "Du").FontColor(Colors.White).SemiBold();
+                    HeaderCell(header, "Eleve", color);
+                    HeaderCell(header, "Classe", color);
+                    HeaderCell(header, "Parent", color);
+                    HeaderCell(header, "Telephone", color);
+                    HeaderCell(header, showPaidAmount ? "Paye" : "Du", color, alignRight: true);
+                    if (showPaidAmount) HeaderCell(header, "Date", color, alignRight: true);
                 });
 
                 foreach (var e in entries)
                 {
                     var name = $"{e.StudentFirstName} {e.StudentLastName}".Trim();
                     var amount = showPaidAmount ? e.AmountPaidFcfa : e.AmountDueFcfa;
-                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5).Text(name);
-                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                        .Text(e.ClassName ?? "-").FontSize(8);
-                    table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(3).PaddingHorizontal(5)
-                        .AlignRight().Text($"{amount:N0}").FontSize(8);
+
+                    BodyCell(table).Text(name).FontSize(8.5f);
+                    BodyCell(table).Text(e.ClassName ?? "-").FontSize(8);
+                    BodyCell(table).Text(string.IsNullOrWhiteSpace(e.GuardianFullName) ? "-" : e.GuardianFullName)
+                        .FontSize(8);
+                    BodyCell(table).Text(FrPhone(e.GuardianPhone)).FontSize(8);
+                    BodyCell(table).AlignRight().Text($"{amount:N0}").FontSize(8);
+                    if (showPaidAmount)
+                        BodyCell(table).AlignRight()
+                            .Text(e.PaidAt.HasValue ? $"{e.PaidAt.Value:dd/MM}" : "-").FontSize(8);
                 }
             });
+        }
+
+        private static void HeaderCell(TableCellDescriptor header, string text, string color, bool alignRight = false)
+        {
+            var cell = header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(4);
+            (alignRight ? cell.AlignRight() : cell)
+                .Text(text).FontColor(Colors.White).SemiBold().FontSize(8.5f);
+        }
+
+        // ShowEntire : une ligne d'élève n'est jamais coupée en deux par un saut
+        // de page (sinon on lit « Mouhamadou » en bas d'une page et « Mbacke » en
+        // haut de la suivante).
+        private static IContainer BodyCell(TableDescriptor table) =>
+            table.Cell().BorderBottom(1).BorderColor(Border)
+                .PaddingVertical(3).PaddingHorizontal(4).ShowEntire();
+
+        /// <summary>
+        /// Numéro lisible : « +221771234567 » → « 77 123 45 67 » (l'indicatif est
+        /// implicite au Sénégal et coûte de la largeur de colonne).
+        /// </summary>
+        private static string FrPhone(string? phone)
+        {
+            if (string.IsNullOrWhiteSpace(phone)) return "-";
+            var digits = new string(phone.Where(char.IsDigit).ToArray());
+            if (digits.StartsWith("221") && digits.Length == 12) digits = digits[3..];
+            if (digits.Length != 9) return phone.Trim();
+            return $"{digits[..2]} {digits[2..5]} {digits[5..7]} {digits[7..]}";
         }
 
         private static void Counter(RowDescriptor row, string label, int count, string color)
@@ -239,7 +297,8 @@ namespace Idara.API.Services
 
         public byte[] BuildTransferReceiptPdf(
             string schoolName, int transferId, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date)
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
+            string? motif = null)
         {
             var doc = Document.Create(container =>
             {
@@ -252,7 +311,8 @@ namespace Idara.API.Services
 
                     page.Header().Element(c => Header(c, schoolName, "Recu de virement", $"N {transferId:D6}"));
                     page.Content().Element(c => TransferContent(
-                        c, beneficiaryName, amountFcfa, operatorLabel, categoryLabel, statusLabel, date));
+                        c, beneficiaryName, amountFcfa, operatorLabel, categoryLabel, statusLabel,
+                        date, motif));
                     page.Footer().Element(Footer);
                 });
             });
@@ -261,7 +321,8 @@ namespace Idara.API.Services
 
         private static void TransferContent(
             IContainer container, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date)
+            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
+            string? motif)
         {
             container.Column(col =>
             {
@@ -282,6 +343,13 @@ namespace Idara.API.Services
                         t.Span("Date : ").SemiBold().FontColor(TextSecondary);
                         t.Span($"{date:dd/MM/yyyy}");
                     });
+                    // Motif : le bénéficiaire doit savoir de quoi ce versement paie.
+                    if (!string.IsNullOrWhiteSpace(motif))
+                        c.Item().Text(t =>
+                        {
+                            t.Span("Motif : ").SemiBold().FontColor(TextSecondary);
+                            t.Span(motif);
+                        });
                 });
 
                 col.Item().PaddingTop(10).Table(table =>
@@ -421,6 +489,140 @@ namespace Idara.API.Services
                     .Text($"{total:N0} FCFA").Bold().FontColor(color);
             });
         }
+
+        // ============================================================
+        // ===== Historique de transactions (export générique) =====
+        // ============================================================
+
+        public byte[] BuildTransactionsPdf(
+            string ownerName, string title, DateTime? from, DateTime? to,
+            IReadOnlyList<TransactionPdfRow> rows,
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary)
+        {
+            var period = from.HasValue || to.HasValue
+                ? (from.HasValue ? FrLongDate(from.Value) : "origine") + " -> " +
+                  (to.HasValue ? FrLongDate(to.Value) : "aujourd'hui")
+                : "Historique complet";
+
+            var doc = Document.Create(container =>
+            {
+                container.Page(page =>
+                {
+                    page.Size(PageSizes.A4);
+                    page.Margin(1.4f, Unit.Centimetre);
+                    page.PageColor(Colors.White);
+                    page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary));
+
+                    page.Header().Element(c => Header(c, ownerName, title, period));
+                    page.Content().Element(c => TransactionsContent(c, rows, summary));
+                    page.Footer().Element(Footer);
+                });
+            });
+            return doc.GeneratePdf();
+        }
+
+        private static void TransactionsContent(
+            IContainer container, IReadOnlyList<TransactionPdfRow> rows,
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary)
+        {
+            // Signe explicite uniquement si la liste mélange entrées ET sorties
+            // (un historique de dons n'a que des « + » : le signe serait du bruit).
+            var mixed = rows.Any(r => r.AmountFcfa > 0) && rows.Any(r => r.AmountFcfa < 0);
+
+            container.Column(col =>
+            {
+                if (summary.Count > 0)
+                {
+                    col.Item().PaddingBottom(8).Row(row =>
+                    {
+                        foreach (var (label, value, danger) in summary)
+                            MoneyCounter(row, label, value, danger ? RedHex : PrimaryHex);
+                    });
+                }
+
+                if (rows.Count == 0)
+                {
+                    col.Item().PaddingTop(6)
+                        .Text("Aucune transaction sur cette periode.").Italic().FontColor(TextSecondary);
+                    return;
+                }
+
+                col.Item().Table(table =>
+                {
+                    // 3 colonnes larges plutôt que 7 étroites : c'est ce qui rend le
+                    // document lisible sur un écran de téléphone. Tout le détail
+                    // secondaire est EMPILÉ dans la colonne du milieu.
+                    table.ColumnsDefinition(c =>
+                    {
+                        c.RelativeColumn(2.0f);   // Date + heure
+                        c.RelativeColumn(5.6f);   // Détail (libellé / qui / moyen / référence)
+                        c.RelativeColumn(2.4f);   // Montant + statut
+                    });
+
+                    // En-tête répété automatiquement en haut de chaque page.
+                    table.Header(header =>
+                    {
+                        HeaderCell(header, "Date", PrimaryHex);
+                        HeaderCell(header, "Detail", PrimaryHex);
+                        HeaderCell(header, "Montant (FCFA)", PrimaryHex, alignRight: true);
+                    });
+
+                    var index = 0;
+                    foreach (var r in rows)
+                    {
+                        // Alternance de fond : aide l'œil à suivre une ligne haute
+                        // (2-4 lignes de texte) jusqu'au montant, à droite.
+                        var bg = index++ % 2 == 1 ? SurfaceVariant : "#FFFFFF";
+
+                        TxCell(table, bg).Column(c =>
+                        {
+                            c.Item().Text($"{r.Date:dd/MM/yyyy}").FontSize(8.5f);
+                            c.Item().Text($"{r.Date:HH:mm}").FontSize(7).FontColor(TextSecondary);
+                        });
+
+                        TxCell(table, bg).Column(c =>
+                        {
+                            c.Item().Text(r.Title).SemiBold().FontSize(8.5f);
+                            if (!string.IsNullOrWhiteSpace(r.Subtitle))
+                                c.Item().Text(r.Subtitle).FontSize(8).FontColor(TextSecondary);
+                            if (!string.IsNullOrWhiteSpace(r.Note))
+                                c.Item().Text(r.Note).FontSize(8).Italic().FontColor(TextSecondary);
+                            if (!string.IsNullOrWhiteSpace(r.Method))
+                                c.Item().Text(r.Method).FontSize(7.5f).FontColor(TextSecondary);
+                            if (!string.IsNullOrWhiteSpace(r.Reference))
+                                // Une référence SenePay est un bloc sans espace : depuis
+                                // QuestPDF 2024.3 le moteur la coupe tout seul en bout de
+                                // ligne (l'ancien WrapAnywhere est obsolète) — elle
+                                // s'empile donc sur 2-3 lignes au lieu de déborder.
+                                c.Item().Text($"Ref : {r.Reference}")
+                                    .FontSize(7).FontColor(TextSecondary);
+                        });
+
+                        TxCell(table, bg).Column(c =>
+                        {
+                            var abs = Math.Abs(r.AmountFcfa);
+                            var text = mixed
+                                ? (r.AmountFcfa < 0 ? $"-{abs:N0}" : $"+{abs:N0}")
+                                : $"{abs:N0}";
+                            c.Item().AlignRight().Text(text).SemiBold().FontSize(9)
+                                .FontColor(r.AmountFcfa < 0 ? RedHex : PrimaryHex);
+                            if (!string.IsNullOrWhiteSpace(r.Status))
+                                c.Item().AlignRight().Text(r.Status).FontSize(7).FontColor(TextSecondary);
+                        });
+                    }
+                });
+
+                col.Item().PaddingTop(8)
+                    .Text($"{rows.Count} transaction(s).").FontSize(8).FontColor(TextSecondary);
+            });
+        }
+
+        // ShowEntire : une transaction reste d'un seul bloc — jamais sa moitié en
+        // bas d'une page et le reste sur la suivante.
+        private static IContainer TxCell(TableDescriptor table, string background) =>
+            table.Cell().Background(background)
+                .BorderBottom(1).BorderColor(Border)
+                .PaddingVertical(4).PaddingHorizontal(5).ShowEntire();
 
         private static void Header(IContainer container, string schoolName, string title, string subtitle)
         {

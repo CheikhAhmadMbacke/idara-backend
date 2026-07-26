@@ -1,7 +1,9 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
+using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using Idara.API.DTOs.Senepay;
 using Idara.API.Enums;
@@ -159,6 +161,7 @@ namespace Idara.API.Controllers
                 CategoryLabel = dto.Category == TransferCategory.Other
                     ? dto.CategoryLabel?.Trim()
                     : null,
+                Motif = string.IsNullOrWhiteSpace(dto.Motif) ? null : dto.Motif!.Trim(),
                 BeneficiaryId = beneficiaryId,
                 RecipientName = recipientName,
                 RecipientPhone = recipientPhone,
@@ -404,6 +407,72 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// `GET /api/school/wallet/withdrawals/pdf?from&to` — l'historique des
+        /// retraits & virements en PDF (tableau) à archiver ou partager. Mêmes
+        /// lignes que l'écran Transferts, sur la période choisie.
+        /// </summary>
+        [HttpGet("withdrawals/pdf")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetWithdrawalsPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var query = _context.Withdrawals
+                .Where(w => w.SchoolId == schoolId.Value)
+                .Where(w => !w.IsHidden);
+
+            // Bornes en jour civil sur la date de création (celle qui fait foi
+            // dans l'écran Transferts).
+            if (from.HasValue) query = query.Where(w => w.CreatedAt >= from.Value.ToUtcDay());
+            if (to.HasValue) query = query.Where(w => w.CreatedAt < to.Value.ToUtcDay().AddDays(1));
+
+            var items = await query
+                .OrderByDescending(w => w.CreatedAt)
+                .Take(FinanceLabels.MaxExportRows)
+                .ToListAsync(ct);
+
+            var rows = items.Select(w => new TransactionPdfRow
+            {
+                Date = w.CompletedAt ?? w.CreatedAt,
+                Title = FinanceLabels.TransferCategory(w.Category, w.CategoryLabel),
+                Subtitle = string.IsNullOrWhiteSpace(w.RecipientName)
+                    ? null
+                    : $"{w.RecipientName} - {w.RecipientPhone}",
+                Note = w.Motif,
+                Method = FinanceLabels.Operator(w.Operator),
+                Reference = w.SenePayDisbursementId,
+                Status = FinanceLabels.WithdrawalStatus(w.Status),
+                // Un retrait est une SORTIE du wallet → montant négatif.
+                AmountFcfa = -w.AmountFcfa
+            }).ToList();
+
+            // Seuls les virements réellement effectués comptent dans le total sorti :
+            // un retrait échoué a été restitué au solde.
+            var completed = items.Where(w => w.Status == WithdrawalStatus.Completed).Sum(w => w.AmountFcfa);
+            var pending = items
+                .Where(w => w.Status is WithdrawalStatus.Initiated or WithdrawalStatus.UnderVerification)
+                .Sum(w => w.AmountFcfa);
+            var summary = new List<(string, string, bool)>
+            {
+                ("Total verse", $"{completed:N0}", true),
+                ("En cours", $"{pending:N0}", false),
+                ("Operations", $"{rows.Count:N0}", false)
+            };
+
+            var schoolName = await _context.Schools.Where(s => s.Id == schoolId.Value)
+                .Select(s => s.Name).FirstOrDefaultAsync(ct) ?? "Daara";
+
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                schoolName,
+                FinanceLabels.ExportTitle("Historique des retraits et virements", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "historique-transferts-idara.pdf");
+        }
+
+        /// <summary>
         /// `POST /api/school/wallet/withdrawals/{id}/hide` — masque un retrait de
         /// l'affichage école (cosmétique, comme les paiements/transactions ; ne
         /// touche NI au solde NI à la compta). Non réversible côté UI.
@@ -467,7 +536,8 @@ namespace Idara.API.Controllers
                 w.Operator == PaymentOperator.Orange ? "Orange Money" : "Wave",
                 categoryLabel,
                 "Effectue",
-                w.CompletedAt ?? w.CreatedAt);
+                w.CompletedAt ?? w.CreatedAt,
+                w.Motif);
 
             return File(bytes, "application/pdf", $"recu-retrait-idara-{w.Id:D6}.pdf");
         }
@@ -509,8 +579,10 @@ namespace Idara.API.Controllers
             Category = w.Category,
             Source = w.Source,
             CategoryLabel = w.CategoryLabel,
+            Motif = w.Motif,
             RecipientName = w.RecipientName,
             RecipientPhoneMasked = MaskPhone(w.RecipientPhone),
+            RecipientPhone = w.RecipientPhone,
             Status = w.Status,
             FailureReason = w.FailureReason,
             CreatedAt = w.CreatedAt,

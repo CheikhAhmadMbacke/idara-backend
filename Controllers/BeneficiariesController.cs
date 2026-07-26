@@ -70,6 +70,9 @@ namespace Idara.API.Controllers
                 Phone = dto.Phone,
                 Operator = op,
                 DefaultCategory = dto.DefaultCategory,
+                DefaultCategoryLabel = dto.DefaultCategory == TransferCategory.Other
+                    ? dto.DefaultCategoryLabel?.Trim()
+                    : null,
                 Note = string.IsNullOrWhiteSpace(dto.Note) ? null : dto.Note.Trim(),
                 CreatedById = userId.Value,
                 CreatedAt = DateTime.UtcNow
@@ -104,6 +107,9 @@ namespace Idara.API.Controllers
             entity.Phone = dto.Phone;
             entity.Operator = op;
             entity.DefaultCategory = dto.DefaultCategory;
+            entity.DefaultCategoryLabel = dto.DefaultCategory == TransferCategory.Other
+                ? dto.DefaultCategoryLabel?.Trim()
+                : null;
             entity.Note = string.IsNullOrWhiteSpace(dto.Note) ? null : dto.Note.Trim();
             entity.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync(ct);
@@ -146,8 +152,10 @@ namespace Idara.API.Controllers
             Id = b.Id,
             Name = b.Name,
             PhoneMasked = MaskPhone(b.Phone),
+            Phone = b.Phone,
             Operator = b.Operator,
             DefaultCategory = b.DefaultCategory,
+            DefaultCategoryLabel = b.DefaultCategoryLabel,
             Note = b.Note,
             IsArchived = b.IsArchived,
             CreatedAt = b.CreatedAt

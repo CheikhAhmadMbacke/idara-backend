@@ -3,6 +3,7 @@ using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
+using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -69,6 +70,67 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// `GET /api/beneficiary/my-transfers/pdf?from&to` — l'historique complet
+        /// des virements reçus en PDF (tableau), en plus du reçu unitaire. Utile
+        /// pour justifier ses revenus sur une période.
+        /// </summary>
+        [HttpGet("my-transfers/pdf")]
+        public async Task<IActionResult> ExportMyTransfersPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        {
+            var (e164, schoolId) = await ResolveIdentityAsync(ct);
+
+            var mine = new List<Withdrawal>();
+            if (e164 != null && schoolId != null)
+            {
+                var query = _context.Withdrawals
+                    .Include(w => w.School)
+                    .Where(w => w.SchoolId == schoolId.Value
+                                && !w.IsPlatform
+                                && w.Status == WithdrawalStatus.Completed);
+
+                if (from.HasValue) query = query.Where(w => w.CreatedAt >= from.Value.ToUtcDay());
+                if (to.HasValue) query = query.Where(w => w.CreatedAt < to.Value.ToUtcDay().AddDays(1));
+
+                var candidates = await query.OrderByDescending(w => w.CreatedAt).ToListAsync(ct);
+                // Rapprochement par numéro normalisé, en mémoire (comme la liste).
+                mine = candidates
+                    .Where(w => SenegalPhone.Normalize(w.RecipientPhone) == e164)
+                    .Take(FinanceLabels.MaxExportRows)
+                    .ToList();
+            }
+
+            var rows = mine.Select(w => new TransactionPdfRow
+            {
+                Date = w.CompletedAt ?? w.CreatedAt,
+                Title = CategoryLabel(w),
+                Subtitle = w.School?.Name,
+                Note = w.Motif,
+                Method = FrenchOperator(w.Operator),
+                Status = "Effectue",
+                AmountFcfa = w.AmountFcfa // reçu par le bénéficiaire → entrée
+            }).ToList();
+
+            var total = mine.Sum(w => w.AmountFcfa);
+            var summary = new List<(string, string, bool)>
+            {
+                ("Total recu", $"{total:N0}", false),
+                ("Virements", $"{rows.Count:N0}", false)
+            };
+
+            var myName = await _context.Users
+                .Where(u => u.Id == User.GetUserId()).Select(u => u.FullName).FirstOrDefaultAsync(ct)
+                ?? "Beneficiaire";
+
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                myName,
+                FinanceLabels.ExportTitle("Virements recus", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "mes-virements-idara.pdf");
+        }
+
+        /// <summary>
         /// `GET /api/beneficiary/transfers/{id}/receipt` — reçu de virement PDF,
         /// strictement scopé au numéro du compte connecté.
         /// </summary>
@@ -96,7 +158,8 @@ namespace Idara.API.Controllers
                 FrenchOperator(w.Operator),
                 CategoryLabel(w),
                 "Effectue",
-                w.CompletedAt ?? w.CreatedAt);
+                w.CompletedAt ?? w.CreatedAt,
+                w.Motif);
 
             return File(bytes, "application/pdf", $"recu-virement-idara-{w.Id:D6}.pdf");
         }

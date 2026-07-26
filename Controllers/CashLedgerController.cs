@@ -173,6 +173,60 @@ namespace Idara.API.Controllers
             return File(bytes, "application/pdf", "rapport-financier-idara.pdf");
         }
 
+        /// <summary>
+        /// `GET /api/cash-ledger/export/pdf?from&to&type` — le DÉTAIL des écritures
+        /// de caisse en PDF (une ligne par mouvement), à distinguer de
+        /// `report/pdf` qui donne la synthèse par catégorie.
+        /// </summary>
+        [HttpGet("export/pdf")]
+        public async Task<IActionResult> ExportPdf(
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery] CashEntryType? type, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            // Mêmes filtres que la liste affichée (List) — un seul comportement.
+            var q = _context.CashLedgerEntries
+                .Where(e => e.SchoolId == schoolId.Value && !e.IsDeleted);
+            if (from.HasValue) q = q.Where(e => e.OccurredAt >= from.Value.ToUtcDay());
+            if (to.HasValue) q = q.Where(e => e.OccurredAt < to.Value.ToUtcDay().AddDays(1));
+            if (type.HasValue) q = q.Where(e => e.Type == type.Value);
+
+            var items = await q
+                .OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id)
+                .Take(Common.Utilities.FinanceLabels.MaxExportRows)
+                .ToListAsync(ct);
+
+            var rows = items.Select(e => new DTOs.Export.TransactionPdfRow
+            {
+                Date = e.OccurredAt,
+                Title = e.Type == CashEntryType.Income ? "Entree de caisse" : "Sortie de caisse",
+                Subtitle = string.IsNullOrWhiteSpace(e.Category) ? "Sans categorie" : e.Category,
+                Note = e.Note,
+                AmountFcfa = e.Type == CashEntryType.Income ? e.AmountFcfa : -e.AmountFcfa
+            }).ToList();
+
+            var income = items.Where(e => e.Type == CashEntryType.Income).Sum(e => e.AmountFcfa);
+            var expense = items.Where(e => e.Type == CashEntryType.Expense).Sum(e => e.AmountFcfa);
+            var summary = new List<(string, string, bool)>
+            {
+                ("Entrees", $"{income:N0}", false),
+                ("Sorties", $"{expense:N0}", true),
+                ("Net", $"{income - expense:N0}", income - expense < 0)
+            };
+
+            var schoolName = await _context.Schools
+                .Where(s => s.Id == schoolId.Value).Select(s => s.Name).FirstOrDefaultAsync(ct) ?? "Daara";
+
+            var bytes = _exportPdf.BuildTransactionsPdf(
+                schoolName,
+                Common.Utilities.FinanceLabels.ExportTitle("Livre de caisse", rows.Count),
+                from, to, rows, summary);
+
+            return File(bytes, "application/pdf", "livre-de-caisse-idara.pdf");
+        }
+
         /// <summary>`POST /api/cash-ledger` — ajoute une écriture de caisse.</summary>
         [HttpPost]
         public async Task<ActionResult<ApiResponse<CashLedgerEntryDto>>> Create(
