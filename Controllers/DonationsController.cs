@@ -306,19 +306,17 @@ namespace Idara.API.Controllers
 
         /// <summary>`GET /api/donations/mine` — historique des dons du donateur.</summary>
         [HttpGet("mine")]
-        public async Task<ActionResult<ApiResponse<List<DonationDto>>>> Mine(CancellationToken ct)
+        public async Task<ActionResult<ApiResponse<List<DonationDto>>>> Mine(
+            [FromQuery] string? q,
+            [FromQuery] PaymentStatus? status,
+            CancellationToken ct)
         {
             var donorId = User.GetUserId()
                 ?? throw new UnauthorizedAccessException("UserId manquant du JWT.");
 
-            var items = await _context.Payments
-                .Where(p => p.DonorId == donorId && p.Purpose == PaymentPurpose.Donation)
-                // Un donateur ne voit que ses dons ABOUTIS ou EN COURS : une
-                // tentative échouée / annulée / expirée n'a rien prélevé, l'afficher
-                // ne fait qu'inquiéter (même contrat que l'historique parent,
-                // GuardianController.LoadMyPaymentsAsync — gotcha §118).
-                .Where(p => p.Status == PaymentStatus.Completed
-                         || p.Status == PaymentStatus.Pending)
+            var items = await FilterMyDonations(
+                    _context.Payments.Where(p => p.DonorId == donorId
+                        && p.Purpose == PaymentPurpose.Donation), q, status)
                 .OrderByDescending(p => p.InitiatedAt)
                 .Select(p => new DonationDto
                 {
@@ -346,17 +344,19 @@ namespace Idara.API.Controllers
         /// </summary>
         [HttpGet("mine/pdf")]
         public async Task<IActionResult> ExportMinePdf(
-            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] PaymentStatus? status,
+            CancellationToken ct)
         {
             var donorId = User.GetUserId()
                 ?? throw new UnauthorizedAccessException("UserId manquant du JWT.");
 
-            var query = _context.Payments
-                .Where(p => p.DonorId == donorId && p.Purpose == PaymentPurpose.Donation)
-                // MÊME filtre que l'écran « Mes dons » : un export ne doit jamais
-                // faire réapparaître des lignes que la vue masque (§116).
-                .Where(p => p.Status == PaymentStatus.Completed
-                         || p.Status == PaymentStatus.Pending);
+            // MÊMES filtres que l'écran « Mes dons » : un export ne doit jamais
+            // faire réapparaître des lignes que la vue masque (§116).
+            var query = FilterMyDonations(
+                _context.Payments.Where(p => p.DonorId == donorId
+                    && p.Purpose == PaymentPurpose.Donation), q, status);
 
             if (from.HasValue) query = query.Where(p => p.InitiatedAt >= from.Value.ToUtcDay());
             if (to.HasValue) query = query.Where(p => p.InitiatedAt < to.Value.ToUtcDay().AddDays(1));
@@ -396,8 +396,7 @@ namespace Idara.API.Controllers
             var summary = new List<(string, string, bool)>
             {
                 ("Total des dons", $"{completed.Sum(d => d.TargetAmountFcfa):N0}", false),
-                ("Total debite", $"{completed.Sum(d => d.AmountFcfa):N0}", false),
-                ("Dons", $"{completed.Count:N0}", false)
+                ("Total debite", $"{completed.Sum(d => d.AmountFcfa):N0}", false)
             };
 
             var donorName = await _context.Users
@@ -406,7 +405,9 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 donorName,
                 FinanceLabels.ExportTitle("Historique de mes dons", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // Un don va toujours vers un daara.
+                counterpartyHeader: "Daara");
 
             return File(bytes, "application/pdf", "mes-dons-idara.pdf");
         }
@@ -441,6 +442,36 @@ namespace Idara.API.Controllers
                 PaidAt = p.PaidAt,
                 ReceiptPdfUrl = p.ReceiptPdfPath
             }));
+        }
+
+        /// <summary>
+        /// Filtres communs à l'écran « Mes dons » et à son export (§116) : statut
+        /// et recherche libre (daara, référence).
+        ///
+        /// <para>Un donateur ne voit que ses dons ABOUTIS ou EN COURS : une
+        /// tentative échouée / annulée / expirée n'a rien prélevé, l'afficher ne
+        /// fait qu'inquiéter (même contrat que l'historique parent — §118). Un
+        /// statut explicite reste possible, mais jamais par défaut.</para>
+        /// </summary>
+        private IQueryable<Payment> FilterMyDonations(
+            IQueryable<Payment> query, string? search, PaymentStatus? status)
+        {
+            if (status.HasValue)
+                query = query.Where(p => p.Status == status.Value);
+            else
+                query = query.Where(p => p.Status == PaymentStatus.Completed
+                                      || p.Status == PaymentStatus.Pending);
+
+            if (TransactionSearch.Pattern(search) is string pattern)
+            {
+                query = query.Where(p =>
+                    (p.SenePayTransactionId != null
+                        && EF.Functions.ILike(p.SenePayTransactionId, pattern))
+                    || _context.Schools.Any(sc => sc.Id == p.SchoolId
+                        && EF.Functions.ILike(sc.Name!, pattern)));
+            }
+
+            return query;
         }
 
         /// <summary>`GET /api/donations/{id}/receipt` — reçu de don PDF (donateur propriétaire).</summary>

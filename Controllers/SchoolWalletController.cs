@@ -389,16 +389,23 @@ namespace Idara.API.Controllers
         [HttpGet("withdrawals")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<ActionResult<IEnumerable<WithdrawalDto>>> GetWithdrawals(
-            [FromQuery] int take, CancellationToken ct)
+            [FromQuery] int take,
+            [FromQuery] string? q,
+            [FromQuery] TransferCategory? category,
+            [FromQuery] WithdrawalStatus? status,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
-            var limit = take is > 0 and <= 200 ? take : 50;
+            // Une recherche porte sur TOUT l'historique : on élargit la fenêtre,
+            // sinon elle ne balaierait que les 50 derniers transferts.
+            var limit = take is > 0 and <= 200 ? take
+                : string.IsNullOrWhiteSpace(q) ? 50 : 300;
 
-            var items = await _context.Withdrawals
-                .Where(w => w.SchoolId == schoolId.Value)
-                .Where(w => !w.IsHidden) // masqués par le daara → jamais affichés
+            var items = await FilterWithdrawals(
+                    _context.Withdrawals.Where(w => w.SchoolId == schoolId.Value),
+                    q, category, status)
                 .OrderByDescending(w => w.CreatedAt)
                 .Take(limit)
                 .ToListAsync(ct);
@@ -414,14 +421,20 @@ namespace Idara.API.Controllers
         [HttpGet("withdrawals/pdf")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<IActionResult> GetWithdrawalsPdf(
-            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] TransferCategory? category,
+            [FromQuery] WithdrawalStatus? status,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
-            var query = _context.Withdrawals
-                .Where(w => w.SchoolId == schoolId.Value)
-                .Where(w => !w.IsHidden);
+            // MÊME filtrage que la liste : l'export ne peut pas montrer autre
+            // chose que ce que l'écran affiche (§116).
+            var query = FilterWithdrawals(
+                _context.Withdrawals.Where(w => w.SchoolId == schoolId.Value),
+                q, category, status);
 
             // Bornes en jour civil sur la date de création (celle qui fait foi
             // dans l'écran Transferts).
@@ -437,9 +450,10 @@ namespace Idara.API.Controllers
             {
                 Date = w.CompletedAt ?? w.CreatedAt,
                 Title = FinanceLabels.TransferCategory(w.Category, w.CategoryLabel),
-                Subtitle = string.IsNullOrWhiteSpace(w.RecipientName)
-                    ? null
-                    : $"{w.RecipientName} - {w.RecipientPhone}",
+                // Nom et numéro dans DEUX colonnes distinctes : concaténés, ils
+                // empêchaient de trier ou de chercher sur l'un ou l'autre (§120).
+                Subtitle = string.IsNullOrWhiteSpace(w.RecipientName) ? null : w.RecipientName,
+                Phone = string.IsNullOrWhiteSpace(w.RecipientPhone) ? null : w.RecipientPhone,
                 Note = w.Motif,
                 Method = FinanceLabels.Operator(w.Operator),
                 Reference = w.SenePayDisbursementId,
@@ -457,8 +471,7 @@ namespace Idara.API.Controllers
             var summary = new List<(string, string, bool)>
             {
                 ("Total verse", $"{completed:N0}", true),
-                ("En cours", $"{pending:N0}", false),
-                ("Operations", $"{rows.Count:N0}", false)
+                ("En cours", $"{pending:N0}", false)
             };
 
             var schoolName = await _context.Schools.Where(s => s.Id == schoolId.Value)
@@ -467,7 +480,9 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 schoolName,
                 FinanceLabels.ExportTitle("Historique des retraits et virements", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // Toujours de l'argent sortant : la contrepartie est le beneficiaire.
+                counterpartyHeader: "Beneficiaire");
 
             return File(bytes, "application/pdf", "historique-transferts-idara.pdf");
         }
@@ -567,6 +582,38 @@ namespace Idara.API.Controllers
                 || reason.Contains("502", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("503", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("504", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Filtres communs à la LISTE et à l'EXPORT des transferts : masqués
+        /// exclus, recherche libre (bénéficiaire, numéro, motif, catégorie
+        /// saisie, référence), nature et statut. Un seul endroit pour que
+        /// l'écran et le PDF ne puissent jamais diverger (§116).
+        /// </summary>
+        private static IQueryable<Withdrawal> FilterWithdrawals(
+            IQueryable<Withdrawal> query, string? search,
+            TransferCategory? category, WithdrawalStatus? status)
+        {
+            query = query.Where(w => !w.IsHidden); // masqués par le daara
+
+            if (category.HasValue) query = query.Where(w => w.Category == category.Value);
+            if (status.HasValue) query = query.Where(w => w.Status == status.Value);
+
+            if (TransactionSearch.Pattern(search) is string pattern)
+            {
+                // Le numéro est cherché aussi en « chiffres seuls » : « 77 123 45 67 »
+                // et « 771234567 » doivent ramener le même virement.
+                var digits = TransactionSearch.PhonePattern(search);
+                query = query.Where(w =>
+                    EF.Functions.ILike(w.RecipientName, pattern)
+                    || EF.Functions.ILike(w.RecipientPhone, pattern)
+                    || (digits != null && EF.Functions.ILike(w.RecipientPhone, digits))
+                    || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
+                    || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern))
+                    || (w.SenePayDisbursementId != null && EF.Functions.ILike(w.SenePayDisbursementId, pattern)));
+            }
+
+            return query;
         }
 
         private static WithdrawalDto MapToDto(Withdrawal w) => new()

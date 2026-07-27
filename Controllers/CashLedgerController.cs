@@ -35,7 +35,9 @@ namespace Idara.API.Controllers
         [HttpGet]
         public async Task<ActionResult<List<CashLedgerEntryDto>>> List(
             [FromQuery] DateTime? from, [FromQuery] DateTime? to,
-            [FromQuery] CashEntryType? type, CancellationToken ct)
+            [FromQuery] CashEntryType? type,
+            [FromQuery(Name = "q")] string? search,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
@@ -45,6 +47,12 @@ namespace Idara.API.Controllers
             if (from.HasValue) q = q.Where(e => e.OccurredAt >= from.Value.ToUtcDay());
             if (to.HasValue) q = q.Where(e => e.OccurredAt < to.Value.ToUtcDay().AddDays(1));
             if (type.HasValue) q = q.Where(e => e.Type == type.Value);
+            // Recherche libre : categorie et note. (Une ecriture de caisse est de
+            // l'argent physique deja constate : elle n'a pas de statut a filtrer.)
+            if (Common.Utilities.TransactionSearch.Pattern(search) is string pattern)
+                q = q.Where(e =>
+                    (e.Category != null && EF.Functions.ILike(e.Category, pattern))
+                    || (e.Note != null && EF.Functions.ILike(e.Note, pattern)));
 
             var items = await q
                 .OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id)
@@ -181,7 +189,9 @@ namespace Idara.API.Controllers
         [HttpGet("export/pdf")]
         public async Task<IActionResult> ExportPdf(
             [FromQuery] DateTime? from, [FromQuery] DateTime? to,
-            [FromQuery] CashEntryType? type, CancellationToken ct)
+            [FromQuery] CashEntryType? type,
+            [FromQuery(Name = "q")] string? search,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
@@ -192,6 +202,12 @@ namespace Idara.API.Controllers
             if (from.HasValue) q = q.Where(e => e.OccurredAt >= from.Value.ToUtcDay());
             if (to.HasValue) q = q.Where(e => e.OccurredAt < to.Value.ToUtcDay().AddDays(1));
             if (type.HasValue) q = q.Where(e => e.Type == type.Value);
+            // Recherche libre : categorie et note. (Une ecriture de caisse est de
+            // l'argent physique deja constate : elle n'a pas de statut a filtrer.)
+            if (Common.Utilities.TransactionSearch.Pattern(search) is string pattern)
+                q = q.Where(e =>
+                    (e.Category != null && EF.Functions.ILike(e.Category, pattern))
+                    || (e.Note != null && EF.Functions.ILike(e.Note, pattern)));
 
             var items = await q
                 .OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id)
@@ -222,7 +238,9 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 schoolName,
                 Common.Utilities.FinanceLabels.ExportTitle("Livre de caisse", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // En caisse, la « contrepartie » d'une ecriture est sa categorie.
+                counterpartyHeader: "Categorie");
 
             return File(bytes, "application/pdf", "livre-de-caisse-idara.pdf");
         }

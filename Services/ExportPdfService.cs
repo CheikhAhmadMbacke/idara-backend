@@ -43,17 +43,24 @@ namespace Idara.API.Services
         /// Export GÉNÉRIQUE d'un historique de transactions (feedback école) :
         /// même document pour tous les écrans qui listent des mouvements —
         /// wallet, paiements reçus, retraits/virements, caisse, paiements du
-        /// parent, dons, virements reçus. Table à 3 colonnes (Date / Détail /
-        /// Montant) : les détails longs (référence SenePay) sont EMPILÉS dans la
-        /// colonne « Détail » et coupés à la ligne, jamais tronqués ni débordants.
+        /// parent, dons, virements reçus. Table PAYSAGE avec une colonne par
+        /// information (§120), les colonnes sans donnée s'effaçant d'elles-mêmes.
         /// </summary>
         /// <param name="ownerName">À qui appartient l'historique (daara, parent, donateur…).</param>
         /// <param name="title">Titre du document (« Historique des paiements reçus »).</param>
         /// <param name="summary">Bandeau de synthèse en tête : (libellé, valeur formatée, en rouge ?).</param>
+        /// <param name="counterpartyHeader">
+        /// Intitulé de la colonne « qui est en face » : « Beneficiaire » pour des
+        /// virements, « Payeur » pour des paiements reçus, « Daara » pour des dons…
+        /// Un export MIXTE (wallet) garde le défaut « Contrepartie », la colonne
+        /// « Type » suffisant alors à savoir s'il s'agit d'un payeur ou d'un
+        /// bénéficiaire. Nommer précisément quand l'export est mono-type.
+        /// </param>
         byte[] BuildTransactionsPdf(
             string ownerName, string title, DateTime? from, DateTime? to,
             IReadOnlyList<TransactionPdfRow> rows,
-            IReadOnlyList<(string Label, string Value, bool Danger)> summary);
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary,
+            string counterpartyHeader = "Contrepartie");
     }
 
     public class ExportPdfService : IExportPdfService
@@ -64,6 +71,8 @@ namespace Idara.API.Services
         private const string Border = "#E2E8F0";
         private const string SurfaceVariant = "#F8FAFC";
         private const string RedHex = "#B91C1C";
+        /// <summary>Orange « en cours / en attente » — même sémantique que l'app (§118).</summary>
+        private const string WarningHex = "#B45309";
 
         private static readonly string[] FrMonths =
         {
@@ -218,6 +227,11 @@ namespace Idara.API.Services
 
         // Variante « montant » : affiche un texte formaté (ex. "12 000 FCFA")
         // au lieu d'un simple compteur entier.
+        /// <summary>
+        /// Tuile du bandeau de synthèse. ⚠️ Ajoute « FCFA » : n'y mettre QUE des
+        /// MONTANTS. Un compteur (« 3 Transactions ») s'y affichait « 3 FCFA » —
+        /// et faisait doublon avec le total imprimé sous le tableau.
+        /// </summary>
         private static void MoneyCounter(RowDescriptor row, string label, string value, string color)
         {
             row.RelativeItem().PaddingRight(4).Background(SurfaceVariant).Padding(6).Column(c =>
@@ -497,7 +511,8 @@ namespace Idara.API.Services
         public byte[] BuildTransactionsPdf(
             string ownerName, string title, DateTime? from, DateTime? to,
             IReadOnlyList<TransactionPdfRow> rows,
-            IReadOnlyList<(string Label, string Value, bool Danger)> summary)
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary,
+            string counterpartyHeader = "Contrepartie")
         {
             var period = from.HasValue || to.HasValue
                 ? (from.HasValue ? FrLongDate(from.Value) : "origine") + " -> " +
@@ -508,13 +523,16 @@ namespace Idara.API.Services
             {
                 container.Page(page =>
                 {
-                    page.Size(PageSizes.A4);
-                    page.Margin(1.4f, Unit.Centimetre);
+                    // PAYSAGE : une colonne par information (cf. TransactionPdfRow).
+                    // En portrait, 7 colonnes deviendraient illisibles et la
+                    // référence SenePay ne tiendrait pas.
+                    page.Size(PageSizes.A4.Landscape());
+                    page.Margin(1.2f, Unit.Centimetre);
                     page.PageColor(Colors.White);
                     page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary));
 
                     page.Header().Element(c => Header(c, ownerName, title, period));
-                    page.Content().Element(c => TransactionsContent(c, rows, summary));
+                    page.Content().Element(c => TransactionsContent(c, rows, summary, counterpartyHeader));
                     page.Footer().Element(Footer);
                 });
             });
@@ -523,7 +541,8 @@ namespace Idara.API.Services
 
         private static void TransactionsContent(
             IContainer container, IReadOnlyList<TransactionPdfRow> rows,
-            IReadOnlyList<(string Label, string Value, bool Danger)> summary)
+            IReadOnlyList<(string Label, string Value, bool Danger)> summary,
+            string counterpartyHeader)
         {
             // Signe explicite uniquement si la liste mélange entrées ET sorties
             // (un historique de dons n'a que des « + » : le signe serait du bruit).
@@ -547,74 +566,128 @@ namespace Idara.API.Services
                     return;
                 }
 
+                // Colonnes affichées seulement si au moins une ligne les remplit :
+                // un export de dons n'a pas de « Solde », la caisse n'a pas de
+                // « Référence » — pas de colonne vide qui vole de la largeur aux
+                // autres.
+                var hasMethod = rows.Any(r => !string.IsNullOrWhiteSpace(r.Method));
+                var hasReference = rows.Any(r => !string.IsNullOrWhiteSpace(r.Reference));
+                var hasBalance = rows.Any(r => !string.IsNullOrWhiteSpace(r.Balance));
+                var hasNote = rows.Any(r => !string.IsNullOrWhiteSpace(r.Note));
+                var hasPhone = rows.Any(r => !string.IsNullOrWhiteSpace(r.Phone));
+
                 col.Item().Table(table =>
                 {
-                    // 3 colonnes larges plutôt que 7 étroites : c'est ce qui rend le
-                    // document lisible sur un écran de téléphone. Tout le détail
-                    // secondaire est EMPILÉ dans la colonne du milieu.
+                    // UNE COLONNE PAR INFORMATION, en paysage : le document se lit
+                    // et se trie comme un tableur. Les largeurs sont calibrées pour
+                    // que la référence (bloc de ~68 caractères sans espace) tienne
+                    // dans sa colonne en se repliant, sans jamais déborder.
                     table.ColumnsDefinition(c =>
                     {
-                        c.RelativeColumn(2.0f);   // Date + heure
-                        c.RelativeColumn(5.6f);   // Détail (libellé / qui / moyen / référence)
-                        c.RelativeColumn(2.4f);   // Montant + statut
+                        c.RelativeColumn(1.4f);                     // Date
+                        c.RelativeColumn(1.6f);                     // Type
+                        c.RelativeColumn(1.1f);                     // Statut
+                        c.RelativeColumn(2.4f);                     // Contrepartie
+                        if (hasPhone) c.RelativeColumn(1.3f);       // Numéro
+                        if (hasNote) c.RelativeColumn(2.2f);        // Motif
+                        if (hasMethod) c.RelativeColumn(1.1f);      // Moyen
+                        if (hasReference) c.RelativeColumn(2.1f);   // Référence
+                        if (hasBalance) c.RelativeColumn(1.3f);     // Solde après
+                        c.RelativeColumn(1.5f);                     // Montant
                     });
 
                     // En-tête répété automatiquement en haut de chaque page.
                     table.Header(header =>
                     {
                         HeaderCell(header, "Date", PrimaryHex);
-                        HeaderCell(header, "Detail", PrimaryHex);
+                        HeaderCell(header, "Type", PrimaryHex);
+                        HeaderCell(header, "Statut", PrimaryHex);
+                        // Intitulé adapté à l'export : « Beneficiaire », « Payeur »,
+                        // « Daara »… et seulement « Contrepartie » quand l'export
+                        // mélange les sens (la colonne Type lève alors le doute).
+                        HeaderCell(header, counterpartyHeader, PrimaryHex);
+                        if (hasPhone) HeaderCell(header, "Numero", PrimaryHex);
+                        if (hasNote) HeaderCell(header, "Motif", PrimaryHex);
+                        if (hasMethod) HeaderCell(header, "Moyen", PrimaryHex);
+                        if (hasReference) HeaderCell(header, "Reference", PrimaryHex);
+                        if (hasBalance) HeaderCell(header, "Solde apres", PrimaryHex, alignRight: true);
                         HeaderCell(header, "Montant (FCFA)", PrimaryHex, alignRight: true);
                     });
 
                     var index = 0;
                     foreach (var r in rows)
                     {
-                        // Alternance de fond : aide l'œil à suivre une ligne haute
-                        // (2-4 lignes de texte) jusqu'au montant, à droite.
+                        // Alternance de fond : l'œil suit la ligne jusqu'au montant.
                         var bg = index++ % 2 == 1 ? SurfaceVariant : "#FFFFFF";
 
                         TxCell(table, bg).Column(c =>
                         {
-                            c.Item().Text($"{r.Date:dd/MM/yyyy}").FontSize(8.5f);
+                            c.Item().Text($"{r.Date:dd/MM/yyyy}").FontSize(8);
                             c.Item().Text($"{r.Date:HH:mm}").FontSize(7).FontColor(TextSecondary);
                         });
 
-                        TxCell(table, bg).Column(c =>
-                        {
-                            c.Item().Text(r.Title).SemiBold().FontSize(8.5f);
-                            if (!string.IsNullOrWhiteSpace(r.Subtitle))
-                                c.Item().Text(r.Subtitle).FontSize(8).FontColor(TextSecondary);
-                            if (!string.IsNullOrWhiteSpace(r.Note))
-                                c.Item().Text(r.Note).FontSize(8).Italic().FontColor(TextSecondary);
-                            if (!string.IsNullOrWhiteSpace(r.Method))
-                                c.Item().Text(r.Method).FontSize(7.5f).FontColor(TextSecondary);
-                            if (!string.IsNullOrWhiteSpace(r.Reference))
-                                // Une référence SenePay est un bloc sans espace : depuis
-                                // QuestPDF 2024.3 le moteur la coupe tout seul en bout de
-                                // ligne (l'ancien WrapAnywhere est obsolète) — elle
-                                // s'empile donc sur 2-3 lignes au lieu de déborder.
-                                c.Item().Text($"Ref : {r.Reference}")
-                                    .FontSize(7).FontColor(TextSecondary);
-                        });
+                        TxCell(table, bg).Text(r.Title).SemiBold().FontSize(8);
 
-                        TxCell(table, bg).Column(c =>
-                        {
-                            var abs = Math.Abs(r.AmountFcfa);
-                            var text = mixed
-                                ? (r.AmountFcfa < 0 ? $"-{abs:N0}" : $"+{abs:N0}")
-                                : $"{abs:N0}";
-                            c.Item().AlignRight().Text(text).SemiBold().FontSize(9)
-                                .FontColor(r.AmountFcfa < 0 ? RedHex : PrimaryHex);
-                            if (!string.IsNullOrWhiteSpace(r.Status))
-                                c.Item().AlignRight().Text(r.Status).FontSize(7).FontColor(TextSecondary);
-                        });
+                        TxCell(table, bg).Text(r.Status ?? "-").FontSize(8)
+                            .FontColor(StatusColor(r.Status));
+
+                        TxCell(table, bg)
+                            .Text(string.IsNullOrWhiteSpace(r.Subtitle) ? "-" : r.Subtitle)
+                            .FontSize(8);
+
+                        if (hasPhone)
+                            TxCell(table, bg).Text(r.Phone ?? "-").FontSize(8)
+                                .FontColor(TextSecondary);
+
+                        if (hasNote)
+                            // Motif saisi par l'école : texte libre, souvent long, en
+                            // italique pour le distinguer des données structurées.
+                            TxCell(table, bg).Text(r.Note ?? "-").FontSize(7.5f)
+                                .Italic().FontColor(TextSecondary);
+
+                        if (hasMethod)
+                            TxCell(table, bg).Text(r.Method ?? "-").FontSize(7.5f)
+                                .FontColor(TextSecondary);
+
+                        if (hasReference)
+                            // Bloc sans espace : QuestPDF le coupe seul en bout de ligne
+                            // (WrapAnywhere est obsolète depuis 2024.3) → il se replie
+                            // sur 2-3 lignes dans sa colonne au lieu de déborder.
+                            TxCell(table, bg).Text(r.Reference ?? "-").FontSize(6.5f)
+                                .FontColor(TextSecondary);
+
+                        if (hasBalance)
+                            TxCell(table, bg).AlignRight().Text(r.Balance ?? "-").FontSize(7.5f)
+                                .FontColor(TextSecondary);
+
+                        var abs = Math.Abs(r.AmountFcfa);
+                        var text = mixed
+                            ? (r.AmountFcfa < 0 ? $"-{abs:N0}" : $"+{abs:N0}")
+                            : $"{abs:N0}";
+                        TxCell(table, bg).AlignRight().Text(text).SemiBold().FontSize(8.5f)
+                            .FontColor(r.AmountFcfa < 0 ? RedHex : PrimaryHex);
                     }
                 });
 
                 col.Item().PaddingTop(8)
                     .Text($"{rows.Count} transaction(s).").FontSize(8).FontColor(TextSecondary);
             });
+        }
+
+        /// <summary>
+        /// Couleur du statut dans le tableau : la même sémantique que dans l'app
+        /// (gotcha §118) — réussi vert, en cours orange, échec rouge. Le document
+        /// imprimé et l'écran ne doivent jamais raconter deux histoires.
+        /// </summary>
+        private static string StatusColor(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return TextSecondary;
+            var s = status.ToLowerInvariant();
+            if (s.Contains("echou") || s.Contains("échou") || s.Contains("annul") || s.Contains("expir"))
+                return RedHex;
+            if (s.Contains("cours") || s.Contains("attente") || s.Contains("verif") || s.Contains("vérif"))
+                return WarningHex;
+            return PrimaryHex;
         }
 
         // ShowEntire : une transaction reste d'un seul bloc — jamais sa moitié en

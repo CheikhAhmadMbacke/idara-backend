@@ -44,7 +44,10 @@ namespace Idara.API.Controllers
         /// compte connecté (rapprochés par numéro, dans son école).
         /// </summary>
         [HttpGet("my-transfers")]
-        public async Task<ActionResult<IEnumerable<BeneficiaryTransferDto>>> GetMyTransfers(CancellationToken ct)
+        public async Task<ActionResult<IEnumerable<BeneficiaryTransferDto>>> GetMyTransfers(
+            [FromQuery(Name = "q")] string? search,
+            [FromQuery] TransferCategory? category,
+            CancellationToken ct)
         {
             var (e164, schoolId) = await ResolveIdentityAsync(ct);
             if (e164 == null || schoolId == null)
@@ -53,11 +56,23 @@ namespace Idara.API.Controllers
             // Volume faible (retraits d'une école) → on charge les candidats
             // Completed puis on filtre en mémoire par numéro normalisé (le
             // Normalize n'est pas traduisible en SQL, cf. libellés §Lot B).
-            var candidates = await _context.Withdrawals
+            var query = _context.Withdrawals
                 .Include(w => w.School)
                 .Where(w => w.SchoolId == schoolId.Value
                             && !w.IsPlatform
-                            && w.Status == WithdrawalStatus.Completed)
+                            && w.Status == WithdrawalStatus.Completed);
+
+            // Recherche libre (daara, motif, categorie saisie) + nature. Un
+            // beneficiaire ne voit que des virements COMPLETES : filtrer par
+            // statut n'aurait pas d'objet ici.
+            if (category.HasValue) query = query.Where(w => w.Category == category.Value);
+            if (TransactionSearch.Pattern(search) is string pattern)
+                query = query.Where(w =>
+                    (w.School != null && EF.Functions.ILike(w.School!.Name!, pattern))
+                    || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
+                    || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern)));
+
+            var candidates = await query
                 .OrderByDescending(w => w.CreatedAt)
                 .ToListAsync(ct);
 
@@ -76,7 +91,10 @@ namespace Idara.API.Controllers
         /// </summary>
         [HttpGet("my-transfers/pdf")]
         public async Task<IActionResult> ExportMyTransfersPdf(
-            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery(Name = "q")] string? search,
+            [FromQuery] TransferCategory? category,
+            CancellationToken ct)
         {
             var (e164, schoolId) = await ResolveIdentityAsync(ct);
 
@@ -91,6 +109,17 @@ namespace Idara.API.Controllers
 
                 if (from.HasValue) query = query.Where(w => w.CreatedAt >= from.Value.ToUtcDay());
                 if (to.HasValue) query = query.Where(w => w.CreatedAt < to.Value.ToUtcDay().AddDays(1));
+
+                // Recherche libre (daara, motif, categorie saisie) + nature. Un
+                // beneficiaire ne voit que des virements COMPLETES : filtrer par
+                // statut n'aurait pas d'objet ici.
+                if (category.HasValue) query = query.Where(w => w.Category == category.Value);
+                if (TransactionSearch.Pattern(search) is string pattern)
+                    query = query.Where(w =>
+                        (w.School != null && EF.Functions.ILike(w.School!.Name!, pattern))
+                        || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
+                        || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern)));
+
 
                 var candidates = await query.OrderByDescending(w => w.CreatedAt).ToListAsync(ct);
                 // Rapprochement par numéro normalisé, en mémoire (comme la liste).
@@ -114,8 +143,7 @@ namespace Idara.API.Controllers
             var total = mine.Sum(w => w.AmountFcfa);
             var summary = new List<(string, string, bool)>
             {
-                ("Total recu", $"{total:N0}", false),
-                ("Virements", $"{rows.Count:N0}", false)
+                ("Total recu", $"{total:N0}", false)
             };
 
             var myName = await _context.Users
@@ -125,7 +153,9 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 myName,
                 FinanceLabels.ExportTitle("Virements recus", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // Export mono-type : la contrepartie est toujours le daara payeur.
+                counterpartyHeader: "Daara");
 
             return File(bytes, "application/pdf", "mes-virements-idara.pdf");
         }

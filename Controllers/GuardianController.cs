@@ -478,12 +478,17 @@ namespace Idara.API.Controllers
         [HttpGet("payments")]
         public async Task<ActionResult<IEnumerable<PaymentDto>>> GetMyPayments(
             [FromQuery] PaymentStatus? status,
+            [FromQuery] string? q,
+            [FromQuery] PaymentPurpose? purpose,
             CancellationToken ct)
         {
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
-            var items = await LoadMyPaymentsAsync(userId.Value, status, null, null, 100, ct);
+            // Recherche = sur tout l'historique, pas seulement les 100 derniers.
+            var take = string.IsNullOrWhiteSpace(q) ? 100 : 400;
+            var items = await LoadMyPaymentsAsync(
+                userId.Value, status, null, null, take, ct, q, purpose);
 
             // Nom + logo du daara par ligne (le parent peut avoir des paiements
             // dans plusieurs daaras) — un seul lookup en lot, mappé par schoolId.
@@ -527,11 +532,29 @@ namespace Idara.API.Controllers
         /// </summary>
         private async Task<List<Payment>> LoadMyPaymentsAsync(
             int guardianId, PaymentStatus? status, DateTime? from, DateTime? to,
-            int take, CancellationToken ct)
+            int take, CancellationToken ct,
+            string? search = null, PaymentPurpose? purpose = null)
         {
             var query = _context.Payments
                 .Include(p => p.Student)
                 .Where(p => p.GuardianId == guardianId);
+
+            if (purpose.HasValue)
+                query = query.Where(p => p.Purpose == purpose.Value);
+
+            // Recherche : enfant, daara, référence SenePay. Le nom du daara vit
+            // sur School, d'où la sous-requête (le parent peut avoir des enfants
+            // dans plusieurs daaras).
+            if (TransactionSearch.Pattern(search) is string pattern)
+            {
+                query = query.Where(p =>
+                    (p.Student != null && (EF.Functions.ILike(p.Student!.FirstName, pattern)
+                                        || EF.Functions.ILike(p.Student!.LastName, pattern)))
+                    || (p.SenePayTransactionId != null
+                        && EF.Functions.ILike(p.SenePayTransactionId, pattern))
+                    || _context.Schools.Any(sc => sc.Id == p.SchoolId
+                        && EF.Functions.ILike(sc.Name!, pattern)));
+            }
 
             if (status.HasValue)
                 query = query.Where(p => p.Status == status.Value);
@@ -581,13 +604,17 @@ namespace Idara.API.Controllers
         /// </summary>
         [HttpGet("payments/pdf")]
         public async Task<IActionResult> ExportMyPaymentsPdf(
-            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] PaymentStatus? status,
+            [FromQuery] PaymentPurpose? purpose,
+            CancellationToken ct)
         {
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
             var items = await LoadMyPaymentsAsync(
-                userId.Value, null, from, to, FinanceLabels.MaxExportRows, ct);
+                userId.Value, status, from, to, FinanceLabels.MaxExportRows, ct, q, purpose);
 
             // Nom du/des enfant(s) pour les paiements GLOBAUX (StudentId null,
             // factures portées par les allocations) : c'est devenu le mode de
@@ -650,7 +677,9 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 myName,
                 FinanceLabels.ExportTitle("Historique de mes paiements", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // Vu du parent : pour quel enfant, dans quel daara.
+                counterpartyHeader: "Eleve / Daara");
 
             return File(bytes, "application/pdf", "mes-paiements-idara.pdf");
         }

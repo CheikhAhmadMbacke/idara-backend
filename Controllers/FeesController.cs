@@ -913,7 +913,11 @@ namespace Idara.API.Controllers
 
         [HttpGet("wallet")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
-        public async Task<ActionResult<object>> GetWallet(CancellationToken ct)
+        public async Task<ActionResult<object>> GetWallet(
+            [FromQuery] string? q,
+            [FromQuery] WalletSource? source,
+            [FromQuery] string? txStatus,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
@@ -927,7 +931,12 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(w => w.SchoolId == schoolId.Value, ct);
             if (wallet == null) return NotFound(ApiResponse<bool>.Fail("Wallet introuvable."));
 
-            var recentTx = await LoadWalletTransactionsAsync(schoolId.Value, null, null, 50, ct);
+            // 50 lignes par défaut ; dès qu'une recherche est active on élargit,
+            // sinon chercher dans « tout l'historique » ne ramènerait que les
+            // correspondances des 50 dernières.
+            var take = string.IsNullOrWhiteSpace(q) ? 50 : 300;
+            var recentTx = await LoadWalletTransactionsAsync(
+                schoolId.Value, null, null, take, ct, q, source, txStatus);
 
             return Ok(new
             {
@@ -966,7 +975,8 @@ namespace Idara.API.Controllers
         /// deux affichent donc exactement les mêmes lignes et les mêmes noms.
         /// </summary>
         private async Task<List<WalletTxRow>> LoadWalletTransactionsAsync(
-            int schoolId, DateTime? from, DateTime? to, int take, CancellationToken ct)
+            int schoolId, DateTime? from, DateTime? to, int take, CancellationToken ct,
+            string? search = null, WalletSource? source = null, string? status = null)
         {
             var query = _context.WalletTransactions
                 .Where(t => t.SchoolId == schoolId)
@@ -974,6 +984,64 @@ namespace Idara.API.Controllers
 
             if (from.HasValue) query = query.Where(t => t.OccurredAt >= from.Value.ToUtcDay());
             if (to.HasValue) query = query.Where(t => t.OccurredAt < to.Value.ToUtcDay().AddDays(1));
+
+            // Nature du mouvement (paiement, don, recharge, abonnement, retrait…).
+            if (source.HasValue)
+                query = query.Where(t => t.Source == source.Value);
+
+            // Filtre STATUT traduit en SQL. Le statut d'une ligne wallet est dérivé
+            // (cf. ResolveStatus) : seules les lignes de RETRAIT peuvent être autre
+            // chose que « réussi », puisqu'elles sont écrites avant que l'opérateur
+            // ne tranche. On le traduit ici en conditions SQL plutôt que de filtrer
+            // en mémoire — sinon le `Take` s'appliquerait AVANT le filtre et la
+            // page reviendrait à moitié vide.
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                switch (status.Trim().ToLowerInvariant())
+                {
+                    case "completed":
+                        query = query.Where(t => t.Source != WalletSource.Withdrawal
+                            || _context.Withdrawals.Any(w => w.Id == t.RelatedId
+                                && w.Status == WithdrawalStatus.Completed));
+                        break;
+                    case "pending":
+                        query = query.Where(t => t.Source == WalletSource.Withdrawal
+                            && _context.Withdrawals.Any(w => w.Id == t.RelatedId
+                                && (w.Status == WithdrawalStatus.Initiated
+                                    || w.Status == WithdrawalStatus.UnderVerification)));
+                        break;
+                    case "failed":
+                        query = query.Where(t => t.Source == WalletSource.Withdrawal
+                            && _context.Withdrawals.Any(w => w.Id == t.RelatedId
+                                && (w.Status == WithdrawalStatus.Failed
+                                    || w.Status == WithdrawalStatus.Cancelled)));
+                        break;
+                }
+            }
+
+            // Recherche libre. Le libellé affiché (nom de l'élève, du donateur, du
+            // bénéficiaire) est résolu APRÈS la requête : chercher dessus en
+            // mémoire ne ramènerait que ce qui est déjà chargé. On interroge donc
+            // les entités liées en SQL, pour couvrir TOUT l'historique.
+            if (TransactionSearch.Pattern(search) is string pattern)
+            {
+                query = query.Where(t =>
+                    (t.Note != null && EF.Functions.ILike(t.Note, pattern))
+                    || _context.Payments.Any(p => p.Id == t.RelatedId
+                        && (t.Source == WalletSource.Payment || t.Source == WalletSource.Donation
+                            || t.Source == WalletSource.Topup)
+                        && ((p.Student != null && (EF.Functions.ILike(p.Student!.FirstName, pattern)
+                                                || EF.Functions.ILike(p.Student!.LastName, pattern)))
+                            || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.FullName!, pattern))
+                            || (p.Donor != null && EF.Functions.ILike(p.Donor!.FullName!, pattern))
+                            || (p.SenePayTransactionId != null
+                                && EF.Functions.ILike(p.SenePayTransactionId, pattern))))
+                    || _context.Withdrawals.Any(w => w.Id == t.RelatedId
+                        && t.Source == WalletSource.Withdrawal
+                        && (EF.Functions.ILike(w.RecipientName, pattern)
+                            || EF.Functions.ILike(w.RecipientPhone, pattern)
+                            || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern)))));
+            }
 
             var recentRaw = await query
                 .OrderByDescending(t => t.OccurredAt)
@@ -1082,13 +1150,17 @@ namespace Idara.API.Controllers
         [HttpGet("wallet/transactions/pdf")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<IActionResult> GetWalletTransactionsPdf(
-            [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+            [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] WalletSource? source,
+            [FromQuery] string? txStatus,
+            CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
             var txs = await LoadWalletTransactionsAsync(
-                schoolId.Value, from, to, FinanceLabels.MaxExportRows, ct);
+                schoolId.Value, from, to, FinanceLabels.MaxExportRows, ct, q, source, txStatus);
 
             var rows = txs.Select(t => new TransactionPdfRow
             {
@@ -1101,11 +1173,16 @@ namespace Idara.API.Controllers
                     ? null
                     : FinanceLabels.WalletTransactionType(t.Type),
                 Reference = t.Note,
-                // Le PDF dit la MÊME chose que l'écran : un mouvement non abouti est
-                // annoncé comme tel, jamais juste par son solde (gotcha §116 + §118).
-                Status = t.Status == "Completed"
-                    ? $"Solde : {t.BalanceAfter:N0}"
-                    : $"{(t.Status == "Pending" ? "En cours" : "Echoue")} - solde : {t.BalanceAfter:N0}",
+                // Chaque information dans SA colonne (§120) : le statut réel d'un
+                // côté, le solde après opération de l'autre. Le PDF dit exactement
+                // ce que dit l'écran (§116 + §118).
+                Status = t.Status switch
+                {
+                    "Pending" => "En cours",
+                    "Failed" => "Echoue",
+                    _ => "Reussi"
+                },
+                Balance = $"{t.BalanceAfter:N0}",
                 AmountFcfa = t.AmountFcfa
             }).ToList();
 
@@ -1113,7 +1190,11 @@ namespace Idara.API.Controllers
             var bytes = _exportPdf.BuildTransactionsPdf(
                 schoolName,
                 FinanceLabels.ExportTitle("Historique du wallet", rows.Count),
-                from, to, rows, BuildFlowSummary(rows));
+                from, to, rows, BuildFlowSummary(rows),
+                // SEUL export mixte (paiements, dons, retraits, abonnement...) :
+                // l'intitule reste generique, la colonne « Type » indiquant s'il
+                // s'agit d'un payeur ou d'un beneficiaire (§120).
+                counterpartyHeader: "Contrepartie");
 
             return File(bytes, "application/pdf", "historique-wallet-idara.pdf");
         }
@@ -1129,13 +1210,15 @@ namespace Idara.API.Controllers
             [FromQuery] PaymentStatus? status,
             [FromQuery] DateTime? from,
             [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] PaymentPurpose? purpose,
             CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
             var payments = await LoadSchoolPaymentsAsync(schoolId.Value, status, from, to,
-                FinanceLabels.MaxExportRows, ct);
+                FinanceLabels.MaxExportRows, ct, q, purpose);
 
             var rows = payments.Select(p => new TransactionPdfRow
             {
@@ -1155,15 +1238,16 @@ namespace Idara.API.Controllers
                 .Sum(p => p.TargetAmountFcfa > 0 ? p.TargetAmountFcfa : p.AmountFcfa);
             var summary = new List<(string, string, bool)>
             {
-                ("Total encaisse", $"{completed:N0}", false),
-                ("Transactions", $"{rows.Count:N0}", false)
+                ("Total encaisse", $"{completed:N0}", false)
             };
 
             var schoolName = await GetSchoolNameAsync(schoolId.Value, ct);
             var bytes = _exportPdf.BuildTransactionsPdf(
                 schoolName,
                 FinanceLabels.ExportTitle("Historique des paiements recus", rows.Count),
-                from, to, rows, summary);
+                from, to, rows, summary,
+                // Toujours de l'argent entrant : la contrepartie est celui qui paie.
+                counterpartyHeader: "Payeur");
 
             return File(bytes, "application/pdf", "historique-paiements-idara.pdf");
         }
@@ -1211,12 +1295,15 @@ namespace Idara.API.Controllers
             [FromQuery] PaymentStatus? status,
             [FromQuery] DateTime? from,
             [FromQuery] DateTime? to,
+            [FromQuery] string? q,
+            [FromQuery] PaymentPurpose? purpose,
             CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
-            var payments = await LoadSchoolPaymentsAsync(schoolId.Value, status, from, to, 500, ct);
+            var payments = await LoadSchoolPaymentsAsync(
+                schoolId.Value, status, from, to, 500, ct, q, purpose);
 
             return Ok(payments.Select(p => new PaymentDto
             {
@@ -1256,7 +1343,8 @@ namespace Idara.API.Controllers
         /// </summary>
         private async Task<List<Payment>> LoadSchoolPaymentsAsync(
             int schoolId, PaymentStatus? status, DateTime? from, DateTime? to,
-            int take, CancellationToken ct)
+            int take, CancellationToken ct,
+            string? search = null, PaymentPurpose? purpose = null)
         {
             var query = _context.Payments
                 .Include(p => p.Student).ThenInclude(s => s!.Class)
@@ -1264,6 +1352,23 @@ namespace Idara.API.Controllers
                 .Include(p => p.Donor)
                 .Where(p => p.SchoolId == schoolId)
                 .Where(p => !p.IsHidden); // masqués par le daara → jamais affichés (ni Observateur)
+
+            // Nature (mensualité / recharge / don) — « toutes » par défaut.
+            if (purpose.HasValue)
+                query = query.Where(p => p.Purpose == purpose.Value);
+
+            // Recherche libre : élève, payeur, donateur, référence SenePay.
+            if (TransactionSearch.Pattern(search) is string pattern)
+            {
+                query = query.Where(p =>
+                    (p.Student != null && (
+                        EF.Functions.ILike(p.Student!.FirstName, pattern) ||
+                        EF.Functions.ILike(p.Student!.LastName, pattern) ||
+                        (p.Student.StudentNumber != null && EF.Functions.ILike(p.Student!.StudentNumber!, pattern))))
+                    || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.FullName!, pattern))
+                    || (p.Donor != null && EF.Functions.ILike(p.Donor!.FullName!, pattern))
+                    || (p.SenePayTransactionId != null && EF.Functions.ILike(p.SenePayTransactionId, pattern)));
+            }
 
             if (status.HasValue)
                 query = query.Where(p => p.Status == status.Value);
