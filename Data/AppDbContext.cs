@@ -63,6 +63,9 @@ namespace Idara.API.Data
         public DbSet<NotificationLog> NotificationLogs { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
 
+        // ----- Écritures rejouables depuis la file d'attente hors ligne -----
+        public DbSet<IdempotencyRecord> IdempotencyRecords { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -91,6 +94,24 @@ namespace Idara.API.Data
                 .WithMany()
                 .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // --- Idempotence des écritures rejouées depuis l'Outbox ---
+            // Unique PAR UTILISATEUR : c'est cette contrainte qui fait tout le
+            // travail. Deux rejeux simultanés de la même saisie se disputent
+            // l'INSERT, le perdant reçoit une violation 23505 et se contente de
+            // la réponse déjà enregistrée — même mécanique que l'idempotence des
+            // webhooks (§50).
+            modelBuilder.Entity<IdempotencyRecord>()
+                .HasIndex(r => new { r.UserId, r.Key })
+                .IsUnique();
+            modelBuilder.Entity<IdempotencyRecord>()
+                .HasIndex(r => r.CreatedAt);
+            modelBuilder.Entity<IdempotencyRecord>()
+                .Property(r => r.Key)
+                .HasMaxLength(120);
+            modelBuilder.Entity<IdempotencyRecord>()
+                .Property(r => r.Endpoint)
+                .HasMaxLength(200);
 
             modelBuilder.Entity<User>()
                 .HasOne(u => u.School)

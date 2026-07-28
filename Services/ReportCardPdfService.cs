@@ -1,3 +1,4 @@
+using Idara.API.Common.Utilities;
 using Idara.API.Models;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -9,6 +10,7 @@ namespace Idara.API.Services
     {
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<ReportCardPdfService> _logger;
+        private readonly IPdfFileNamer _namer;
 
         // Palette alignée sur AppColors côté Flutter (cohérence UI/PDF).
         private const string PrimaryHex = "#16A34A";   // vert Idara
@@ -17,10 +19,14 @@ namespace Idara.API.Services
         private const string Border = "#E2E8F0";
         private const string SurfaceVariant = "#F8FAFC";
 
-        public ReportCardPdfService(IWebHostEnvironment env, ILogger<ReportCardPdfService> logger)
+        public ReportCardPdfService(
+            IWebHostEnvironment env,
+            ILogger<ReportCardPdfService> logger,
+            IPdfFileNamer namer)
         {
             _env = env;
             _logger = logger;
+            _namer = namer;
         }
 
         public async Task<string> GenerateAsync(ReportCard card, School school)
@@ -28,8 +34,11 @@ namespace Idara.API.Services
             var folder = Path.Combine(_env.WebRootPath, "uploads", "bulletins");
             Directory.CreateDirectory(folder);
 
-            // Nom déterministe → un upsert remplace l'ancien fichier.
-            var fileName = $"bulletin-{card.SchoolId}-{card.StudentId}-{card.AcademicPeriodId}.pdf";
+            // Nom déterministe → un upsert remplace l'ancien fichier. Le suffixe
+            // HMAC le rend indevinable : sans lui, les notes d'un enfant étaient
+            // énumérables (école, élève et période sont de petits entiers).
+            var fileName = _namer.Build(
+                "bulletin", $"{card.SchoolId}-{card.StudentId}-{card.AcademicPeriodId}");
             var fullPath = Path.Combine(folder, fileName);
 
             try

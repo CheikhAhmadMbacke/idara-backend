@@ -34,6 +34,37 @@ namespace Idara.API.Data
             await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
             await SeedDemoSchoolAsync();
+            await PurgeStaleIdempotencyRecordsAsync();
+        }
+
+        /// <summary>
+        /// Purge les traces d'idempotence anciennes.
+        ///
+        /// Une saisie mise en file d'attente sur un téléphone est rejouée dans
+        /// les heures qui suivent, jamais des semaines plus tard : au-delà de
+        /// 30 jours, la trace ne protège plus rien et ne fait que grossir. On le
+        /// fait au démarrage plutôt que via un nouveau cron — le volume est
+        /// minuscule et l'API redémarre à chaque déploiement.
+        /// </summary>
+        private async Task PurgeStaleIdempotencyRecordsAsync()
+        {
+            try
+            {
+                var cutoff = DateTime.UtcNow.AddDays(-30);
+                var removed = await _context.IdempotencyRecords
+                    .Where(r => r.CreatedAt < cutoff)
+                    .ExecuteDeleteAsync();
+                if (removed > 0)
+                {
+                    _logger.LogInformation(
+                        "[idempotency] {Count} traces de plus de 30 jours purgées.", removed);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Best-effort : un ménage raté ne doit jamais empêcher l'API de démarrer.
+                _logger.LogWarning(ex, "[idempotency] Purge impossible.");
+            }
         }
 
         // Identifiants du compte de DÉMONSTRATION fournis à Google Play (App access).

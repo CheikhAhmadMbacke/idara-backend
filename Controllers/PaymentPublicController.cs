@@ -125,7 +125,7 @@ namespace Idara.API.Controllers
                 return BadRequest("Reçu disponible uniquement pour les paiements complétés.");
             }
 
-            var relative = payment.ReceiptPdfPath ?? $"/uploads/receipts/receipt-{payment.Id}.pdf";
+            var relative = payment.ReceiptPdfPath ?? _receiptPdf.RelativePathFor(payment.Id);
             var fullPath = Path.GetFullPath(Path.Combine(
                 _env.WebRootPath, relative.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
             var webRootFull = Path.GetFullPath(_env.WebRootPath);

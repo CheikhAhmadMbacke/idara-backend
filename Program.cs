@@ -36,7 +36,14 @@ if (string.IsNullOrWhiteSpace(jwtSettings.Key) || jwtSettings.Key.Length < 32)
     throw new InvalidOperationException("Jwt:Key doit faire au moins 32 caractères (configurez via User Secrets ou variables d'environnement).");
 
 // ---------- MVC + JSON ----------
-builder.Services.AddControllers()
+builder.Services.AddControllers(options =>
+    {
+        // Rend rejouables sans doublon les écritures mises en file d'attente par
+        // l'application quand le réseau manque. Totalement inerte tant que le
+        // client n'envoie pas l'en-tête `Idempotency-Key` : aucun changement de
+        // comportement pour l'existant.
+        options.Filters.Add<Idara.API.Common.Filters.IdempotencyFilter>();
+    })
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -96,6 +103,11 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 // ---------- Services applicatifs ----------
+// Nommage des PDF persistés dans wwwroot/uploads (reçus, bulletins, factures
+// d'abonnement) : suffixe HMAC indevinable, cf. Common/Utilities/PdfFileNamer.
+// Singleton : dérive sa clé une seule fois au démarrage, puis sans état.
+builder.Services.AddSingleton<Idara.API.Common.Utilities.IPdfFileNamer,
+    Idara.API.Common.Utilities.PdfFileNamer>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IJwtService, JwtService>();
@@ -283,6 +295,13 @@ app.UseMiddleware<Idara.API.Common.Middleware.SubscriptionEnforcementMiddleware>
 // Lecture seule du rôle Observateur (SchoolViewer) : bloque toute écriture (403).
 // APRÈS l'auth (besoin du rôle), garde-fou unique de ce rôle.
 app.UseMiddleware<Idara.API.Common.Middleware.ReadOnlyRoleMiddleware>();
+
+// ETag sur les référentiels stables (classes, matières, enseignants, emploi du
+// temps) : un client qui possède déjà la bonne version reçoit un 304 de
+// quelques octets au lieu de la liste entière. Placé au PLUS PRÈS des
+// contrôleurs, pour ne mettre en mémoire tampon que des réponses déjà passées
+// par l'authentification et les contrôles d'accès.
+app.UseMiddleware<Idara.API.Common.Middleware.ETagMiddleware>();
 
 app.MapControllers();
 

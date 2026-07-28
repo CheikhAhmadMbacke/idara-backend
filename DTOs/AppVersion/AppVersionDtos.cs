@@ -16,8 +16,23 @@ namespace Idara.API.DTOs.AppVersion
         public int LatestVersionCode { get; set; }
         public string LatestVersionName { get; set; } = string.Empty;
 
-        /// <summary>URL stable de l'APK (Idara.apk) — toujours la dernière version.</summary>
+        /// <summary>
+        /// URL stable de l'APK UNIVERSEL (Idara.apk) — toujours la dernière version.
+        /// Conservée telle quelle : c'est ce que lisent les apps déjà installées, et
+        /// c'est le seul choix possible depuis un navigateur (qui ignore
+        /// l'architecture du téléphone).
+        /// </summary>
         public string ApkUrl { get; set; } = string.Empty;
+
+        /// <summary>
+        /// APK dédié à une architecture (2026-07-28). L'APK universel embarque le
+        /// code natif des trois architectures : environ 52 Mo sur 75 sont
+        /// téléchargés pour rien à chaque installation et à chaque mise à jour
+        /// automatique. Champs ADDITIFS : une app plus ancienne les ignore et
+        /// continue d'utiliser <see cref="ApkUrl"/>.
+        /// </summary>
+        public string ApkUrlArm64 { get; set; } = string.Empty;
+        public string ApkUrlArm32 { get; set; } = string.Empty;
 
         public string? Changelog { get; set; }
 
@@ -56,6 +71,8 @@ namespace Idara.API.DTOs.AppVersion
         [JsonPropertyName("versionName")] public string? VersionName { get; set; }
         [JsonPropertyName("apkUrl")] public string? ApkUrl { get; set; }
         [JsonPropertyName("apkUrlStable")] public string? ApkUrlStable { get; set; }
+        [JsonPropertyName("apkUrlArm64")] public string? ApkUrlArm64 { get; set; }
+        [JsonPropertyName("apkUrlArm32")] public string? ApkUrlArm32 { get; set; }
         [JsonPropertyName("changelog")] public string? Changelog { get; set; }
         [JsonPropertyName("publishedAt")] public DateTime? PublishedAt { get; set; }
     }

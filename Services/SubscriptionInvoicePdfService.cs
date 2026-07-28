@@ -1,3 +1,4 @@
+using Idara.API.Common.Utilities;
 using Idara.API.Models;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -8,13 +9,14 @@ namespace Idara.API.Services
     /// <summary>
     /// Génère les PDF des factures d'abonnement plateforme (école → Idara).
     /// Format A5 portrait, 1 page. Chemin déterministe
-    /// <c>wwwroot/uploads/subscription-invoices/sub-invoice-{id}.pdf</c> (upsert).
-    /// Calqué sur <see cref="ReceiptPdfService"/>.
+    /// <c>wwwroot/uploads/subscription-invoices/sub-invoice-{id}-{suffixeHMAC}.pdf</c>
+    /// (upsert). Calqué sur <see cref="ReceiptPdfService"/>.
     /// </summary>
     public class SubscriptionInvoicePdfService : ISubscriptionInvoicePdfService
     {
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<SubscriptionInvoicePdfService> _logger;
+        private readonly IPdfFileNamer _namer;
 
         private const string PrimaryHex = "#0B744D";
         private const string TextPrimary = "#0F172A";
@@ -22,10 +24,14 @@ namespace Idara.API.Services
         private const string Border = "#E2E8F0";
         private const string SurfaceVariant = "#F8FAFC";
 
-        public SubscriptionInvoicePdfService(IWebHostEnvironment env, ILogger<SubscriptionInvoicePdfService> logger)
+        public SubscriptionInvoicePdfService(
+            IWebHostEnvironment env,
+            ILogger<SubscriptionInvoicePdfService> logger,
+            IPdfFileNamer namer)
         {
             _env = env;
             _logger = logger;
+            _namer = namer;
         }
 
         public async Task<string> GenerateAsync(SubscriptionInvoice invoice, School school, string? planName)
@@ -33,7 +39,7 @@ namespace Idara.API.Services
             var folder = Path.Combine(_env.WebRootPath, "uploads", "subscription-invoices");
             Directory.CreateDirectory(folder);
 
-            var fileName = $"sub-invoice-{invoice.Id}.pdf";
+            var fileName = _namer.Build("sub-invoice", invoice.Id.ToString());
             var fullPath = Path.Combine(folder, fileName);
 
             try

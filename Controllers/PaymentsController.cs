@@ -74,8 +74,8 @@ namespace Idara.API.Controllers
                     "Reçu disponible uniquement pour les paiements complétés."));
             }
 
-            // Chemin attendu — déterministe par PaymentId.
-            var relativePath = p.ReceiptPdfPath ?? $"/uploads/receipts/receipt-{p.Id}.pdf";
+            // Chemin attendu — déterministe par PaymentId (nom + suffixe HMAC).
+            var relativePath = p.ReceiptPdfPath ?? _receiptPdf.RelativePathFor(p.Id);
             var fullPath = Path.GetFullPath(Path.Combine(
                 _env.WebRootPath, relativePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
 

@@ -67,18 +67,26 @@ namespace Idara.API.Services
                     : query.OrderBy(s => s.EnrollmentDate)
             };
 
+            // Bornes défensives (2026-07-28). Rien ne limitait la taille de page
+            // demandée : `?pageSize=100000` faisait charger et sérialiser toute
+            // la base en une réponse. 500 laisse largement la place aux écrans
+            // qui chargent une classe entière d'un coup (ils demandent 200) tout
+            // en plafonnant le coût d'une requête malveillante ou maladroite.
+            var page = pagination.Page < 1 ? 1 : pagination.Page;
+            var pageSize = Math.Clamp(pagination.PageSize, 1, 500);
+
             var totalCount = await query.CountAsync();
             var students = await query
-                .Skip((pagination.Page - 1) * pagination.PageSize)
-                .Take(pagination.PageSize)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .ToListAsync();
 
             return new StudentListResponseDto
             {
                 Items = students.Select(MapToResponseDto).ToList(),
                 TotalCount = totalCount,
-                Page = pagination.Page,
-                PageSize = pagination.PageSize
+                Page = page,
+                PageSize = pageSize
             };
         }
 

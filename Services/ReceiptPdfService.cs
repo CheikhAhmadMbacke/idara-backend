@@ -1,3 +1,4 @@
+using Idara.API.Common.Utilities;
 using Idara.API.Enums;
 using Idara.API.Models;
 using QuestPDF.Fluent;
@@ -11,15 +12,19 @@ namespace Idara.API.Services
     /// minimaliste (1 page), prêt à imprimer ou être affiché dans le
     /// DocumentViewer Flutter.
     ///
-    /// Convention chemin : <c>wwwroot/uploads/receipts/receipt-{paymentId}.pdf</c>.
-    /// Nom déterministe → un upsert (génération à la fin du webhook, puis
-    /// re-génération depuis l'endpoint download) écrase l'ancien fichier sans
-    /// accumulation.
+    /// Convention chemin :
+    /// <c>wwwroot/uploads/receipts/receipt-{paymentId}-{suffixeHMAC}.pdf</c>
+    /// (cf. <see cref="IPdfFileNamer"/>). Nom toujours déterministe → un upsert
+    /// (génération à la fin du webhook, puis re-génération depuis l'endpoint
+    /// download) écrase l'ancien fichier sans accumulation ; mais le suffixe le
+    /// rend indevinable, donc non énumérable si jamais le fichier se retrouvait
+    /// servi en direct.
     /// </summary>
     public class ReceiptPdfService : IReceiptPdfService
     {
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<ReceiptPdfService> _logger;
+        private readonly IPdfFileNamer _namer;
 
         // Palette alignée sur AppColors côté Flutter.
         private const string PrimaryHex = "#16A34A";
@@ -28,11 +33,23 @@ namespace Idara.API.Services
         private const string Border = "#E2E8F0";
         private const string SurfaceVariant = "#F8FAFC";
 
-        public ReceiptPdfService(IWebHostEnvironment env, ILogger<ReceiptPdfService> logger)
+        public ReceiptPdfService(
+            IWebHostEnvironment env,
+            ILogger<ReceiptPdfService> logger,
+            IPdfFileNamer namer)
         {
             _env = env;
             _logger = logger;
+            _namer = namer;
         }
+
+        /// <summary>
+        /// Nom de fichier attendu pour le reçu d'un paiement. Exposé (statique via
+        /// l'interface) parce que plusieurs endpoints doivent recalculer ce chemin
+        /// quand <c>Payment.ReceiptPdfPath</c> n'a jamais été persisté.
+        /// </summary>
+        public string RelativePathFor(int paymentId) =>
+            $"/uploads/receipts/{_namer.Build("receipt", paymentId.ToString())}";
 
         public async Task<string> GenerateAsync(
             Payment payment, School school, Student? student, Invoice? invoice, User? donor = null,
@@ -41,7 +58,7 @@ namespace Idara.API.Services
             var folder = Path.Combine(_env.WebRootPath, "uploads", "receipts");
             Directory.CreateDirectory(folder);
 
-            var fileName = $"receipt-{payment.Id}.pdf";
+            var fileName = _namer.Build("receipt", payment.Id.ToString());
             var fullPath = Path.Combine(folder, fileName);
 
             var isDonation = payment.Purpose == PaymentPurpose.Donation;
