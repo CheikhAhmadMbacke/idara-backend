@@ -89,6 +89,8 @@ namespace Idara.API.Controllers
                     : manifest.ApkUrl) ?? string.Empty,
                 ApkUrlArm64 = manifest.ApkUrlArm64 ?? string.Empty,
                 ApkUrlArm32 = manifest.ApkUrlArm32 ?? string.Empty,
+                LatestVersionCodeArm64 = manifest.VersionCodeArm64 ?? 0,
+                LatestVersionCodeArm32 = manifest.VersionCodeArm32 ?? 0,
                 Changelog = manifest.Changelog,
                 ForcedForMyRole = forced,
                 PublishedAt = manifest.PublishedAt,

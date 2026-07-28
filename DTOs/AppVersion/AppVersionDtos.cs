@@ -34,6 +34,19 @@ namespace Idara.API.DTOs.AppVersion
         public string ApkUrlArm64 { get; set; } = string.Empty;
         public string ApkUrlArm32 { get; set; } = string.Empty;
 
+        /// <summary>
+        /// <c>versionCode</c> PROPRE à chaque APK par architecture.
+        ///
+        /// <para>Flutter décale le <c>versionCode</c> quand on construit avec
+        /// <c>--split-per-abi</c> (+1000 armeabi-v7a, +2000 arm64-v8a). Une app
+        /// arm64 porte donc 102014 là où la version publiée est 100014 : comparée
+        /// au code de base du build suivant (100015), elle se croirait plus
+        /// récente et **ne proposerait plus jamais** de mise à jour. L'app compare
+        /// donc au code de l'APK qu'elle téléchargerait réellement.</para>
+        /// </summary>
+        public int LatestVersionCodeArm64 { get; set; }
+        public int LatestVersionCodeArm32 { get; set; }
+
         public string? Changelog { get; set; }
 
         /// <summary>
@@ -73,6 +86,8 @@ namespace Idara.API.DTOs.AppVersion
         [JsonPropertyName("apkUrlStable")] public string? ApkUrlStable { get; set; }
         [JsonPropertyName("apkUrlArm64")] public string? ApkUrlArm64 { get; set; }
         [JsonPropertyName("apkUrlArm32")] public string? ApkUrlArm32 { get; set; }
+        [JsonPropertyName("versionCodeArm64")] public int? VersionCodeArm64 { get; set; }
+        [JsonPropertyName("versionCodeArm32")] public int? VersionCodeArm32 { get; set; }
         [JsonPropertyName("changelog")] public string? Changelog { get; set; }
         [JsonPropertyName("publishedAt")] public DateTime? PublishedAt { get; set; }
     }
