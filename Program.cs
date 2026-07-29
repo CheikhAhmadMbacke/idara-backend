@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using Idara.API.Common.Middleware;
+using Idara.API.Common.Observability;
 using Idara.API.Data;
 using Idara.API.Options;
 using Idara.API.Services;
@@ -12,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using QuestPDF.Infrastructure;
+using Serilog;
 
 // QuestPDF Community license : gratuit jusqu'à 1 M$ de revenus annuels.
 // Doit être appelé avant toute génération de document.
@@ -19,7 +21,29 @@ QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ---------- Journal structuré (Serilog) ----------
+// À partir d'ici, TOUTE ligne de journal part en JSON dans un fichier quotidien,
+// avec son code de corrélation, son utilisateur et son école (cf.
+// IdaraLogEnricher). Avant le 2026-07-29, ces lignes étaient du texte libre dans
+// journalctl : non requêtable, non corrélable, et mêlant toutes les écoles.
+//
+// Deux temps, c'est le motif recommandé par Serilog : un journal « d'amorçage »
+// tout de suite (sans quoi une erreur de configuration au démarrage — clé JWT
+// trop courte, chaîne de connexion absente — partirait dans le vide), puis le
+// journal définitif une fois le conteneur d'injection prêt, car l'enrichisseur a
+// besoin d'accéder au contexte HTTP.
+Log.Logger = SerilogSetup.CreateBootstrapLogger();
+builder.Services.AddHttpContextAccessor();
+builder.Host.UseSerilog((context, services, config) =>
+    SerilogSetup.Configure(
+        config,
+        services.GetRequiredService<IOptions<ObservabilitySettings>>().Value,
+        context.HostingEnvironment.ContentRootPath,
+        context.HostingEnvironment.IsDevelopment(),
+        services.GetRequiredService<IHttpContextAccessor>()));
+
 // ---------- Options (strongly-typed configuration) ----------
+builder.Services.Configure<ObservabilitySettings>(builder.Configuration.GetSection(ObservabilitySettings.SectionName));
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection(EmailSettings.SectionName));
 builder.Services.Configure<SuperAdminSettings>(builder.Configuration.GetSection(SuperAdminSettings.SectionName));
@@ -119,6 +143,16 @@ builder.Services.AddSingleton<IExportPdfService, ExportPdfService>();
 builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
 builder.Services.AddScoped<Idara.API.Services.Notifications.INotificationService, Idara.API.Services.Notifications.NotificationService>();
+
+// ---------- Observabilité (lot 1) ----------
+// Destination des incidents remontés par l'application. Derrière une interface
+// (motif ISmsService / IPushService) : basculer un jour vers une plateforme
+// dédiée ne demanderait de réécrire qu'un seul fichier.
+builder.Services.AddScoped<Idara.API.Services.Observability.ITelemetrySink,
+    Idara.API.Services.Observability.DatabaseTelemetrySink>();
+// Recherche dans les fichiers de journal (sans état, sans DbContext) : singleton.
+builder.Services.AddSingleton<Idara.API.Services.Observability.IServerLogSearchService,
+    Idara.API.Services.Observability.ServerLogSearchService>();
 
 // Cache mémoire : sert au rate-limiting applicatif (anti brute-force login /
 // code à 6 chiffres / abus SMS). Mono-instance → en mémoire suffit.
@@ -251,6 +285,11 @@ builder.Services.AddCors(options =>
             policy.WithOrigins(allowedOrigins)
                   .AllowAnyMethod()
                   .AllowAnyHeader()
+                  // ⚠️ Sans cette ligne, le navigateur MASQUE l'en-tête au
+                  // JavaScript : le code d'incident s'afficherait sur mobile et
+                  // pas sur idara.sn. `AllowAnyHeader` ne concerne que les
+                  // en-têtes de REQUÊTE, jamais ceux de réponse.
+                  .WithExposedHeaders(Idara.API.Common.Observability.TraceCode.HeaderName)
                   .AllowCredentials();
         }
         else
@@ -258,7 +297,8 @@ builder.Services.AddCors(options =>
             // Fallback DEV uniquement : ouvert. Inaccessible en prod (cf. check ci-dessus).
             policy.AllowAnyOrigin()
                   .AllowAnyMethod()
-                  .AllowAnyHeader();
+                  .AllowAnyHeader()
+                  .WithExposedHeaders(Idara.API.Common.Observability.TraceCode.HeaderName);
         }
     });
 });
@@ -273,7 +313,35 @@ using (var scope = app.Services.CreateScope())
 }
 
 // ---------- Pipeline HTTP ----------
+// Code de corrélation en PREMIER : le middleware d'exceptions juste en dessous
+// doit pouvoir l'annoncer au client quand tout casse. Une réponse d'erreur sans
+// code, c'est le retour à « ça ne marche pas ».
+app.UseMiddleware<TraceContextMiddleware>();
 app.UseMiddleware<GlobalExceptionMiddleware>();
+
+// Une ligne de synthèse par requête (méthode, chemin, statut, durée), en
+// Information → fichier seulement, jamais la console. ~430 lignes par jour à
+// l'échelle actuelle : c'est le socle qui rend un incident rattachable à un appel.
+app.UseSerilogRequestLogging(options =>
+{
+    // Le gabarit par défaut de Serilog met les valeurs entre guillemets
+    // (`HTTP "GET" "/api/students" responded 403`), pénible à relire dans la page
+    // SuperAdmin. Le suffixe `:l` les écrit littéralement.
+    options.MessageTemplate =
+        "{RequestMethod:l} {RequestPath:l} → {StatusCode} en {Elapsed:0} ms";
+
+    // Les ressources statiques (uploads, page de résultat de paiement) n'ont
+    // aucun intérêt diagnostique et représenteraient l'essentiel du volume.
+    options.GetLevel = (http, elapsed, ex) =>
+    {
+        if (ex != null) return Serilog.Events.LogEventLevel.Error;
+        if (http.Response.StatusCode >= 500) return Serilog.Events.LogEventLevel.Error;
+        var path = http.Request.Path.Value ?? string.Empty;
+        if (path.StartsWith("/uploads", StringComparison.OrdinalIgnoreCase))
+            return Serilog.Events.LogEventLevel.Verbose; // sous le seuil = non écrit
+        return Serilog.Events.LogEventLevel.Information;
+    };
+});
 
 if (app.Environment.IsDevelopment())
 {
@@ -305,4 +373,22 @@ app.UseMiddleware<Idara.API.Common.Middleware.ETagMiddleware>();
 
 app.MapControllers();
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (Exception ex)
+{
+    // Un arrêt brutal était jusqu'ici invisible autrement qu'en fouillant
+    // journalctl. Ici il devient une ligne fatale, dans le fichier comme sur la
+    // console.
+    Log.Fatal(ex, "L'API s'est arrêtée sur une erreur non gérée au démarrage.");
+    throw;
+}
+finally
+{
+    // Le journal fichier écrit par lots : sans ce vidage, les dernières lignes
+    // avant un redémarrage — c'est-à-dire souvent celles qui expliquent le
+    // redémarrage — seraient perdues.
+    Log.CloseAndFlush();
+}

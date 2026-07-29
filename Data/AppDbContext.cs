@@ -66,6 +66,9 @@ namespace Idara.API.Data
         // ----- Écritures rejouables depuis la file d'attente hors ligne -----
         public DbSet<IdempotencyRecord> IdempotencyRecords { get; set; }
 
+        // ----- Observabilité (lot 1) -----
+        public DbSet<ClientIncident> ClientIncidents { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -112,6 +115,57 @@ namespace Idara.API.Data
             modelBuilder.Entity<IdempotencyRecord>()
                 .Property(r => r.Endpoint)
                 .HasMaxLength(200);
+
+            // --- Incidents remontés par l'application (observabilité, lot 1) ---
+            // La recherche se fait TOUJOURS en base, jamais par un `grep` sur les
+            // fichiers de journal : deux cœurs ARM partagés avec l'API et
+            // PostgreSQL ne supporteraient pas un balayage de centaines de Mo à
+            // chaque recherche. D'où ces quatre index, qui sont exactement les
+            // quatre façons de chercher : par code dicté au téléphone, par
+            // utilisateur, par école, par date.
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.Code);
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.CreatedAt);
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.UserId);
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.SchoolId);
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.RequestTrace);
+
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Code).HasMaxLength(20);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Role).HasMaxLength(30);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Platform).HasMaxLength(20);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.AppVersion).HasMaxLength(40);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Device).HasMaxLength(120);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.LocaleCode).HasMaxLength(10);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Route).HasMaxLength(200);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Message).HasMaxLength(400);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.ExceptionType).HasMaxLength(160);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.StackTrace).HasMaxLength(8000);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.RequestTrace).HasMaxLength(20);
+            modelBuilder.Entity<ClientIncident>().Property(i => i.UserComment).HasMaxLength(600);
+            // Même choix que WebhookEvent.Payload : `jsonb` natif, pour pouvoir
+            // interroger la chronologie en SQL au besoin.
+            modelBuilder.Entity<ClientIncident>().Property(i => i.Timeline).HasColumnType("jsonb");
+
+            // ⚠️ SetNull et NON Restrict, volontairement. Avec une FK Restrict, un
+            // utilisateur ayant déclaré un incident ne serait plus supprimable
+            // physiquement : `HasReferencesAsync` (§68) le basculerait en
+            // anonymisation, et la suppression d'école (§77) échouerait sur
+            // violation de clé étrangère. De la donnée de diagnostic purgée à
+            // 30 jours ne doit jamais peser sur un droit à l'effacement.
+            modelBuilder.Entity<ClientIncident>()
+                .HasOne(i => i.User)
+                .WithMany()
+                .HasForeignKey(i => i.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+            modelBuilder.Entity<ClientIncident>()
+                .HasOne(i => i.School)
+                .WithMany()
+                .HasForeignKey(i => i.SchoolId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<User>()
                 .HasOne(u => u.School)

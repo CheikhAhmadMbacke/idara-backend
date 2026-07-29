@@ -12,12 +12,18 @@ namespace Idara.API.Data
     {
         private readonly AppDbContext _context;
         private readonly SuperAdminSettings _settings;
+        private readonly ObservabilitySettings _observability;
         private readonly ILogger<DbInitializer> _logger;
 
-        public DbInitializer(AppDbContext context, IOptions<SuperAdminSettings> settings, ILogger<DbInitializer> logger)
+        public DbInitializer(
+            AppDbContext context,
+            IOptions<SuperAdminSettings> settings,
+            IOptions<ObservabilitySettings> observability,
+            ILogger<DbInitializer> logger)
         {
             _context = context;
             _settings = settings.Value;
+            _observability = observability.Value;
             _logger = logger;
         }
 
@@ -35,6 +41,37 @@ namespace Idara.API.Data
             await NormalizeUserPhonesAsync();
             await SeedDemoSchoolAsync();
             await PurgeStaleIdempotencyRecordsAsync();
+            await PurgeStaleIncidentsAsync();
+        }
+
+        /// <summary>
+        /// Purge les incidents de plus de 30 jours (durée annoncée dans la
+        /// politique de confidentialité). C'est de la donnée de diagnostic : passé
+        /// un mois, la version de l'application a changé et la trace ne sert plus.
+        ///
+        /// <para>Au démarrage plutôt que par un cron dédié, comme pour les traces
+        /// d'idempotence : le volume est minuscule et l'API redémarre à chaque
+        /// déploiement.</para>
+        /// </summary>
+        private async Task PurgeStaleIncidentsAsync()
+        {
+            try
+            {
+                var cutoff = DateTime.UtcNow.AddDays(-_observability.IncidentRetentionDays);
+                var removed = await _context.ClientIncidents
+                    .Where(i => i.CreatedAt < cutoff)
+                    .ExecuteDeleteAsync();
+                if (removed > 0)
+                {
+                    _logger.LogInformation(
+                        "[observability] {Count} incident(s) de plus de {Days} jours purgé(s).",
+                        removed, _observability.IncidentRetentionDays);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[observability] Purge des incidents impossible.");
+            }
         }
 
         /// <summary>
