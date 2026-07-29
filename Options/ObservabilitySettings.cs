@@ -54,5 +54,46 @@ namespace Idara.API.Options
         /// disque même si des dizaines d'appareils rencontrent le même bug.
         /// </summary>
         public int MaxIncidentsPerDay { get; set; } = 500;
+
+        // ================= Alerte par e-mail =================
+        //
+        // Raison d'être : le public d'Idara (directeurs de daara, parents,
+        // donateurs) ne remonte pas les problèmes. Il abandonne l'écran, ou
+        // appelle sans savoir dire ce qui s'est passé — et beaucoup lisent le
+        // français avec difficulté. Attendre qu'il nous dicte un code, c'est
+        // n'être prévenu que d'une fraction des incidents.
+        //
+        // Avec l'alerte, le sens de la démarche s'inverse : ce n'est plus lui qui
+        // nous contacte, c'est nous qui l'appelons — l'e-mail contient son
+        // numéro de téléphone.
+
+        /// <summary>Coupe toutes les alertes d'un coup si besoin.</summary>
+        public bool AlertsEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Destinataire. Vide = repli automatique sur les comptes SuperAdmin de
+        /// la base, puis sur <c>SuperAdmin:Email</c>. Aucune configuration n'est
+        /// donc obligatoire pour que les alertes fonctionnent.
+        /// </summary>
+        public string AlertEmail { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Fenêtre de regroupement : un même défaut (même écran, même type
+        /// d'erreur) n'envoie qu'un seul e-mail par tranche de N minutes.
+        ///
+        /// <para>Sans ce regroupement, un bug touchant vingt appareils
+        /// produirait vingt e-mails — et l'emballement du 2026-07-02 (§111) a
+        /// montré que ce n'est pas théorique. L'e-mail indique le nombre
+        /// d'utilisateurs concernés, ce qui est plus utile que vingt copies.</para>
+        /// </summary>
+        public int AlertGroupingMinutes { get; set; } = 60;
+
+        /// <summary>
+        /// Plafond d'e-mails par jour. Garde-fou de dernier recours : un compte
+        /// Gmail plafonne de toute façon les envois, et se faire limiter par
+        /// Google ferait perdre AUSSI les e-mails métier (identifiants,
+        /// factures d'abonnement).
+        /// </summary>
+        public int MaxAlertEmailsPerDay { get; set; } = 20;
     }
 }

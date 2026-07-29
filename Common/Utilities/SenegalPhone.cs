@@ -43,5 +43,33 @@ namespace Idara.API.Common.Utilities
 
         /// <summary>Vrai si <paramref name="raw"/> est un mobile SN normalisable.</summary>
         public static bool IsValid(string? raw) => Normalize(raw) != null;
+
+        /// <summary>
+        /// Numéro lisible par un humain : <c>+221771234567</c> → <c>77 123 45 67</c>.
+        ///
+        /// <para>L'indicatif est implicite au Sénégal : il coûte de la largeur de
+        /// colonne dans un export et gêne la lecture quand on veut simplement
+        /// composer le numéro. Un numéro non reconnu est renvoyé tel quel plutôt
+        /// que masqué — mieux vaut un format inattendu qu'une information perdue.</para>
+        ///
+        /// <para><b>Source unique de l'affichage</b> : cette logique existait en
+        /// double (un helper privé dans le service d'export PDF, une copie dans le
+        /// service d'alerte). Deux copies finissent toujours par diverger, dès
+        /// qu'on corrige un cas particulier dans l'une seulement.</para>
+        /// </summary>
+        /// <param name="fallback">Rendu quand il n'y a pas de numéro (« - » dans un
+        /// tableau PDF, chaîne vide pour omettre une ligne d'e-mail).</param>
+        public static string ToDisplay(string? raw, string fallback = "")
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return fallback;
+            var digits = new string(raw.Where(char.IsDigit).ToArray());
+            // « 00221… » comme forme internationale : accepté par Normalize, donc
+            // il peut se trouver dans un champ saisi à la main (téléphone du père,
+            // d'un bénéficiaire) qui n'est pas passé par la normalisation.
+            if (digits.StartsWith("00221")) digits = digits[2..];
+            if (digits.StartsWith("221") && digits.Length == 12) digits = digits[3..];
+            if (digits.Length != 9) return raw.Trim();
+            return $"{digits[..2]} {digits[2..5]} {digits[5..7]} {digits[7..]}";
+        }
     }
 }

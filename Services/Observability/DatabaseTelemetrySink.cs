@@ -100,6 +100,7 @@ namespace Idara.API.Services.Observability
 
             _db.ClientIncidents.Add(incident);
             await _db.SaveChangesAsync(ct);
+            result.IncidentId = incident.Id;
 
             // Journalisé en Warning : c'est ce qui rendra l'incident visible dans
             // la console (donc dans journalctl) en plus du fichier, sans avoir à

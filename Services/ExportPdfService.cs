@@ -204,17 +204,12 @@ namespace Idara.API.Services
                 .PaddingVertical(3).PaddingHorizontal(4).ShowEntire();
 
         /// <summary>
-        /// Numéro lisible : « +221771234567 » → « 77 123 45 67 » (l'indicatif est
-        /// implicite au Sénégal et coûte de la largeur de colonne).
+        /// Numéro lisible : « +221771234567 » → « 77 123 45 67 ». Délègue à
+        /// <see cref="Common.Utilities.SenegalPhone.ToDisplay"/>, source unique de
+        /// ce formatage (la logique était dupliquée avec le service d'alerte).
         /// </summary>
-        private static string FrPhone(string? phone)
-        {
-            if (string.IsNullOrWhiteSpace(phone)) return "-";
-            var digits = new string(phone.Where(char.IsDigit).ToArray());
-            if (digits.StartsWith("221") && digits.Length == 12) digits = digits[3..];
-            if (digits.Length != 9) return phone.Trim();
-            return $"{digits[..2]} {digits[2..5]} {digits[5..7]} {digits[7..]}";
-        }
+        private static string FrPhone(string? phone) =>
+            Common.Utilities.SenegalPhone.ToDisplay(phone, fallback: "-");
 
         private static void Counter(RowDescriptor row, string label, int count, string color)
         {

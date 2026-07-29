@@ -153,6 +153,12 @@ builder.Services.AddScoped<Idara.API.Services.Observability.ITelemetrySink,
 // Recherche dans les fichiers de journal (sans état, sans DbContext) : singleton.
 builder.Services.AddSingleton<Idara.API.Services.Observability.IServerLogSearchService,
     Idara.API.Services.Observability.ServerLogSearchService>();
+// Alerte e-mail au SuperAdmin dès qu'un utilisateur rencontre un problème. C'est
+// ce qui permet à l'utilisateur de n'avoir RIEN à faire — l'e-mail porte son
+// numéro de téléphone, donc c'est nous qui le rappelons. Singleton : il travaille
+// en tâche de fond, avec son propre périmètre d'injection.
+builder.Services.AddSingleton<Idara.API.Services.Observability.IIncidentAlertService,
+    Idara.API.Services.Observability.IncidentAlertService>();
 
 // Cache mémoire : sert au rate-limiting applicatif (anti brute-force login /
 // code à 6 chiffres / abus SMS). Mono-instance → en mémoire suffit.

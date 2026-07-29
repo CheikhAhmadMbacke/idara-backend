@@ -48,6 +48,13 @@ namespace Idara.API.DTOs.Observability
         /// problème est réel, c'est seulement la énième copie du même rapport.
         /// </summary>
         public bool Stored { get; set; }
+
+        /// <summary>
+        /// Identifiant en base, pour déclencher l'alerte e-mail après coup.
+        /// <b>Usage interne au serveur</b> : sans intérêt pour l'application, qui
+        /// n'affiche que le code.
+        /// </summary>
+        public int? IncidentId { get; set; }
     }
 
     /// <summary>

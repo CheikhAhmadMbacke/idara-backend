@@ -31,17 +31,20 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly ITelemetrySink _sink;
         private readonly IServerLogSearchService _logs;
+        private readonly IIncidentAlertService _alerts;
         private readonly ILogger<ObservabilityController> _logger;
 
         public ObservabilityController(
             AppDbContext context,
             ITelemetrySink sink,
             IServerLogSearchService logs,
+            IIncidentAlertService alerts,
             ILogger<ObservabilityController> logger)
         {
             _context = context;
             _sink = sink;
             _logs = logs;
+            _alerts = alerts;
             _logger = logger;
         }
 
@@ -72,6 +75,16 @@ namespace Idara.API.Controllers
                 User.GetSchoolId(),
                 User.GetRole() ?? string.Empty,
                 HttpContext.RequestAborted);
+
+            // Alerte e-mail au SuperAdmin, APRÈS l'écriture et sans attendre son
+            // envoi (motif §42/§57 : un envoi d'e-mail ne doit jamais retarder ni
+            // faire échouer ce qui est déjà enregistré). C'est cette alerte qui
+            // permet à l'utilisateur de n'avoir RIEN à faire : ni copier un code,
+            // ni écrire, ni nous appeler — l'e-mail contient son numéro.
+            if (result.Stored && result.IncidentId != null)
+            {
+                _alerts.QueueAlert(result.IncidentId.Value);
+            }
 
             // Toujours 200, même quand le plafond est atteint : l'application ne
             // doit rien dire de plus à l'utilisateur que « c'est envoyé ». Son

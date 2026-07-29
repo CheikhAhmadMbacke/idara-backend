@@ -133,6 +133,10 @@ namespace Idara.API.Data
                 .HasIndex(i => i.SchoolId);
             modelBuilder.Entity<ClientIncident>()
                 .HasIndex(i => i.RequestTrace);
+            // Sert au regroupement des alertes : « a-t-on déjà prévenu pour ce
+            // défaut dans la dernière heure ? » et au plafond journalier.
+            modelBuilder.Entity<ClientIncident>()
+                .HasIndex(i => i.AlertedAt);
 
             modelBuilder.Entity<ClientIncident>().Property(i => i.Code).HasMaxLength(20);
             modelBuilder.Entity<ClientIncident>().Property(i => i.Role).HasMaxLength(30);

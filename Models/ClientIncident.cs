@@ -106,6 +106,19 @@ namespace Idara.API.Models
         /// <summary>Marqué comme traité par le SuperAdmin (simple confort de tri).</summary>
         public bool IsResolved { get; set; }
 
+        /// <summary>
+        /// Moment où une alerte par e-mail a été envoyée pour cet incident.
+        ///
+        /// <para><b>Pourquoi en base et pas dans un cache mémoire.</b> C'est cette
+        /// colonne qui empêche l'envoi de vingt e-mails pour un même défaut : on
+        /// vérifie qu'aucun incident de la même signature n'a été alerté dans
+        /// l'heure. Un compteur en mémoire serait remis à zéro à chaque
+        /// déploiement (§92), et un déploiement est justement ce qui suit la
+        /// découverte d'un bug — le moment où le risque de rafale est le plus
+        /// grand.</para>
+        /// </summary>
+        public DateTime? AlertedAt { get; set; }
+
         public User? User { get; set; }
         public School? School { get; set; }
     }

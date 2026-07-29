@@ -212,6 +212,141 @@ namespace Idara.API.Services
             return SendAsync(toEmail, subject, body, isHtml: true);
         }
 
+        public Task SendIncidentAlertEmailAsync(
+            string toEmail, DTOs.Observability.IncidentAlertEmail a)
+        {
+            var (subject, body) = BuildIncidentAlert(a);
+            return SendAsync(toEmail, subject, body, isHtml: true);
+        }
+
+        /// <summary>
+        /// Compose l'alerte, séparément de son envoi.
+        ///
+        /// <para><b>Public et statique exprès</b> : un e-mail dont le contenu n'est
+        /// vérifiable qu'en l'envoyant réellement ne se vérifie jamais. Ici on
+        /// peut contrôler la mise en page et l'échappement sur des données
+        /// hostiles sans toucher au serveur SMTP — même raisonnement que pour les
+        /// PDF, rendus en image avant d'être crus (§116).</para>
+        /// </summary>
+        public static (string Subject, string Body) BuildIncidentAlert(
+            DTOs.Observability.IncidentAlertEmail a)
+        {
+            // Le sujet doit se lire ENTIER dans la liste des e-mails, sur un
+            // téléphone : c'est là qu'on décide si on ouvre tout de suite. D'où
+            // l'ordre « qui · où · quoi », le plus discriminant d'abord.
+            var scope = a.SimilarLast24h > 1 ? $" ×{a.SimilarLast24h}" : string.Empty;
+            // Repli sur la personne quand il n'y a pas d'école : un compte
+            // SuperAdmin ou donateur n'est rattaché à aucun daara, et le sujet
+            // donnait alors « [Idara] — — /students/new », qui n'apprend rien.
+            var who = a.SchoolName is { Length: > 0 } and not "—"
+                ? a.SchoolName
+                : (string.IsNullOrWhiteSpace(a.PersonName) ? "compte inconnu" : a.PersonName);
+            var subject = $"[Idara{scope}] {Trim(who, 28)} — {Trim(a.Route, 24)} — {a.Code}";
+
+            var rows = new System.Text.StringBuilder();
+            void Row(string label, string? value, bool strong = false)
+            {
+                if (string.IsNullOrWhiteSpace(value)) return;
+                var style = strong ? "font-weight:bold;font-size:15px" : "";
+                rows.Append(
+                    "<tr>" +
+                    $"<td style=\"padding:7px 10px;border-bottom:1px solid #E2E8F0;color:#64748B;white-space:nowrap\">{Esc(label)}</td>" +
+                    $"<td style=\"padding:7px 10px;border-bottom:1px solid #E2E8F0;{style}\">{Esc(value!)}</td>" +
+                    "</tr>");
+            }
+
+            // Le téléphone d'abord, en gras : c'est l'action à mener, pas un
+            // détail de contexte. L'utilisateur, lui, n'a rien à faire.
+            Row("Téléphone", a.PhoneNumber, strong: true);
+            Row("Personne", $"{a.PersonName}{(string.IsNullOrWhiteSpace(a.RoleLabel) ? "" : $" · {a.RoleLabel}")}");
+            Row("Daara", a.SchoolName);
+            Row("Écran", a.Route);
+            Row("Quand", a.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy à HH:mm"));
+            // Pas de ligne « Type » : l'en-tête de l'e-mail l'affiche déjà, et
+            // une information répétée deux fois se lit moins bien qu'une fois.
+            Row("Application", $"{a.Platform} · v{a.AppVersion}");
+            Row("Appareil", a.Device);
+            Row("Langue", a.LocaleCode == "ar" ? "arabe" : "français");
+            Row("Code", a.Code);
+            Row("Trace serveur", a.RequestTrace);
+
+            var body = new System.Text.StringBuilder();
+            body.Append("<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:auto\">");
+            // Le titre s'accorde au nombre de personnes touchées : annoncer
+            // « un utilisateur » au-dessus d'un bandeau disant « 14 personnes »
+            // ferait douter du reste de l'e-mail.
+            var heading = a.SimilarLast24h > 1
+                ? $"{a.SimilarLast24h} utilisateurs ont rencontré un problème"
+                : "Un utilisateur a rencontré un problème";
+            // Pas d'échappement sur `heading` : il est composé de nos propres
+            // littéraux et d'un entier. Échapper un libellé interne ne protège de
+            // rien et transforme les accents en entités numériques, ce qui rend le
+            // HTML pénible à relire quand on débogue un e-mail.
+            body.Append("<div style=\"background:#0B744D;color:#fff;padding:14px 16px;border-radius:8px 8px 0 0\">"
+                + $"<div style=\"font-size:17px;font-weight:bold\">{heading}</div>"
+                + $"<div style=\"font-size:13px;opacity:.85;margin-top:2px\">{Esc(a.KindLabel)}</div></div>");
+            body.Append("<div style=\"border:1px solid #E2E8F0;border-top:none;border-radius:0 0 8px 8px;padding:16px\">");
+
+            if (a.SimilarLast24h > 1)
+            {
+                body.Append("<div style=\"background:#FEF3C7;border-left:4px solid #F59E0B;padding:10px 12px;"
+                    + "margin-bottom:14px;font-size:14px\"><b>"
+                    + $"{a.SimilarLast24h} personnes</b> ont rencontré le même problème depuis 24 h.</div>");
+            }
+
+            if (!string.IsNullOrWhiteSpace(a.UserComment))
+            {
+                // Mis en avant : c'est la seule partie écrite par un humain, et
+                // souvent la plus parlante.
+                body.Append("<div style=\"background:#F0F9FF;border-left:4px solid #0284C7;padding:10px 12px;"
+                    + "margin-bottom:14px;font-size:14px\"><div style=\"color:#64748B;font-size:12px\">"
+                    + "Ce que dit l'utilisateur</div>"
+                    + $"<div style=\"margin-top:4px\">{Esc(a.UserComment!)}</div></div>");
+            }
+
+            if (!string.IsNullOrWhiteSpace(a.Message))
+            {
+                body.Append($"<p style=\"font-size:14px;margin:0 0 14px\"><b>{Esc(a.Message)}</b>"
+                    + (string.IsNullOrWhiteSpace(a.ExceptionType)
+                        ? string.Empty
+                        : $"<br><span style=\"color:#94A3B8;font-size:12px\">{Esc(a.ExceptionType)}</span>")
+                    + "</p>");
+            }
+
+            body.Append($"<table style=\"border-collapse:collapse;width:100%;font-size:13px\">{rows}</table>");
+
+            if (!string.IsNullOrWhiteSpace(a.StackTrace))
+            {
+                // Tronquée à 2 500 caractères : les premières lignes situent le
+                // défaut, le reste est dans la page SuperAdmin. Un e-mail
+                // illisible sur téléphone ne sert personne.
+                body.Append("<div style=\"margin-top:14px\"><div style=\"color:#64748B;font-size:12px;"
+                    + "margin-bottom:4px\">Pile d'appels</div>"
+                    + "<pre style=\"background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:10px;"
+                    + "font-size:11px;overflow-x:auto;white-space:pre-wrap;margin:0\">"
+                    + Esc(Trim(a.StackTrace, 2500)) + "</pre></div>");
+            }
+
+            body.Append("<p style=\"color:#94A3B8;font-size:12px;margin-top:16px\">"
+                + $"Retrouvez le détail complet dans Idara → SuperAdmin → Incidents et journaux, "
+                + $"en recherchant <b>{Esc(a.Code)}</b>.<br>"
+                + "L'utilisateur n'a rien eu à faire pour envoyer ce rapport.</p>");
+            body.Append("</div></div>");
+
+            return (subject, body.ToString());
+        }
+
+        /// <summary>
+        /// Échappement HTML. Indispensable : le message d'erreur et le
+        /// commentaire de l'utilisateur sont du texte non contrôlé, qui casserait
+        /// la mise en page (ou pire) s'il contenait des chevrons.
+        /// </summary>
+        private static string Esc(string value) =>
+            System.Net.WebUtility.HtmlEncode(value);
+
+        private static string Trim(string value, int max) =>
+            string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..max] + "…";
+
         private async Task SendAsync(string toEmail, string subject, string body, bool isHtml)
         {
             try
