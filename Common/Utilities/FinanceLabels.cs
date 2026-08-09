@@ -8,8 +8,14 @@ namespace Idara.API.Common.Utilities
     /// ces mêmes enums côté client via i18n FR/AR — ici on est dans un document
     /// figé, en français, comme tous les autres PDF d'Idara.
     ///
-    /// Source UNIQUE : si un libellé change, il change partout. Volontairement
-    /// sans accents, pour rester homogène avec les PDF existants.
+    /// Source UNIQUE : si un libellé change, il change partout.
+    ///
+    /// ⚠️ Ces libellés étaient volontairement SANS accents, par prudence héritée
+    /// des débuts du projet. C'était inutile : Lato dessine parfaitement les
+    /// accents — le reçu de paiement en utilise en production depuis mai 2026 —
+    /// et le résultat était qu'un enseignant recevait un document écrit
+    /// « Recu de virement · Effectue · Genere le 8 aout ». Rétablis le 2026-08-08
+    /// après vérification du rendu, pas par supposition.
     /// </summary>
     public static class FinanceLabels
     {
@@ -23,7 +29,7 @@ namespace Idara.API.Common.Utilities
 
         /// <summary>Titre du document, complété si l'export a été plafonné.</summary>
         public static string ExportTitle(string baseTitle, int rowCount) =>
-            rowCount >= MaxExportRows ? $"{baseTitle} ({MaxExportRows} plus recentes)" : baseTitle;
+            rowCount >= MaxExportRows ? $"{baseTitle} ({MaxExportRows} plus récentes)" : baseTitle;
 
         public static string Operator(PaymentOperator op) => op switch
         {
@@ -34,21 +40,21 @@ namespace Idara.API.Common.Utilities
 
         public static string PaymentStatus(Enums.PaymentStatus status) => status switch
         {
-            Enums.PaymentStatus.Completed => "Reussi",
+            Enums.PaymentStatus.Completed => "Réussi",
             Enums.PaymentStatus.Pending => "En cours",
-            Enums.PaymentStatus.Failed => "Echoue",
-            Enums.PaymentStatus.Cancelled => "Annule",
-            Enums.PaymentStatus.Expired => "Expire",
+            Enums.PaymentStatus.Failed => "Échoué",
+            Enums.PaymentStatus.Cancelled => "Annulé",
+            Enums.PaymentStatus.Expired => "Expiré",
             _ => status.ToString()
         };
 
         public static string WithdrawalStatus(Enums.WithdrawalStatus status) => status switch
         {
-            Enums.WithdrawalStatus.Completed => "Effectue",
+            Enums.WithdrawalStatus.Completed => "Effectué",
             Enums.WithdrawalStatus.Initiated => "En cours",
-            Enums.WithdrawalStatus.UnderVerification => "En verification",
-            Enums.WithdrawalStatus.Failed => "Echoue",
-            Enums.WithdrawalStatus.Cancelled => "Annule",
+            Enums.WithdrawalStatus.UnderVerification => "En vérification",
+            Enums.WithdrawalStatus.Failed => "Échoué",
+            Enums.WithdrawalStatus.Cancelled => "Annulé",
             _ => status.ToString()
         };
 
@@ -65,10 +71,10 @@ namespace Idara.API.Common.Utilities
                 Enums.TransferCategory.Supplier => "Achat / fournisseur",
                 Enums.TransferCategory.Utilities => "Factures et abonnements",
                 Enums.TransferCategory.Food => "Nourriture / repas",
-                Enums.TransferCategory.Equipment => "Materiel et equipement",
+                Enums.TransferCategory.Equipment => "Matériel et équipement",
                 Enums.TransferCategory.Maintenance => "Travaux et entretien",
                 Enums.TransferCategory.Transport => "Transport",
-                Enums.TransferCategory.Health => "Sante / soins",
+                Enums.TransferCategory.Health => "Santé / soins",
                 Enums.TransferCategory.AdminFees => "Frais administratifs",
                 Enums.TransferCategory.Other => "Autre",
                 _ => "Retrait"
@@ -78,8 +84,8 @@ namespace Idara.API.Common.Utilities
         /// <summary>Nature d'une ligne du wallet école (badge de l'historique).</summary>
         public static string WalletSource(Enums.WalletSource source) => source switch
         {
-            Enums.WalletSource.Payment => "Paiement recu",
-            Enums.WalletSource.Donation => "Don recu",
+            Enums.WalletSource.Payment => "Paiement reçu",
+            Enums.WalletSource.Donation => "Don reçu",
             Enums.WalletSource.Topup => "Recharge du wallet",
             Enums.WalletSource.Subscription => "Abonnement Idara",
             Enums.WalletSource.Withdrawal => "Retrait / virement",
@@ -90,10 +96,10 @@ namespace Idara.API.Common.Utilities
         /// <summary>Type de mouvement wallet, précisé quand il ne va pas de soi.</summary>
         public static string WalletTransactionType(Enums.WalletTransactionType type) => type switch
         {
-            Enums.WalletTransactionType.Credit => "Credit",
-            Enums.WalletTransactionType.Debit => "Debit",
-            Enums.WalletTransactionType.Reservation => "Montant reserve",
-            Enums.WalletTransactionType.Release => "Montant restitue",
+            Enums.WalletTransactionType.Credit => "Crédit",
+            Enums.WalletTransactionType.Debit => "Débit",
+            Enums.WalletTransactionType.Reservation => "Montant réservé",
+            Enums.WalletTransactionType.Release => "Montant restitué",
             Enums.WalletTransactionType.Adjustment => "Correction",
             _ => type.ToString()
         };
@@ -102,7 +108,7 @@ namespace Idara.API.Common.Utilities
         {
             Enums.PaymentPurpose.WalletTopup => "Recharge du wallet",
             Enums.PaymentPurpose.Donation => "Don",
-            _ => "Paiement mensualite"
+            _ => "Paiement mensualité"
         };
     }
 }

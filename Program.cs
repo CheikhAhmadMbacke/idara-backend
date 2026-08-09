@@ -33,6 +33,19 @@ var builder = WebApplication.CreateBuilder(args);
 // journal définitif une fois le conteneur d'injection prêt, car l'enrichisseur a
 // besoin d'accéder au contexte HTTP.
 Log.Logger = SerilogSetup.CreateBootstrapLogger();
+
+// Polices des PDF : Lato (embarquée par QuestPDF) + repli arabe Noto Naskh.
+// Enregistrée AVANT toute génération de document — sans elle, un nom de daara en
+// arabe s'imprime en carrés (constaté en prod le 2026-08-08 sur un reçu de
+// virement). Best-effort : un fichier manquant journalise un avertissement mais
+// ne bloque jamais le démarrage.
+using (var pdfFontLoggerFactory = LoggerFactory.Create(b => b.AddSerilog(Log.Logger)))
+{
+    Idara.API.Common.Utilities.PdfFonts.Register(
+        builder.Environment.ContentRootPath,
+        pdfFontLoggerFactory.CreateLogger("Idara.API.Pdf"));
+}
+
 builder.Services.AddHttpContextAccessor();
 builder.Host.UseSerilog((context, services, config) =>
     SerilogSetup.Configure(

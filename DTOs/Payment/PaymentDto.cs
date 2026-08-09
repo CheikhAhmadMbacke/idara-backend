@@ -11,6 +11,15 @@ namespace Idara.API.DTOs.Payment
         public int Id { get; set; }
         public int SchoolId { get; set; }
         public string? SchoolName { get; set; }
+
+        /// <summary>
+        /// Référence Idara de l'encaissement (« PAY-000042 »). Calculée côté
+        /// serveur pour que le format ne soit défini qu'à UN endroit : une copie
+        /// du gabarit dans l'app finirait par diverger d'une version à l'autre.
+        /// </summary>
+        public string Reference { get; set; } = string.Empty;
+        /// <summary>Nom du daara en arabe (affiché sous le nom français). Null si absent.</summary>
+        public string? SchoolNameAr { get; set; }
         /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher sur chaque ligne côté parent.</summary>
         public string? SchoolLogoUrl { get; set; }
 

@@ -1,15 +1,24 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Common.Validation;
 
 namespace Idara.API.DTOs.Auth
 {
     /// <summary>
     /// Soumission des informations KYC de l'école (documents transmis en base64).
     /// </summary>
-    public class SubmitKycRequest
+    public class SubmitKycRequest : IValidatableObject
     {
-        [Required(ErrorMessage = "Le nom de l'école est requis.")]
-        [StringLength(200, MinimumLength = 2)]
-        public string SchoolName { get; set; } = string.Empty;
+        /// <summary>
+        /// Nom en français. Plus obligatoire seul : la règle est « au moins l'un
+        /// des deux noms » (cf. <see cref="SchoolNameRule"/>), certains daara
+        /// n'ayant de nom officiel qu'en arabe.
+        /// </summary>
+        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en français doit faire au moins 2 caractères.")]
+        public string? SchoolName { get; set; }
+
+        /// <summary>Nom en arabe. Même règle que <see cref="SchoolName"/>.</summary>
+        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en arabe doit faire au moins 2 caractères.")]
+        public string? SchoolNameAr { get; set; }
 
         [Required(ErrorMessage = "L'adresse de l'école est requise.")]
         [StringLength(300)]
@@ -33,5 +42,9 @@ namespace Idara.API.DTOs.Auth
         public List<string> LegalDocumentsNames { get; set; } = new();
         public List<string> RepresentativeDocumentsBase64 { get; set; } = new();
         public List<string> RepresentativeDocumentsNames { get; set; } = new();
+
+        /// <summary>Le daara doit porter un nom dans au moins une écriture.</summary>
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext) =>
+            SchoolNameRule.Validate(SchoolName, SchoolNameAr, nameof(SchoolName), nameof(SchoolNameAr));
     }
 }

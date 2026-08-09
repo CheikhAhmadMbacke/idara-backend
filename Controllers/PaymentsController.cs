@@ -145,6 +145,7 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<PaymentDto>.Ok(new PaymentDto
             {
                 Id = p.Id,
+                Reference = IdaraReference.Payment(p.Id),
                 SchoolId = p.SchoolId,
                 StudentId = p.StudentId,
                 StudentFirstName = p.Student?.FirstName,

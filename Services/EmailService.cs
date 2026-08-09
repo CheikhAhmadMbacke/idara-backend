@@ -97,6 +97,15 @@ namespace Idara.API.Services
         private static (string subject, string body, bool isHtml) _buildSchoolValidation(
             string lang, string schoolName, bool isValidated, string? rejectionReason)
         {
+            // Le nom de l'école et le motif de rejet sont SAISIS (par l'école,
+            // par le SuperAdmin) et atterrissent dans du HTML : sans échappement,
+            // un nom contenant des balises injecte du contenu arbitraire dans un
+            // e-mail qui porte l'identité d'Idara. L'e-mail de facture d'abonnement
+            // encodait déjà — l'oubli ici était une incohérence, pas un choix.
+            schoolName = System.Net.WebUtility.HtmlEncode(schoolName);
+            rejectionReason = rejectionReason is null
+                ? null
+                : System.Net.WebUtility.HtmlEncode(rejectionReason);
             if (lang == "ar")
             {
                 if (isValidated)
@@ -150,6 +159,10 @@ namespace Idara.API.Services
         private static (string subject, string body, bool isHtml) _buildInvitation(
             string lang, string toEmail, string fullName, string schoolName, string function, string temporaryPassword)
         {
+            // Mêmes valeurs saisies, même risque : on encode avant d'interpoler.
+            schoolName = System.Net.WebUtility.HtmlEncode(schoolName);
+            fullName = System.Net.WebUtility.HtmlEncode(fullName);
+            function = System.Net.WebUtility.HtmlEncode(function);
             if (lang == "ar")
             {
                 return (

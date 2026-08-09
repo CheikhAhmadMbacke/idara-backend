@@ -6,7 +6,23 @@ namespace Idara.API.Models
     {
         public int Id { get; set; }
         public KycStatus KycStatus { get; set; } = KycStatus.PendingSubmission;
+
+        /// <summary>
+        /// Nom du daara en français. Nullable comme <see cref="NameAr"/> : la
+        /// règle métier est « au moins l'un des deux », vérifiée dans les DTO de
+        /// saisie (KYC + édition), pas au niveau du schéma — une contrainte DB
+        /// portant sur deux colonnes bloquerait les écoles existantes créées
+        /// avant l'ajout du nom arabe.
+        /// </summary>
         public string? Name { get; set; }
+
+        /// <summary>
+        /// Nom du daara en arabe. Optionnel. Affiché SOUS le nom français (jamais
+        /// concaténé sur la même ligne, cf. <see cref="Common.Utilities.SchoolDisplayName"/>) ;
+        /// devient le nom principal si le nom français est absent.
+        /// </summary>
+        public string? NameAr { get; set; }
+
         public string? Address { get; set; }
         public string? PhoneNumber { get; set; }
         public string? LegalDocumentsUrl { get; set; }

@@ -221,6 +221,7 @@ namespace Idara.API.Services
             var payment = await _context.Payments
                 .Include(p => p.Student)
                 .Include(p => p.Donor)
+                .Include(p => p.Guardian)
                 .Include(p => p.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
                 .FirstOrDefaultAsync(p => p.Id == paymentId, ct);
             if (payment == null || payment.Status != PaymentStatus.Completed)
@@ -257,7 +258,7 @@ namespace Idara.API.Services
                 if (school0 != null)
                 {
                     var pdfPath = await _receiptPdf.GenerateAsync(
-                        payment, school0, payment.Student, invoice, payment.Donor, consolidatedLines);
+                        payment, school0, payment.Student, invoice, payment.Donor, consolidatedLines, payment.Guardian);
                     await _context.Payments
                         .Where(p => p.Id == payment.Id)
                         .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, pdfPath), ct);

@@ -236,6 +236,7 @@ namespace Idara.API.Controllers
         {
             SchoolId = s.Id,
             Name = s.Name ?? string.Empty,
+            NameAr = s.NameAr,
             LogoUrl = s.LogoUrl,
             WelcomeSubtitle = s.WelcomeSubtitle,
             CoverColor = s.CoverColor,
@@ -276,7 +277,11 @@ namespace Idara.API.Controllers
         /// <summary>Applique les champs éditables d'une école depuis le DTO (jamais l'email).</summary>
         private static void ApplySchoolFields(SchoolModel school, UpdateSchoolDto dto)
         {
-            school.Name = dto.Name.Trim();
+            // Nom : au moins l'un des deux est garanti non vide par la validation du
+            // DTO (SchoolNameRule) — on peut donc les normaliser tous les deux sans
+            // risque de laisser le daara sans aucun nom.
+            school.Name = string.IsNullOrWhiteSpace(dto.Name) ? null : dto.Name.Trim();
+            school.NameAr = string.IsNullOrWhiteSpace(dto.NameAr) ? null : dto.NameAr.Trim();
             school.Address = string.IsNullOrWhiteSpace(dto.Address) ? null : dto.Address.Trim();
             school.PhoneNumber = string.IsNullOrWhiteSpace(dto.PhoneNumber) ? null : dto.PhoneNumber.Trim();
             school.RepresentativeFirstName = string.IsNullOrWhiteSpace(dto.RepresentativeFirstName) ? null : dto.RepresentativeFirstName.Trim();
@@ -660,6 +665,7 @@ namespace Idara.API.Controllers
         {
             Id = school.Id,
             Name = school.Name ?? string.Empty,
+            NameAr = school.NameAr,
             Address = school.Address ?? string.Empty,
             PhoneNumber = school.PhoneNumber ?? string.Empty,
             LegalDocumentsUrls = school.LegalDocumentsUrl?

@@ -421,7 +421,8 @@ namespace Idara.API.Controllers
                 if (user.School.KycStatus != KycStatus.Rejected)
                     return BadRequest(ApiResponse<bool>.Fail("Vous avez déjà soumis les informations de votre école."));
 
-                user.School.Name = request.SchoolName;
+                user.School.Name = Trimmed(request.SchoolName);
+                user.School.NameAr = Trimmed(request.SchoolNameAr);
                 user.School.Address = request.SchoolAddress;
                 user.School.PhoneNumber = request.SchoolPhone;
                 user.School.LegalDocumentsUrl = legalUrls.Any() ? string.Join(",", legalUrls) : user.School.LegalDocumentsUrl;
@@ -439,7 +440,8 @@ namespace Idara.API.Controllers
             var school = new School
             {
                 KycStatus = KycStatus.Submitted,
-                Name = request.SchoolName,
+                Name = Trimmed(request.SchoolName),
+                NameAr = Trimmed(request.SchoolNameAr),
                 Address = request.SchoolAddress,
                 PhoneNumber = request.SchoolPhone,
                 LegalDocumentsUrl = legalUrls.Any() ? string.Join(",", legalUrls) : null,
@@ -895,6 +897,15 @@ namespace Idara.API.Controllers
             UserRoles.SchoolViewer => ("Observateur", "مُطّلِع"),
             _ => (role, role)
         };
+
+        /// <summary>
+        /// Champ texte optionnel normalisé : une chaîne vide ou faite d'espaces
+        /// devient null. Sans ça, un nom arabe laissé vide s'enregistrerait comme
+        /// chaîne vide et l'affichage bilingue croirait qu'un second nom existe
+        /// (ligne vide sous le titre).
+        /// </summary>
+        private static string? Trimmed(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
         /// <summary>Code à 6 chiffres (mot de passe initial des comptes téléphone).</summary>
         private static string SixDigitCode() =>

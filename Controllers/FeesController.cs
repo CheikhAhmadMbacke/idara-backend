@@ -964,10 +964,21 @@ namespace Idara.API.Controllers
         /// rouge — lu comme un échec par les écoles (retour terrain 2026-07-26).
         /// La couleur d'une transaction porte son STATUT, jamais son sens (gotcha §118).</para>
         /// </summary>
+        /// <param name="Reference">
+        /// Référence Idara de l'opération à l'origine du mouvement (« RET-000087 »,
+        /// « PAY-000042 »). Remplace <c>Note</c> — un libellé interne du type
+        /// « Réservation retrait #87 » — comme référence affichée : il ne permettait
+        /// de retrouver l'opération nulle part.
+        /// </param>
+        /// <param name="ProviderReference">
+        /// Référence du prestataire (décaissement SenePay, transaction SenePay).
+        /// Null tant que le prestataire ne l'a pas renvoyée. C'est ELLE qui permet
+        /// de rapprocher une ligne Idara d'une ligne du tableau de bord SenePay.
+        /// </param>
         private sealed record WalletTxRow(
             int Id, WalletTransactionType Type, WalletSource Source, long AmountFcfa, long BalanceAfter,
             WalletRelatedEntity RelatedEntity, int? RelatedId, string? Note, DateTime OccurredAt, string? Label,
-            string Status);
+            string Status, string? Reference, string? ProviderReference);
 
         /// <summary>
         /// Charge l'historique wallet visible d'une école (récent d'abord), libellés
@@ -1067,8 +1078,11 @@ namespace Idara.API.Controllers
             // nettoie l'historique EXISTANT sans migration (le libellé est calculé
             // à la lecture). Les catégories génériques (recharge, abonnement…) sont
             // laissées à null → traduites côté client selon `Source`.
+            // La RECHARGE est incluse ici (en plus du paiement et du don) : c'est
+            // aussi une ligne de `Payments`, donc elle a une référence prestataire
+            // à afficher. Elle n'a simplement pas de nom à résoudre.
             var payIds = recentRaw
-                .Where(t => t.Source == WalletSource.Payment || t.Source == WalletSource.Donation)
+                .Where(t => t.Source is WalletSource.Payment or WalletSource.Donation or WalletSource.Topup)
                 .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
             var payNames = await _context.Payments
                 .Where(p => payIds.Contains(p.Id))
@@ -1077,7 +1091,8 @@ namespace Idara.API.Controllers
                     p.Id,
                     Student = p.Student != null ? (p.Student.FirstName + " " + p.Student.LastName) : null,
                     Guardian = p.Guardian != null ? p.Guardian.FullName : null,
-                    Donor = p.Donor != null ? p.Donor.FullName : null
+                    Donor = p.Donor != null ? p.Donor.FullName : null,
+                    p.SenePayTransactionId
                 })
                 .ToDictionaryAsync(p => p.Id, ct);
 
@@ -1086,7 +1101,7 @@ namespace Idara.API.Controllers
                 .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
             var wNames = await _context.Withdrawals
                 .Where(w => wIds.Contains(w.Id))
-                .Select(w => new { w.Id, w.RecipientName, w.Status })
+                .Select(w => new { w.Id, w.RecipientName, w.Status, w.SenePayDisbursementId })
                 .ToDictionaryAsync(w => w.Id, ct);
 
             string? ResolveLabel(WalletSource source, int? relatedId)
@@ -1135,11 +1150,41 @@ namespace Idara.API.Controllers
                 };
             }
 
-            return recentRaw.Select(t => new WalletTxRow(
-                t.Id, t.Type, t.Source, t.AmountFcfa, t.BalanceAfter,
-                t.RelatedEntity, t.RelatedId, t.Note, t.OccurredAt,
-                ResolveLabel(t.Source, t.RelatedId),
-                ResolveStatus(t.Source, t.RelatedId))).ToList();
+            // Références affichées (§120bis) : celle d'Idara identifie la ligne dans
+            // NOTRE base, celle du prestataire la rapproche du tableau de bord
+            // SenePay. Les deux ensemble suppriment l'aller-retour de la
+            // réconciliation. Une ligne sans opération rattachée (ajustement manuel,
+            // prélèvement d'abonnement) n'a pas de référence : on n'en invente pas.
+            (string? Reference, string? Provider) ResolveReferences(WalletSource source, int? relatedId)
+            {
+                if (relatedId == null) return (null, null);
+                switch (source)
+                {
+                    case WalletSource.Payment:
+                    case WalletSource.Donation:
+                    case WalletSource.Topup:
+                        return payNames.TryGetValue(relatedId.Value, out var p)
+                            ? (IdaraReference.Payment(relatedId.Value), p.SenePayTransactionId)
+                            : (null, null);
+                    case WalletSource.Withdrawal:
+                        return wNames.TryGetValue(relatedId.Value, out var w)
+                            ? (IdaraReference.Withdrawal(relatedId.Value), w.SenePayDisbursementId)
+                            : (null, null);
+                    default:
+                        return (null, null);
+                }
+            }
+
+            return recentRaw.Select(t =>
+            {
+                var (reference, provider) = ResolveReferences(t.Source, t.RelatedId);
+                return new WalletTxRow(
+                    t.Id, t.Type, t.Source, t.AmountFcfa, t.BalanceAfter,
+                    t.RelatedEntity, t.RelatedId, t.Note, t.OccurredAt,
+                    ResolveLabel(t.Source, t.RelatedId),
+                    ResolveStatus(t.Source, t.RelatedId),
+                    reference, provider);
+            }).ToList();
         }
 
         /// <summary>
@@ -1172,15 +1217,19 @@ namespace Idara.API.Controllers
                 Method = t.Type is WalletTransactionType.Credit or WalletTransactionType.Debit
                     ? null
                     : FinanceLabels.WalletTransactionType(t.Type),
-                Reference = t.Note,
+                // La référence du prestataire d'abord (c'est elle qu'on rapproche
+                // du tableau de bord SenePay), à défaut la nôtre. `Note` est un
+                // libellé interne (« Réservation retrait #87 ») : il n'a jamais eu
+                // sa place sous l'étiquette « Référence ».
+                Reference = t.ProviderReference ?? t.Reference,
                 // Chaque information dans SA colonne (§120) : le statut réel d'un
                 // côté, le solde après opération de l'autre. Le PDF dit exactement
                 // ce que dit l'écran (§116 + §118).
                 Status = t.Status switch
                 {
                     "Pending" => "En cours",
-                    "Failed" => "Echoue",
-                    _ => "Reussi"
+                    "Failed" => "Échoué",
+                    _ => "Réussi"
                 },
                 Balance = $"{t.BalanceAfter:N0}",
                 AmountFcfa = t.AmountFcfa
@@ -1308,6 +1357,7 @@ namespace Idara.API.Controllers
             return Ok(payments.Select(p => new PaymentDto
             {
                 Id = p.Id,
+                Reference = IdaraReference.Payment(p.Id),
                 SchoolId = p.SchoolId,
                 StudentId = p.StudentId,
                 StudentFirstName = p.Student?.FirstName,

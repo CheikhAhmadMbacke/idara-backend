@@ -53,8 +53,14 @@ namespace Idara.API.Services
 
         public async Task<string> GenerateAsync(
             Payment payment, School school, Student? student, Invoice? invoice, User? donor = null,
-            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null)
+            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null, User? payer = null)
         {
+            // Contrepartie du paiement : le donateur pour un don, le parent payeur
+            // sinon. Son numéro figure sur le reçu comme celui du bénéficiaire
+            // figure sur un reçu de virement — c'est ce qui permet de rapprocher
+            // un encaissement d'une personne quand une famille conteste.
+            var counterparty = donor ?? payer;
+            var payerPhone = SenegalPhone.ToDisplay(counterparty?.PhoneNumber, fallback: string.Empty);
             var folder = Path.Combine(_env.WebRootPath, "uploads", "receipts");
             Directory.CreateDirectory(folder);
 
@@ -73,10 +79,10 @@ namespace Idara.API.Services
                         page.Size(PageSizes.A5);
                         page.Margin(1.5f, Unit.Centimetre);
                         page.PageColor(Colors.White);
-                        page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+                        page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary).Bilingual());
 
                         page.Header().Element(c => ComposeHeader(c, school, payment, isDonation, logoBytes));
-                        page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation, consolidatedLines));
+                        page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation, consolidatedLines, payerPhone));
                         page.Footer().Element(ComposeFooter);
                     });
                 });
@@ -131,7 +137,16 @@ namespace Idara.API.Services
                                 .Height(42).Image(logoBytes).FitArea();
                         left.RelativeItem().Column(c =>
                         {
-                            c.Item().Text(school.Name ?? "École").Bold().FontSize(13).FontColor(PrimaryHex);
+                            // Nom BILINGUE : français en titre, arabe juste en dessous,
+                            // chacun sur sa ligne et dans son propre sens de lecture
+                            // (jamais concaténés — cf. SchoolDisplayName).
+                            var name = SchoolDisplayName.From(school);
+                            c.Item().Text(name.Primary("École")).Bold().FontSize(13).FontColor(PrimaryHex);
+                            // AlignRight : sans lui, un nom arabe qui déborde d'une
+                            // ligne se replie collé à gauche et se lit à l'envers.
+                            if (name.Secondary is string secondary)
+                                c.Item().AlignRight().Text(secondary).SemiBold().FontSize(11.5f)
+                                    .FontColor(TextSecondary).DirectionFromRightToLeft();
                             if (!string.IsNullOrWhiteSpace(school.Address))
                                 c.Item().Text(school.Address).FontSize(8).FontColor(TextSecondary);
                             if (!string.IsNullOrWhiteSpace(school.PhoneNumber))
@@ -154,7 +169,7 @@ namespace Idara.API.Services
 
         private static void ComposeContent(
             IContainer container, Payment payment, Student? student, Invoice? invoice, User? donor, bool isDonation,
-            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines)
+            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines, string payerPhone)
         {
             var isConsolidated = consolidatedLines is { Count: > 0 };
             container.Column(col =>
@@ -173,7 +188,8 @@ namespace Idara.API.Services
                     });
                     col.Item().PaddingTop(8).Element(e => ComposeChildrenTable(e, consolidatedLines!));
                     col.Item().PaddingTop(10).Element(el => ComposeAmountsTable(el, payment));
-                    col.Item().PaddingTop(14).Text(t =>
+                    col.Item().PaddingTop(10).Element(el => ComposeReferences(el, payment));
+                    col.Item().PaddingTop(12).Text(t =>
                     {
                         t.Span("Document généré électroniquement, sans signature. ").FontSize(8).FontColor(TextSecondary);
                         if (payment.Status == PaymentStatus.Completed)
@@ -197,6 +213,12 @@ namespace Idara.API.Services
                             t.Span("Type : ").SemiBold().FontColor(TextSecondary);
                             t.Span(donor?.DonorType == DonorType.Organization ? "Organisation" : "Particulier");
                         });
+                        if (!string.IsNullOrWhiteSpace(payerPhone))
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Téléphone : ").SemiBold().FontColor(TextSecondary);
+                                t.Span(payerPhone);
+                            });
                         c.Item().Text(t =>
                         {
                             t.Span("Objet : ").SemiBold().FontColor(TextSecondary);
@@ -216,6 +238,16 @@ namespace Idara.API.Services
                             {
                                 t.Span("Matricule : ").SemiBold().FontColor(TextSecondary);
                                 t.Span(student.StudentNumber!);
+                            });
+                        }
+                        // Le numéro du payeur : la contrepartie d'un encaissement,
+                        // comme le numéro du bénéficiaire l'est d'un virement.
+                        if (!string.IsNullOrWhiteSpace(payerPhone))
+                        {
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Téléphone du payeur : ").SemiBold().FontColor(TextSecondary);
+                                t.Span(payerPhone);
                             });
                         }
                     }
@@ -247,8 +279,11 @@ namespace Idara.API.Services
                 // Tableau montants
                 col.Item().PaddingTop(10).Element(e => ComposeAmountsTable(e, payment));
 
+                // Références de réconciliation (la nôtre + celle du prestataire)
+                col.Item().PaddingTop(10).Element(e => ComposeReferences(e, payment));
+
                 // Mention finale
-                col.Item().PaddingTop(14).Text(t =>
+                col.Item().PaddingTop(12).Text(t =>
                 {
                     t.Span("Document généré électroniquement, sans signature. ").FontSize(8).FontColor(TextSecondary);
                     if (payment.Status == PaymentStatus.Completed)
@@ -342,10 +377,11 @@ namespace Idara.API.Services
                 table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
                     .Text(FrenchOperator(payment.Operator));
 
-                table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
-                    .Text("Référence SenePay");
-                table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
-                    .Text(payment.SenePayTransactionId ?? "—").FontSize(8);
+                // La référence SenePay n'est PLUS ici : dans la colonne de droite
+                // d'un tableau à deux colonnes sur une page A5, un jeton d'une
+                // quarantaine de caractères sans espace n'a pas la place de se
+                // replier proprement. Elle vit désormais dans le bloc « Références »
+                // en pleine largeur, avec la référence Idara (cf. ComposeReferences).
 
                 table.Cell().PaddingVertical(6).PaddingHorizontal(6)
                     .Text("Statut").Bold();
@@ -355,6 +391,20 @@ namespace Idara.API.Services
                     statusCell.FontColor(PrimaryHex);
             });
         }
+
+        /// <summary>
+        /// Bloc « Références » : celle d'Idara et celle du prestataire, en pleine
+        /// largeur. Même présentation que sur un reçu de virement — deux documents
+        /// de la même plateforme ne doivent pas ranger la même information à deux
+        /// endroits différents.
+        /// </summary>
+        private static void ComposeReferences(IContainer container, Payment payment) =>
+            PdfBlocks.References(
+                container,
+                IdaraReference.Payment(payment.Id),
+                payment.SenePayTransactionId,
+                TextSecondary,
+                Border);
 
         private static void ComposeFooter(IContainer container)
         {

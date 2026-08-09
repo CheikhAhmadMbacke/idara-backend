@@ -240,7 +240,7 @@ namespace Idara.API.Controllers
                 Common.Utilities.FinanceLabels.ExportTitle("Livre de caisse", rows.Count),
                 from, to, rows, summary,
                 // En caisse, la « contrepartie » d'une ecriture est sa categorie.
-                counterpartyHeader: "Categorie");
+                counterpartyHeader: "Catégorie");
 
             return File(bytes, "application/pdf", "livre-de-caisse-idara.pdf");
         }

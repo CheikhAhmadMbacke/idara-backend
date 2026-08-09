@@ -15,6 +15,14 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Daara qui a émis le virement.</summary>
         public string SchoolName { get; set; } = string.Empty;
 
+        /// <summary>Référence Idara (« RET-000087 ») de ce virement.</summary>
+        public string Reference { get; set; } = string.Empty;
+
+        /// <summary>Référence du décaissement chez SenePay (null si pas encore connue).</summary>
+        public string? SenePayReference { get; set; }
+        /// <summary>Nom du daara en arabe (affiché sous le nom français). Null si absent.</summary>
+        public string? SchoolNameAr { get; set; }
+
         /// <summary>Montant net reçu par le bénéficiaire (FCFA).</summary>
         public long AmountFcfa { get; set; }
 

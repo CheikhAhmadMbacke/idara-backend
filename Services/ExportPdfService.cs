@@ -1,3 +1,4 @@
+using Idara.API.Common.Utilities;
 using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using QuestPDF.Fluent;
@@ -14,19 +15,18 @@ namespace Idara.API.Services
     /// </summary>
     public interface IExportPdfService
     {
-        byte[] BuildRosterPdf(string schoolName, int year, int month, PaymentRosterResponseDto roster);
+        byte[] BuildRosterPdf(string schoolName, int year, int month, PaymentRosterResponseDto roster,
+            string? schoolNameAr = null);
         byte[] BuildDonorReportPdf(
             string schoolName, string donorName, DateTime? from, DateTime? to,
-            IReadOnlyList<(DateTime Date, long Amount)> donations, long total);
+            IReadOnlyList<(DateTime Date, long Amount)> donations, long total,
+            string? schoolNameAr = null);
 
         /// <summary>
         /// Reçu de virement (F3) : daara → bénéficiaire (salaire / charge). Rendu
         /// en mémoire (byte[]), partageable WhatsApp par le bénéficiaire.
         /// </summary>
-        byte[] BuildTransferReceiptPdf(
-            string schoolName, int transferId, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
-            string? motif = null);
+        byte[] BuildTransferReceiptPdf(TransferReceiptData data);
 
         /// <summary>
         /// Rapport financier périodique (F4) : total entrées / sorties / net +
@@ -37,7 +37,8 @@ namespace Idara.API.Services
             IReadOnlyList<(string Category, long Amount)> incomeByCategory,
             IReadOnlyList<(string Category, long Amount)> expenseByCategory,
             long totalIncome, long totalExpense,
-            long walletAvailableFcfa, long globalBalanceFcfa);
+            long walletAvailableFcfa, long globalBalanceFcfa,
+            string? schoolNameAr = null);
 
         /// <summary>
         /// Export GÉNÉRIQUE d'un historique de transactions (feedback école) :
@@ -60,7 +61,8 @@ namespace Idara.API.Services
             string ownerName, string title, DateTime? from, DateTime? to,
             IReadOnlyList<TransactionPdfRow> rows,
             IReadOnlyList<(string Label, string Value, bool Danger)> summary,
-            string counterpartyHeader = "Contrepartie");
+            string counterpartyHeader = "Contrepartie",
+            string? ownerNameAr = null);
     }
 
     public class ExportPdfService : IExportPdfService
@@ -76,14 +78,15 @@ namespace Idara.API.Services
 
         private static readonly string[] FrMonths =
         {
-            "janvier", "fevrier", "mars", "avril", "mai", "juin",
-            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+            "janvier", "février", "mars", "avril", "mai", "juin",
+            "juillet", "août", "septembre", "octobre", "novembre", "décembre"
         };
 
         /// <summary>Date en français long : « 15 juin 2026 » (le Sénégal est à l'heure UTC).</summary>
         private static string FrLongDate(DateTime d) => $"{d.Day} {FrMonths[d.Month - 1]} {d.Year}";
 
-        public byte[] BuildRosterPdf(string schoolName, int year, int month, PaymentRosterResponseDto roster)
+        public byte[] BuildRosterPdf(string schoolName, int year, int month, PaymentRosterResponseDto roster,
+            string? schoolNameAr = null)
         {
             var monthLabel = $"{FrMonths[month - 1]} {year}";
             var doc = Document.Create(container =>
@@ -93,9 +96,9 @@ namespace Idara.API.Services
                     page.Size(PageSizes.A4);
                     page.Margin(1.4f, Unit.Centimetre);
                     page.PageColor(Colors.White);
-                    page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary));
+                    page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary).Bilingual());
 
-                    page.Header().Element(c => Header(c, schoolName, "Suivi des paiements", monthLabel));
+                    page.Header().Element(c => Header(c, SchoolDisplayName.From(schoolName, schoolNameAr), "Suivi des paiements", monthLabel));
                     page.Content().Element(c => RosterContent(c, roster));
                     page.Footer().Element(Footer);
                 });
@@ -121,11 +124,11 @@ namespace Idara.API.Services
             {
                 col.Item().PaddingBottom(8).Row(row =>
                 {
-                    Counter(row, "Paye", paid.Count, PrimaryHex);
+                    Counter(row, "Payé", paid.Count, PrimaryHex);
                     Counter(row, "En retard", overdue.Count, RedHex);
                 });
 
-                RosterSection(col, "Paye", paid, PrimaryHex, showPaidAmount: true, topPad: 0);
+                RosterSection(col, "Payé", paid, PrimaryHex, showPaidAmount: true, topPad: 0);
                 RosterSection(col, "En retard", overdue, RedHex, showPaidAmount: false, topPad: 14);
             });
         }
@@ -145,7 +148,7 @@ namespace Idara.API.Services
 
             if (entries.Count == 0)
             {
-                col.Item().Text("Aucun eleve.").Italic().FontSize(9).FontColor(TextSecondary);
+                col.Item().Text("Aucun élève.").Italic().FontSize(9).FontColor(TextSecondary);
                 return;
             }
 
@@ -163,10 +166,10 @@ namespace Idara.API.Services
 
                 table.Header(header =>
                 {
-                    HeaderCell(header, "Eleve", color);
+                    HeaderCell(header, "Élève", color);
                     HeaderCell(header, "Classe", color);
                     HeaderCell(header, "Parent", color);
-                    HeaderCell(header, "Telephone", color);
+                    HeaderCell(header, "Téléphone", color);
                     HeaderCell(header, showPaidAmount ? "Paye" : "Du", color, alignRight: true);
                     if (showPaidAmount) HeaderCell(header, "Date", color, alignRight: true);
                 });
@@ -238,7 +241,8 @@ namespace Idara.API.Services
 
         public byte[] BuildDonorReportPdf(
             string schoolName, string donorName, DateTime? from, DateTime? to,
-            IReadOnlyList<(DateTime Date, long Amount)> donations, long total)
+            IReadOnlyList<(DateTime Date, long Amount)> donations, long total,
+            string? schoolNameAr = null)
         {
             var period = (from.HasValue ? from.Value.ToString("dd/MM/yyyy") : "...") + " -> " +
                          (to.HasValue ? to.Value.ToString("dd/MM/yyyy") : "...");
@@ -249,9 +253,9 @@ namespace Idara.API.Services
                     page.Size(PageSizes.A4);
                     page.Margin(1.5f, Unit.Centimetre);
                     page.PageColor(Colors.White);
-                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary).Bilingual());
 
-                    page.Header().Element(c => Header(c, schoolName, "Rapport de dons", period));
+                    page.Header().Element(c => Header(c, SchoolDisplayName.From(schoolName, schoolNameAr), "Rapport de dons", period));
                     page.Content().Element(c => DonorContent(c, donorName, donations, total));
                     page.Footer().Element(Footer);
                 });
@@ -300,15 +304,13 @@ namespace Idara.API.Services
                 });
 
                 if (donations.Count == 0)
-                    col.Item().PaddingTop(10).Text("Aucun don sur la periode.").FontColor(TextSecondary).Italic();
+                    col.Item().PaddingTop(10).Text("Aucun don sur la période.").FontColor(TextSecondary).Italic();
             });
         }
 
-        public byte[] BuildTransferReceiptPdf(
-            string schoolName, int transferId, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
-            string? motif = null)
+        public byte[] BuildTransferReceiptPdf(TransferReceiptData data)
         {
+            var name = SchoolDisplayName.From(data.SchoolName, data.SchoolNameAr);
             var doc = Document.Create(container =>
             {
                 container.Page(page =>
@@ -316,49 +318,32 @@ namespace Idara.API.Services
                     page.Size(PageSizes.A5);
                     page.Margin(1.5f, Unit.Centimetre);
                     page.PageColor(Colors.White);
-                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary).Bilingual());
 
-                    page.Header().Element(c => Header(c, schoolName, "Recu de virement", $"N {transferId:D6}"));
-                    page.Content().Element(c => TransferContent(
-                        c, beneficiaryName, amountFcfa, operatorLabel, categoryLabel, statusLabel,
-                        date, motif));
+                    page.Header().Element(c => Header(c, name, "Reçu de virement", $"N° {data.TransferId:D6}"));
+                    page.Content().Element(c => TransferContent(c, data));
                     page.Footer().Element(Footer);
                 });
             });
             return doc.GeneratePdf();
         }
 
-        private static void TransferContent(
-            IContainer container, string beneficiaryName, long amountFcfa,
-            string operatorLabel, string categoryLabel, string statusLabel, DateTime date,
-            string? motif)
+        private static void TransferContent(IContainer container, TransferReceiptData d)
         {
             container.Column(col =>
             {
                 col.Item().Background(SurfaceVariant).Padding(10).Column(c =>
                 {
-                    c.Item().Text(t =>
-                    {
-                        t.Span("Beneficiaire : ").SemiBold().FontColor(TextSecondary);
-                        t.Span(beneficiaryName).Bold();
-                    });
-                    c.Item().Text(t =>
-                    {
-                        t.Span("Nature : ").SemiBold().FontColor(TextSecondary);
-                        t.Span(categoryLabel);
-                    });
-                    c.Item().Text(t =>
-                    {
-                        t.Span("Date : ").SemiBold().FontColor(TextSecondary);
-                        t.Span($"{date:dd/MM/yyyy}");
-                    });
-                    // Motif : le bénéficiaire doit savoir de quoi ce versement paie.
-                    if (!string.IsNullOrWhiteSpace(motif))
-                        c.Item().Text(t =>
-                        {
-                            t.Span("Motif : ").SemiBold().FontColor(TextSecondary);
-                            t.Span(motif);
-                        });
+                    InfoLine(c, "Bénéficiaire", d.BeneficiaryName, bold: true);
+                    // Le numéro dit À QUI l'argent est parti : c'est la première
+                    // chose qu'on vérifie quand un enseignant conteste un versement.
+                    if (!string.IsNullOrWhiteSpace(d.BeneficiaryPhone))
+                        InfoLine(c, "Téléphone", d.BeneficiaryPhone!);
+                    InfoLine(c, "Nature", d.CategoryLabel);
+                    InfoLine(c, "Date", $"{d.Date:dd/MM/yyyy}");
+                    // Motif : le bénéficiaire doit savoir ce que ce versement paie.
+                    if (!string.IsNullOrWhiteSpace(d.Motif))
+                        InfoLine(c, "Motif", d.Motif!);
                 });
 
                 col.Item().PaddingTop(10).Table(table =>
@@ -370,23 +355,37 @@ namespace Idara.API.Services
                     });
 
                     table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6)
-                        .Text("Montant recu").FontColor(Colors.White).SemiBold();
+                        .Text("Montant reçu").FontColor(Colors.White).SemiBold();
                     table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
-                        .Text($"{amountFcfa:N0} FCFA").FontColor(Colors.White).SemiBold();
+                        .Text($"{d.AmountFcfa:N0} FCFA").FontColor(Colors.White).SemiBold();
 
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
                         .Text("Moyen");
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
-                        .Text(operatorLabel);
+                        .Text(d.OperatorLabel);
 
                     table.Cell().PaddingVertical(6).PaddingHorizontal(6).Text("Statut").Bold();
                     table.Cell().PaddingVertical(6).PaddingHorizontal(6).AlignRight()
-                        .Text(statusLabel).Bold().FontColor(PrimaryHex);
+                        .Text(d.StatusLabel).Bold().FontColor(StatusColor(d.StatusLabel));
                 });
 
-                col.Item().PaddingTop(14).Text(
-                    "Document genere electroniquement, sans signature. Ce recu atteste du virement recu.")
+                col.Item().PaddingTop(10).Element(c => PdfBlocks.References(
+                    c, d.Reference, d.ProviderReference, TextSecondary, Border));
+
+                col.Item().PaddingTop(12).Text(
+                    "Document généré électroniquement, sans signature. Ce reçu atteste du virement reçu.")
                     .FontSize(8).FontColor(TextSecondary);
+            });
+        }
+
+        /// <summary>Une ligne « libellé : valeur » du bloc d'identité d'un reçu.</summary>
+        private static void InfoLine(ColumnDescriptor col, string label, string value, bool bold = false)
+        {
+            col.Item().Text(t =>
+            {
+                t.Span($"{label} : ").SemiBold().FontColor(TextSecondary);
+                var span = t.Span(value);
+                if (bold) span.Bold();
             });
         }
 
@@ -395,7 +394,8 @@ namespace Idara.API.Services
             IReadOnlyList<(string Category, long Amount)> incomeByCategory,
             IReadOnlyList<(string Category, long Amount)> expenseByCategory,
             long totalIncome, long totalExpense,
-            long walletAvailableFcfa, long globalBalanceFcfa)
+            long walletAvailableFcfa, long globalBalanceFcfa,
+            string? schoolNameAr = null)
         {
             var period = (from.HasValue ? from.Value.ToString("dd/MM/yyyy") : "...") + " -> " +
                          (to.HasValue ? to.Value.ToString("dd/MM/yyyy") : "...");
@@ -406,9 +406,9 @@ namespace Idara.API.Services
                     page.Size(PageSizes.A4);
                     page.Margin(1.5f, Unit.Centimetre);
                     page.PageColor(Colors.White);
-                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary));
+                    page.DefaultTextStyle(t => t.FontSize(10).FontColor(TextPrimary).Bilingual());
 
-                    page.Header().Element(c => Header(c, schoolName, "Rapport financier", period));
+                    page.Header().Element(c => Header(c, SchoolDisplayName.From(schoolName, schoolNameAr), "Rapport financier", period));
                     page.Content().Element(c => FinanceContent(
                         c, incomeByCategory, expenseByCategory, totalIncome, totalExpense,
                         walletAvailableFcfa, globalBalanceFcfa));
@@ -430,14 +430,14 @@ namespace Idara.API.Services
                 // Bandeau de synthèse
                 col.Item().PaddingBottom(8).Row(row =>
                 {
-                    MoneyCounter(row, "Entrees", $"{totalIncome:N0}", PrimaryHex);
+                    MoneyCounter(row, "Entrées", $"{totalIncome:N0}", PrimaryHex);
                     MoneyCounter(row, "Sorties", $"{totalExpense:N0}", RedHex);
                     MoneyCounter(row, "Net", $"{net:N0}", net >= 0 ? PrimaryHex : RedHex);
                 });
 
-                CategoryTable(col, "Entrees par categorie", incomeByCategory, totalIncome, PrimaryHex);
+                CategoryTable(col, "Entrées par catégorie", incomeByCategory, totalIncome, PrimaryHex);
                 col.Item().PaddingTop(10);
-                CategoryTable(col, "Sorties par categorie", expenseByCategory, totalExpense, RedHex);
+                CategoryTable(col, "Sorties par catégorie", expenseByCategory, totalExpense, RedHex);
 
                 col.Item().PaddingTop(14).Background(SurfaceVariant).Padding(10).Column(c =>
                 {
@@ -471,7 +471,7 @@ namespace Idara.API.Services
                 table.Header(header =>
                 {
                     header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(6)
-                        .Text("Categorie").FontColor(Colors.White).SemiBold();
+                        .Text("Catégorie").FontColor(Colors.White).SemiBold();
                     header.Cell().Background(color).PaddingVertical(4).PaddingHorizontal(6)
                         .AlignRight().Text("Montant").FontColor(Colors.White).SemiBold();
                 });
@@ -507,7 +507,8 @@ namespace Idara.API.Services
             string ownerName, string title, DateTime? from, DateTime? to,
             IReadOnlyList<TransactionPdfRow> rows,
             IReadOnlyList<(string Label, string Value, bool Danger)> summary,
-            string counterpartyHeader = "Contrepartie")
+            string counterpartyHeader = "Contrepartie",
+            string? ownerNameAr = null)
         {
             var period = from.HasValue || to.HasValue
                 ? (from.HasValue ? FrLongDate(from.Value) : "origine") + " -> " +
@@ -524,9 +525,9 @@ namespace Idara.API.Services
                     page.Size(PageSizes.A4.Landscape());
                     page.Margin(1.2f, Unit.Centimetre);
                     page.PageColor(Colors.White);
-                    page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary));
+                    page.DefaultTextStyle(t => t.FontSize(9).FontColor(TextPrimary).Bilingual());
 
-                    page.Header().Element(c => Header(c, ownerName, title, period));
+                    page.Header().Element(c => Header(c, SchoolDisplayName.From(ownerName, ownerNameAr), title, period));
                     page.Content().Element(c => TransactionsContent(c, rows, summary, counterpartyHeader));
                     page.Footer().Element(Footer);
                 });
@@ -601,11 +602,11 @@ namespace Idara.API.Services
                         // « Daara »… et seulement « Contrepartie » quand l'export
                         // mélange les sens (la colonne Type lève alors le doute).
                         HeaderCell(header, counterpartyHeader, PrimaryHex);
-                        if (hasPhone) HeaderCell(header, "Numero", PrimaryHex);
+                        if (hasPhone) HeaderCell(header, "Numéro", PrimaryHex);
                         if (hasNote) HeaderCell(header, "Motif", PrimaryHex);
                         if (hasMethod) HeaderCell(header, "Moyen", PrimaryHex);
-                        if (hasReference) HeaderCell(header, "Reference", PrimaryHex);
-                        if (hasBalance) HeaderCell(header, "Solde apres", PrimaryHex, alignRight: true);
+                        if (hasReference) HeaderCell(header, "Référence", PrimaryHex);
+                        if (hasBalance) HeaderCell(header, "Solde après", PrimaryHex, alignRight: true);
                         HeaderCell(header, "Montant (FCFA)", PrimaryHex, alignRight: true);
                     });
 
@@ -692,7 +693,14 @@ namespace Idara.API.Services
                 .BorderBottom(1).BorderColor(Border)
                 .PaddingVertical(4).PaddingHorizontal(5).ShowEntire();
 
-        private static void Header(IContainer container, string schoolName, string title, string subtitle)
+        /// <summary>
+        /// En-tête commun à tous les documents. Le nom du daara y est BILINGUE
+        /// quand les deux écritures sont renseignées : nom français en titre, nom
+        /// arabe juste en dessous, sur sa propre ligne et dans son propre sens de
+        /// lecture. Jamais concaténés — c'est le bricolage « Nom (الاسم) » qu'on
+        /// remplace, et il produisait cinq lignes de carrés faute de police.
+        /// </summary>
+        private static void Header(IContainer container, SchoolDisplayName owner, string title, string subtitle)
         {
             container.Column(col =>
             {
@@ -700,14 +708,30 @@ namespace Idara.API.Services
                 {
                     row.RelativeItem().Column(c =>
                     {
-                        c.Item().Text(schoolName).Bold().FontSize(13).FontColor(TextPrimary);
+                        c.Item().Text(owner.Primary()).Bold().FontSize(13).FontColor(TextPrimary);
+                        // Le second nom est SECONDAIRE : un cran plus petit, un cran
+                        // moins contrasté. Deux titres de même poids se disputeraient
+                        // l'attention (règle R3 de la proposition validée).
+                        //
+                        // ⚠️ AlignRight n'est PAS décoratif. Sans lui, un nom arabe
+                        // trop long pour une ligne se replie collé à GAUCHE : la
+                        // suite d'une phrase arabe se retrouve alors du mauvais côté
+                        // et la lecture décroche. Vérifié au rendu sur le nom réel
+                        // d'un daara, qui tient sur deux lignes.
+                        if (owner.Secondary is string secondary)
+                            c.Item().AlignRight().Text(secondary).SemiBold().FontSize(11.5f)
+                                .FontColor(TextSecondary).DirectionFromRightToLeft();
                         c.Item().Text("via Idara").FontSize(8).FontColor(TextSecondary);
                     });
-                    row.ConstantItem(190).AlignRight().Column(c =>
+                    // 155 et non 190 : la colonne de droite n'a besoin que de la
+                    // largeur de « Généré le 8 août 2026 ». Les 35 points rendus au
+                    // bloc d'identité lui épargnent une ligne de repli sur les noms
+                    // longs, qui sont la règle chez les daara.
+                    row.ConstantItem(155).AlignRight().Column(c =>
                     {
                         c.Item().AlignRight().Text(title).Bold().FontSize(12).FontColor(PrimaryHex);
                         c.Item().AlignRight().Text(subtitle).FontSize(9).FontColor(TextSecondary);
-                        c.Item().AlignRight().Text($"Genere le {FrLongDate(DateTime.UtcNow)}")
+                        c.Item().AlignRight().Text($"Généré le {FrLongDate(DateTime.UtcNow)}")
                             .FontSize(8).FontColor(TextSecondary);
                     });
                 });
@@ -722,7 +746,7 @@ namespace Idara.API.Services
             {
                 row.RelativeItem().Text(t =>
                 {
-                    t.Span("Edite par ").FontColor(TextSecondary).FontSize(7);
+                    t.Span("Édité par ").FontColor(TextSecondary).FontSize(7);
                     t.Span("Idara").Bold().FontColor(PrimaryHex).FontSize(7);
                     t.Span($" - {DateTime.UtcNow:dd/MM/yyyy HH:mm} UTC").FontColor(TextSecondary).FontSize(7);
                 });

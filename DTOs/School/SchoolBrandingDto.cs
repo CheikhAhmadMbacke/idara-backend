@@ -9,7 +9,12 @@ namespace Idara.API.DTOs.School
     public class SchoolBrandingDto
     {
         public int SchoolId { get; set; }
+
+        /// <summary>Nom en français (peut être vide si le daara n'a qu'un nom arabe).</summary>
         public string Name { get; set; } = string.Empty;
+
+        /// <summary>Nom en arabe, affiché SOUS le nom français sur la carte d'accueil.</summary>
+        public string? NameAr { get; set; }
         public string? LogoUrl { get; set; }
         public string? WelcomeSubtitle { get; set; }
         public string? CoverColor { get; set; }

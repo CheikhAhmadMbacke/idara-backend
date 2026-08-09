@@ -6,6 +6,9 @@ namespace Idara.API.DTOs.School
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
+
+        /// <summary>Nom en arabe (optionnel). Au moins l'un des deux noms est renseigné.</summary>
+        public string? NameAr { get; set; }
         public string Address { get; set; } = string.Empty;
         public string PhoneNumber { get; set; } = string.Empty;
         public List<string> LegalDocumentsUrls { get; set; } = new();

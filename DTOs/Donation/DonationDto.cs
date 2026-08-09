@@ -8,6 +8,8 @@ namespace Idara.API.DTOs.Donation
         public int Id { get; set; }
         public int SchoolId { get; set; }
         public string? SchoolName { get; set; }
+        /// <summary>Nom du daara en arabe (affiché sous le nom français). Null si absent.</summary>
+        public string? SchoolNameAr { get; set; }
         /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher sur chaque ligne « mes dons ».</summary>
         public string? SchoolLogoUrl { get; set; }
 

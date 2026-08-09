@@ -27,4 +27,15 @@
     <Folder Include="wwwroot\uploads\" />
   </ItemGroup>
 
+  <!-- Polices des PDF. QuestPDF n'embarque que Lato (aucun glyphe arabe) : sans
+       ces fichiers DANS LA PUBLICATION, les noms arabes repartent en carrés en
+       production alors que tout va bien en local. Volontairement hors wwwroot :
+       ces fichiers n'ont aucune raison d'être servis publiquement. -->
+  <ItemGroup>
+    <Content Include="Assets\Fonts\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

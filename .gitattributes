@@ -1,0 +1,8 @@
+# Les polices sont BINAIRES. Sans cette règle, on dépend de l'auto-détection de
+# Git : une conversion de fins de ligne suffirait à corrompre le fichier, et le
+# symptôme n'apparaîtrait qu'en production (retour des carrés à la place de
+# l'arabe sur les reçus, cf. §134) alors que tout irait bien en local.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary

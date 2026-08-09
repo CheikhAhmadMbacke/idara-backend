@@ -136,7 +136,7 @@ namespace Idara.API.Controllers
                 Subtitle = w.School?.Name,
                 Note = w.Motif,
                 Method = FrenchOperator(w.Operator),
-                Status = "Effectue",
+                Status = "Effectué",
                 AmountFcfa = w.AmountFcfa // reçu par le bénéficiaire → entrée
             }).ToList();
 
@@ -180,16 +180,7 @@ namespace Idara.API.Controllers
             if (w == null || SenegalPhone.Normalize(w.RecipientPhone) != e164)
                 return NotFound(ApiResponse<bool>.Fail("Virement introuvable."));
 
-            var bytes = _exportPdf.BuildTransferReceiptPdf(
-                w.School?.Name ?? "Daara",
-                w.Id,
-                string.IsNullOrWhiteSpace(w.RecipientName) ? "Beneficiaire" : w.RecipientName,
-                w.AmountFcfa,
-                FrenchOperator(w.Operator),
-                CategoryLabel(w),
-                "Effectue",
-                w.CompletedAt ?? w.CreatedAt,
-                w.Motif);
+            var bytes = _exportPdf.BuildTransferReceiptPdf(TransferReceiptFactory.From(w));
 
             return File(bytes, "application/pdf", $"recu-virement-idara-{w.Id:D6}.pdf");
         }
@@ -212,6 +203,9 @@ namespace Idara.API.Controllers
         {
             Id = w.Id,
             SchoolName = w.School?.Name ?? string.Empty,
+            Reference = IdaraReference.Withdrawal(w.Id),
+            SenePayReference = w.SenePayDisbursementId,
+            SchoolNameAr = w.School?.NameAr,
             AmountFcfa = w.AmountFcfa,
             Operator = w.Operator,
             Category = w.Category,
@@ -221,26 +215,20 @@ namespace Idara.API.Controllers
             CompletedAt = w.CompletedAt
         };
 
-        private static string CategoryLabel(Withdrawal w)
-        {
-            if (!string.IsNullOrWhiteSpace(w.CategoryLabel)) return w.CategoryLabel!;
-            return w.Category switch
-            {
-                TransferCategory.TeacherSalary => "Salaire enseignant",
-                TransferCategory.StaffSalary => "Salaire personnel",
-                TransferCategory.Rent => "Loyer",
-                TransferCategory.Supplier => "Fournisseur",
-                TransferCategory.Utilities => "Charges",
-                TransferCategory.Other => "Autre",
-                _ => "Virement"
-            };
-        }
+        /// <summary>
+        /// Nature du virement, telle que la voit le bénéficiaire.
+        ///
+        /// ⚠️ Délègue à <see cref="FinanceLabels"/> — c'était une COPIE du même
+        /// switch, et elle avait déjà divergé : « Fournisseur » ici contre
+        /// « Achat / fournisseur » côté école. Le daara et l'enseignant lisaient
+        /// donc deux natures différentes pour le même virement, et la copie
+        /// ignorait les 7 catégories ajoutées en juillet (nourriture, avance sur
+        /// salaire, transport…), qui retombaient toutes sur « Virement ».
+        /// </summary>
+        private static string CategoryLabel(Withdrawal w) =>
+            FinanceLabels.TransferCategory(w.Category, w.CategoryLabel);
 
-        private static string FrenchOperator(PaymentOperator op) => op switch
-        {
-            PaymentOperator.Wave => "Wave",
-            PaymentOperator.Orange => "Orange Money",
-            _ => op.ToString()
-        };
+        private static string FrenchOperator(PaymentOperator op) =>
+            FinanceLabels.Operator(op);
     }
 }

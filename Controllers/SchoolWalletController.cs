@@ -482,7 +482,7 @@ namespace Idara.API.Controllers
                 FinanceLabels.ExportTitle("Historique des retraits et virements", rows.Count),
                 from, to, rows, summary,
                 // Toujours de l'argent sortant : la contrepartie est le beneficiaire.
-                counterpartyHeader: "Beneficiaire");
+                counterpartyHeader: "Bénéficiaire");
 
             return File(bytes, "application/pdf", "historique-transferts-idara.pdf");
         }
@@ -529,30 +529,7 @@ namespace Idara.API.Controllers
             if (w == null)
                 return NotFound(ApiResponse<bool>.Fail("Reçu indisponible (retrait non complété)."));
 
-            var categoryLabel = w.Category == TransferCategory.Other
-                    && !string.IsNullOrWhiteSpace(w.CategoryLabel)
-                ? w.CategoryLabel!.Trim()
-                : w.Category switch
-                {
-                    TransferCategory.TeacherSalary => "Salaire enseignant",
-                    TransferCategory.StaffSalary => "Salaire personnel",
-                    TransferCategory.Rent => "Loyer",
-                    TransferCategory.Supplier => "Fournisseur",
-                    TransferCategory.Utilities => "Charges",
-                    TransferCategory.Other => "Autre",
-                    _ => "Retrait"
-                };
-
-            var bytes = _exportPdf.BuildTransferReceiptPdf(
-                w.School?.Name ?? "Daara",
-                w.Id,
-                string.IsNullOrWhiteSpace(w.RecipientName) ? "Beneficiaire" : w.RecipientName,
-                w.AmountFcfa,
-                w.Operator == PaymentOperator.Orange ? "Orange Money" : "Wave",
-                categoryLabel,
-                "Effectue",
-                w.CompletedAt ?? w.CreatedAt,
-                w.Motif);
+            var bytes = _exportPdf.BuildTransferReceiptPdf(TransferReceiptFactory.From(w));
 
             return File(bytes, "application/pdf", $"recu-retrait-idara-{w.Id:D6}.pdf");
         }
@@ -631,6 +608,8 @@ namespace Idara.API.Controllers
             RecipientPhoneMasked = MaskPhone(w.RecipientPhone),
             RecipientPhone = w.RecipientPhone,
             Status = w.Status,
+            Reference = IdaraReference.Withdrawal(w.Id),
+            SenePayReference = w.SenePayDisbursementId,
             FailureReason = w.FailureReason,
             CreatedAt = w.CreatedAt,
             CompletedAt = w.CompletedAt,

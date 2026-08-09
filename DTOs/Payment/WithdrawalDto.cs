@@ -27,6 +27,20 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Numéro complet du bénéficiaire (l'école l'a saisi elle-même).</summary>
         public string RecipientPhone { get; set; } = string.Empty;
         public WithdrawalStatus Status { get; set; }
+
+        /// <summary>
+        /// Référence Idara (« RET-000087 ») : identifie ce virement dans notre base.
+        /// </summary>
+        public string Reference { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Référence du décaissement chez SenePay. Null tant que le prestataire ne
+        /// l'a pas renvoyée (retrait tout juste initié). C'est elle qui permet de
+        /// rapprocher la ligne du tableau de bord SenePay — l'app ne l'exposait
+        /// nulle part avant le 2026-08-08, alors qu'elle est en base depuis la
+        /// Phase 3.
+        /// </summary>
+        public string? SenePayReference { get; set; }
         public string? FailureReason { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? CompletedAt { get; set; }

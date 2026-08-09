@@ -25,7 +25,8 @@ namespace Idara.API.Services
         /// </summary>
         Task<string> GenerateAsync(
             Payment payment, School school, Student? student, Invoice? invoice, User? donor = null,
-            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null);
+            IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null,
+            User? payer = null);
     }
 
     /// <summary>Une ligne du reçu consolidé : un enfant réglé, sa période et son montant.</summary>

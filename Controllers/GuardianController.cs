@@ -54,6 +54,7 @@ namespace Idara.API.Controllers
                     PhotoUrl = sg.Student.PhotoUrl,
                     ClassName = sg.Student.Class != null ? sg.Student.Class.Name : null,
                     SchoolName = sg.Student.School.Name,
+                    SchoolNameAr = sg.Student.School.NameAr,
                     SchoolId = sg.Student.SchoolId,
                     StudentNumber = sg.Student.StudentNumber,
                     IsPrimaryGuardian = sg.IsPrimaryGuardian,
@@ -455,6 +456,7 @@ namespace Idara.API.Controllers
                 Id = i.Id,
                 SchoolId = i.SchoolId,
                 SchoolName = i.Student.School.Name,
+                SchoolNameAr = i.Student.School.NameAr,
                 SchoolLogoUrl = i.Student.School.LogoUrl,
                 StudentId = i.StudentId,
                 StudentFirstName = i.Student.FirstName,
@@ -495,14 +497,16 @@ namespace Idara.API.Controllers
             var paySchoolIds = items.Select(p => p.SchoolId).Distinct().ToList();
             var paySchools = await _context.Schools
                 .Where(s => paySchoolIds.Contains(s.Id))
-                .Select(s => new { s.Id, s.Name, s.LogoUrl })
+                .Select(s => new { s.Id, s.Name, s.NameAr, s.LogoUrl })
                 .ToDictionaryAsync(s => s.Id, ct);
 
             return Ok(items.Select(p => new PaymentDto
             {
                 Id = p.Id,
+                Reference = IdaraReference.Payment(p.Id),
                 SchoolId = p.SchoolId,
                 SchoolName = paySchools.TryGetValue(p.SchoolId, out var ps) ? ps.Name : null,
+                SchoolNameAr = paySchools.TryGetValue(p.SchoolId, out var psa) ? psa.NameAr : null,
                 SchoolLogoUrl = paySchools.TryGetValue(p.SchoolId, out var pl) ? pl.LogoUrl : null,
                 StudentId = p.StudentId,
                 StudentFirstName = p.Student?.FirstName,
@@ -679,7 +683,7 @@ namespace Idara.API.Controllers
                 FinanceLabels.ExportTitle("Historique de mes paiements", rows.Count),
                 from, to, rows, summary,
                 // Vu du parent : pour quel enfant, dans quel daara.
-                counterpartyHeader: "Eleve / Daara");
+                counterpartyHeader: "Élève / Daara");
 
             return File(bytes, "application/pdf", "mes-paiements-idara.pdf");
         }
@@ -751,6 +755,7 @@ namespace Idara.API.Controllers
                     {
                         SchoolId = schoolGroup.Key,
                         SchoolName = first.Student.School.Name ?? string.Empty,
+                        SchoolNameAr = first.Student.School.NameAr,
                         SchoolLogoUrl = first.Student.School.LogoUrl,
                         TotalDueFcfa = totalDue,
                         AmountToChargeFcfa = amountToCharge,
@@ -788,6 +793,8 @@ namespace Idara.API.Controllers
         public string? PhotoUrl { get; set; }
         public string? ClassName { get; set; }
         public string? SchoolName { get; set; }
+        /// <summary>Nom du daara en arabe (affiché sous le nom français). Null si absent.</summary>
+        public string? SchoolNameAr { get; set; }
         public int SchoolId { get; set; }
         public string? StudentNumber { get; set; }
         public bool IsPrimaryGuardian { get; set; }
@@ -812,6 +819,8 @@ namespace Idara.API.Controllers
     {
         public int SchoolId { get; set; }
         public string SchoolName { get; set; } = string.Empty;
+        /// <summary>Nom du daara en arabe (affiché sous le nom français). Null si absent.</summary>
+        public string? SchoolNameAr { get; set; }
         /// <summary>Logo du daara (chemin relatif /uploads/...) pour l'afficher sur la carte « à payer ».</summary>
         public string? SchoolLogoUrl { get; set; }
 
