@@ -119,16 +119,33 @@ namespace Idara.API.Controllers
             // 0 est traité comme "pas de tarif général" → on normalise en null.
             settings.GeneralMonthlyFeeFcfa =
                 (dto.GeneralMonthlyFeeFcfa is > 0) ? dto.GeneralMonthlyFeeFcfa : null;
+
+            // Tarifs par régime d'hébergement : appliqués UNIQUEMENT si le
+            // client a déclaré les gérer. Une version de l'application antérieure
+            // à ces tarifs n'envoie pas les champs (donc null) ; sans ce garde-
+            // fou, un simple enregistrement des réglages depuis une vieille APK
+            // effacerait les trois tarifs — et toutes les factures impayées des
+            // internes retomberaient au tarif de classe, sans un mot.
+            if (dto.IncludesBoardingFees)
+            {
+                settings.BoardingMonthlyFeeFcfa =
+                    (dto.BoardingMonthlyFeeFcfa is > 0) ? dto.BoardingMonthlyFeeFcfa : null;
+                settings.HalfBoardingMonthlyFeeFcfa =
+                    (dto.HalfBoardingMonthlyFeeFcfa is > 0) ? dto.HalfBoardingMonthlyFeeFcfa : null;
+                settings.DayMonthlyFeeFcfa =
+                    (dto.DayMonthlyFeeFcfa is > 0) ? dto.DayMonthlyFeeFcfa : null;
+            }
+
             settings.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
             _logger.LogInformation(
-                "[fees] SchoolId={SchoolId} settings updated: Mode={Mode} FeesPayer={Payer} DueDay={Day}",
-                schoolId, dto.BillingMode, dto.FeesPayer, dto.MonthlyDueDay);
+                "[fees] SchoolId={SchoolId} settings updated: Mode={Mode} FeesPayer={Payer} DueDay={Day} TarifsStatut={Boarding}",
+                schoolId, dto.BillingMode, dto.FeesPayer, dto.MonthlyDueDay, dto.IncludesBoardingFees);
 
-            // Le tarif général a pu changer → re-tarifer les factures impayées
-            // (portée = toute l'école ; le résolveur ignore les élèves à override
-            // ou tarif classe, qui gardent leur montant).
+            // Le tarif général ou un tarif de statut a pu changer → re-tarifer
+            // les factures impayées (portée = toute l'école ; le résolveur laisse
+            // à chaque élève le tarif le plus spécifique qui le concerne).
             await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, null, ct);
 
             return Ok(MapSettings(settings));
@@ -1546,6 +1563,9 @@ namespace Idara.API.Controllers
             MonthlyDueDay = s.MonthlyDueDay,
             BillingPeriod = s.BillingPeriod,
             GeneralMonthlyFeeFcfa = s.GeneralMonthlyFeeFcfa,
+            BoardingMonthlyFeeFcfa = s.BoardingMonthlyFeeFcfa,
+            HalfBoardingMonthlyFeeFcfa = s.HalfBoardingMonthlyFeeFcfa,
+            DayMonthlyFeeFcfa = s.DayMonthlyFeeFcfa,
             CreatedAt = s.CreatedAt,
             UpdatedAt = s.UpdatedAt
         };

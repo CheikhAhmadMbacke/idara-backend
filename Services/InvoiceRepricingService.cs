@@ -7,9 +7,10 @@ namespace Idara.API.Services
     public interface IInvoiceRepricingService
     {
         /// <summary>
-        /// Ré-applique le tarif COURANT (hiérarchie override &gt; classe &gt;
-        /// général, via <see cref="FeeResolver"/>) à TOUTES les factures
-        /// impayées des élèves concernés, après un changement de tarif.
+        /// Ré-applique le tarif COURANT (hiérarchie tarif élève &gt; statut &gt;
+        /// classe &gt; général, via <see cref="FeeResolver"/>) à TOUTES les
+        /// factures impayées des élèves concernés, après un changement de tarif
+        /// OU un changement de fiche élève (statut, tarif personnalisé, classe).
         ///
         /// Ne touche JAMAIS : les factures payées, partiellement payées,
         /// annulées, ni celles avec un paiement SenePay EN COURS (montant figé).
@@ -17,8 +18,9 @@ namespace Idara.API.Services
         /// Renvoie le nombre de factures effectivement mises à jour.
         /// </summary>
         /// <param name="studentIds">Portée : <c>null</c> = tous les élèves de
-        /// l'école (changement de tarif général) ; sinon les élèves visés
-        /// (classe re-tarifée, override modifié/supprimé).</param>
+        /// l'école (changement de tarif général ou de tarif par statut) ; sinon
+        /// les élèves visés (classe re-tarifée, tarif personnalisé modifié ou
+        /// supprimé, élève dont le statut ou la classe a changé).</param>
         Task<int> RepriceUnpaidInvoicesAsync(
             int schoolId, IReadOnlyCollection<int>? studentIds, CancellationToken ct);
     }
@@ -60,15 +62,14 @@ namespace Idara.API.Services
                 if (studentIds != null)
                     studentsQuery = studentsQuery.Where(s => studentIds.Contains(s.Id));
                 var students = await studentsQuery
-                    .Select(s => new { s.Id, s.ClassId })
+                    .Select(s => new FeeTarget(s.Id, s.ClassId, s.BoardingStatus))
                     .ToListAsync(ct);
                 if (students.Count == 0) return 0;
 
                 var fees = await FeeResolver.ResolveAsync(
-                    _db, schoolId, settings.GeneralMonthlyFeeFcfa,
-                    students.Select(s => (s.Id, s.ClassId)).ToList(), today, ct);
+                    _db, schoolId, settings, students, today, ct);
 
-                var sids = students.Select(s => s.Id).ToList();
+                var sids = students.Select(s => s.StudentId).ToList();
 
                 // Factures IMPAYÉES (Pending/Overdue), rien encore réglé dessus,
                 // hors annulées/payées.

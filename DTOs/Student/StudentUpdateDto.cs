@@ -36,6 +36,29 @@ namespace Idara.API.DTOs.Student
         [StringLength(100)] public string? PreviousClass { get; set; }
         [StringLength(500)] public string? TransferReason { get; set; }
 
+        /// <summary>
+        /// Régime d'hébergement. PATCH partiel : <c>null</c> = ne pas toucher.
+        /// Pour repasser un élève en « non renseigné », envoyer
+        /// <see cref="ClearBoardingStatus"/> = true (une valeur nulle ne peut pas
+        /// distinguer « ne pas toucher » de « vider »).
+        /// </summary>
+        public BoardingStatus? BoardingStatus { get; set; }
+
+        /// <summary>Vide le régime d'hébergement (le remet à « non renseigné »).</summary>
+        public bool ClearBoardingStatus { get; set; }
+
+        /// <summary>
+        /// Tarif mensuel personnalisé. PATCH partiel : <c>null</c> = ne pas
+        /// toucher, <c>0</c> = SUPPRIMER le tarif personnalisé (l'élève retombe
+        /// sur son tarif de statut / classe / général), <c>&gt; 0</c> = poser ou
+        /// remplacer le tarif. Même convention que
+        /// <c>UpdateSchoolPaymentSettingsDto.GeneralMonthlyFeeFcfa</c>.
+        /// </summary>
+        [Range(0, 100_000_000)] public long? MonthlyFeeFcfa { get; set; }
+
+        /// <summary>Motif du tarif personnalisé. Ignoré si le tarif est supprimé.</summary>
+        [StringLength(200)] public string? MonthlyFeeReason { get; set; }
+
         [StringLength(10)]  public string? BloodType { get; set; }
         [StringLength(500)] public string? Allergies { get; set; }
         [StringLength(500)] public string? ChronicConditions { get; set; }

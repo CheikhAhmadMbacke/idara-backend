@@ -7,7 +7,7 @@ namespace Idara.API.Services
         Task<StudentListResponseDto> GetStudentsAsync(int schoolId, StudentPaginationDto pagination);
         Task<StudentResponseDto?> GetStudentByIdAsync(int id, int schoolId);
         Task<StudentResponseDto> CreateStudentAsync(int schoolId, int currentUserId, StudentCreateDto dto);
-        Task<StudentResponseDto?> UpdateStudentAsync(int schoolId, StudentUpdateDto dto);
+        Task<StudentResponseDto?> UpdateStudentAsync(int schoolId, int currentUserId, StudentUpdateDto dto);
         Task<bool> DeleteStudentAsync(int id, int schoolId);
 
         Task<StudentDocumentResponseDto?> AddDocumentAsync(int studentId, int schoolId, StudentDocumentInputDto dto);

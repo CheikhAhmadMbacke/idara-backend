@@ -67,9 +67,10 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<bool>.Fail("L'identifiant dans l'URL ne correspond pas à celui du corps de la requête."));
 
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
 
-            var updated = await _studentService.UpdateStudentAsync(schoolId.Value, dto);
+            var updated = await _studentService.UpdateStudentAsync(schoolId.Value, userId.Value, dto);
             return updated == null ? NotFound() : Ok(updated);
         }
 

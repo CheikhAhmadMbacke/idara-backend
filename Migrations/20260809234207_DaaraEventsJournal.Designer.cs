@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260809234207_DaaraEventsJournal")]
+    partial class DaaraEventsJournal
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -822,9 +825,6 @@ namespace Idara.API.Migrations
                     b.Property<int>("CreatedById")
                         .HasColumnType("integer");
 
-                    b.Property<int?>("DaaraObjectiveId")
-                        .HasColumnType("integer");
-
                     b.Property<DateTime>("Date")
                         .HasColumnType("timestamp with time zone");
 
@@ -856,8 +856,6 @@ namespace Idara.API.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("DaaraObjectiveId");
 
                     b.HasIndex("SchoolId", "Date");
 
@@ -893,108 +891,6 @@ namespace Idara.API.Migrations
                     b.HasIndex("DaaraEventId");
 
                     b.ToTable("DaaraEventPhotos");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.DaaraObjective", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime?>("AchievedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("CreatedById")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("CurrentValue")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("DeletedById")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(4000)
-                        .HasColumnType("character varying(4000)");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("MeasureMode")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("SchoolId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("TargetDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("TargetValue")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Unit")
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Visibility")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SchoolId", "Status");
-
-                    b.ToTable("DaaraObjectives");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.DaaraObjectiveStep", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("DaaraObjectiveId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("DoneAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsDone")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Label")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DaaraObjectiveId");
-
-                    b.ToTable("DaaraObjectiveSteps");
                 });
 
             modelBuilder.Entity("Idara.API.Models.DailyJournalEntry", b =>
@@ -3027,18 +2923,11 @@ namespace Idara.API.Migrations
 
             modelBuilder.Entity("Idara.API.Models.DaaraEvent", b =>
                 {
-                    b.HasOne("Idara.API.Models.DaaraObjective", "DaaraObjective")
-                        .WithMany()
-                        .HasForeignKey("DaaraObjectiveId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("Idara.API.Models.School", "School")
                         .WithMany()
                         .HasForeignKey("SchoolId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("DaaraObjective");
 
                     b.Navigation("School");
                 });
@@ -3052,28 +2941,6 @@ namespace Idara.API.Migrations
                         .IsRequired();
 
                     b.Navigation("DaaraEvent");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.DaaraObjective", b =>
-                {
-                    b.HasOne("Idara.API.Models.School", "School")
-                        .WithMany()
-                        .HasForeignKey("SchoolId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("School");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.DaaraObjectiveStep", b =>
-                {
-                    b.HasOne("Idara.API.Models.DaaraObjective", "DaaraObjective")
-                        .WithMany("Steps")
-                        .HasForeignKey("DaaraObjectiveId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("DaaraObjective");
                 });
 
             modelBuilder.Entity("Idara.API.Models.DailyJournalEntry", b =>
@@ -3508,11 +3375,6 @@ namespace Idara.API.Migrations
             modelBuilder.Entity("Idara.API.Models.DaaraEvent", b =>
                 {
                     b.Navigation("Photos");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.DaaraObjective", b =>
-                {
-                    b.Navigation("Steps");
                 });
 
             modelBuilder.Entity("Idara.API.Models.Payment", b =>

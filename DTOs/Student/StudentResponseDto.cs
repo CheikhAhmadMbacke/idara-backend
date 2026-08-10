@@ -27,6 +27,20 @@ namespace Idara.API.DTOs.Student
         public string? PreviousClass { get; set; }
         public string? TransferReason { get; set; }
 
+        /// <summary>Régime d'hébergement, ou null si non renseigné.</summary>
+        public BoardingStatus? BoardingStatus { get; set; }
+
+        /// <summary>
+        /// Tarif mensuel personnalisé de l'élève, ou null s'il n'en a pas.
+        /// ⚠️ Ce n'est PAS le montant finalement facturé : celui-ci suit la
+        /// hiérarchie tarif élève &gt; statut &gt; classe &gt; général
+        /// (<see cref="Services.FeeResolver"/>).
+        /// </summary>
+        public long? MonthlyFeeFcfa { get; set; }
+
+        /// <summary>Motif du tarif personnalisé (usage interne à l'école).</summary>
+        public string? MonthlyFeeReason { get; set; }
+
         public string? BloodType { get; set; }
         public string? Allergies { get; set; }
         public string? ChronicConditions { get; set; }

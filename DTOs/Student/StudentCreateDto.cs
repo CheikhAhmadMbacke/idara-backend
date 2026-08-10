@@ -49,6 +49,19 @@ namespace Idara.API.DTOs.Student
         [StringLength(100)] public string? PreviousClass { get; set; }
         [StringLength(500)] public string? TransferReason { get; set; }
 
+        /// <summary>Régime d'hébergement. Null = non renseigné (aucun tarif de statut ne s'appliquera).</summary>
+        public BoardingStatus? BoardingStatus { get; set; }
+
+        /// <summary>
+        /// Tarif mensuel personnalisé de l'élève (bourse, demi-tarif, fratrie…).
+        /// Prime sur le tarif de statut, de classe et le tarif général.
+        /// Null ou 0 = pas de tarif personnalisé.
+        /// </summary>
+        [Range(0, 100_000_000)] public long? MonthlyFeeFcfa { get; set; }
+
+        /// <summary>Motif du tarif personnalisé (affiché à l'école, jamais au parent).</summary>
+        [StringLength(200)] public string? MonthlyFeeReason { get; set; }
+
         // ----- Santé -----
         [StringLength(10)]  public string? BloodType { get; set; }
         [StringLength(500)] public string? Allergies { get; set; }

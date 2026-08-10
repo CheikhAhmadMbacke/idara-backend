@@ -32,12 +32,30 @@ namespace Idara.API.Models
 
         /// <summary>
         /// Tarif général de l'école : montant mensuel appliqué à TOUS les élèves
-        /// qui n'ont ni override individuel ni tarif de classe. Null = pas de
-        /// tarif général (on retombe sur tarif classe / override uniquement).
-        /// Hiérarchie de résolution : override élève > tarif classe > tarif général.
+        /// qui n'ont ni tarif personnalisé, ni tarif de statut, ni tarif de
+        /// classe. Null = pas de tarif général.
+        /// Hiérarchie complète : tarif élève &gt; tarif STATUT &gt; tarif classe
+        /// &gt; tarif général (cf. <see cref="Services.FeeResolver"/>).
         /// Pratique pour les daara mono-tarif (un seul montant pour toute l'école).
         /// </summary>
         public long? GeneralMonthlyFeeFcfa { get; set; }
+
+        // ----- Tarifs par régime d'hébergement (2026-08-09) -----
+        // Montants mensuels COMPLETS (pas des suppléments) appliqués selon le
+        // BoardingStatus de l'élève. Null = pas de tarif pour ce régime → on
+        // retombe sur le tarif de classe puis le tarif général.
+        // Décision produit : le statut prime sur la classe (un interne paie le
+        // tarif internat quelle que soit sa classe).
+        // Un élève sans statut renseigné n'est JAMAIS concerné par ces montants.
+
+        /// <summary>Tarif mensuel des internes. Null = non configuré.</summary>
+        public long? BoardingMonthlyFeeFcfa { get; set; }
+
+        /// <summary>Tarif mensuel des demi-internes. Null = non configuré.</summary>
+        public long? HalfBoardingMonthlyFeeFcfa { get; set; }
+
+        /// <summary>Tarif mensuel des externes. Null = non configuré.</summary>
+        public long? DayMonthlyFeeFcfa { get; set; }
 
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }

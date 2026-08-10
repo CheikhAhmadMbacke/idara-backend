@@ -31,6 +31,16 @@ namespace Idara.API.Models
         public string? PreviousClass { get; set; }
         public string? TransferReason { get; set; }
 
+        /// <summary>
+        /// Régime d'hébergement (interne / demi-interne / externe). <c>null</c> =
+        /// non renseigné : l'élève garde alors le tarif de sa classe ou le tarif
+        /// général. Volontairement laissé vide pour les élèves créés avant
+        /// l'ajout du champ — les classer d'office ferait changer leur montant
+        /// dû le jour où l'école saisit un tarif par statut, sans que personne
+        /// n'ait touché à leur fiche.
+        /// </summary>
+        public BoardingStatus? BoardingStatus { get; set; }
+
         // ----- Santé -----
         public string? BloodType { get; set; }
         public string? Allergies { get; set; }

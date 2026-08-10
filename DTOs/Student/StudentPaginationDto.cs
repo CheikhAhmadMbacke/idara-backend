@@ -1,3 +1,5 @@
+using Idara.API.Enums;
+
 namespace Idara.API.DTOs.Student
 {
     public class StudentPaginationDto
@@ -11,5 +13,33 @@ namespace Idara.API.DTOs.Student
         public string? Search { get; set; }
         public string? SortBy { get; set; }
         public bool SortDescending { get; set; } = true;
+
+        // ----- Filtres (2026-08-09) -----
+        // Tous OPTIONNELS et cumulatifs (ET logique). Un filtre absent ne
+        // restreint rien : une ancienne version de l'app, qui n'en envoie aucun,
+        // reçoit exactement la même liste qu'avant.
+
+        /// <summary>Filtre sur le régime d'hébergement. Null = tous.</summary>
+        public BoardingStatus? BoardingStatus { get; set; }
+
+        /// <summary>
+        /// Élèves dont le régime d'hébergement n'est PAS renseigné. Ne peut pas
+        /// être exprimé par <see cref="BoardingStatus"/> (dont la valeur nulle
+        /// signifie déjà « pas de filtre »).
+        /// </summary>
+        public bool? BoardingStatusUnset { get; set; }
+
+        /// <summary>true = seulement les élèves à tarif personnalisé, false = seulement ceux sans. Null = tous.</summary>
+        public bool? HasCustomFee { get; set; }
+
+        /// <summary>Filtre sur une classe précise. Null = toutes.</summary>
+        public int? ClassId { get; set; }
+
+        /// <summary>
+        /// Élèves sans classe affectée. Même raison que
+        /// <see cref="BoardingStatusUnset"/> : un <see cref="ClassId"/> nul veut
+        /// déjà dire « pas de filtre ».
+        /// </summary>
+        public bool? WithoutClass { get; set; }
     }
 }

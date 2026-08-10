@@ -19,6 +19,7 @@ namespace Idara.API.Services
         private readonly ILogger<StudentService> _logger;
         private readonly IEmailService _emailService;
         private readonly INotificationService _notif;
+        private readonly IInvoiceRepricingService _repricing;
         private readonly UploadSettings _uploads;
 
         public StudentService(
@@ -27,6 +28,7 @@ namespace Idara.API.Services
             ILogger<StudentService> logger,
             IEmailService emailService,
             INotificationService notif,
+            IInvoiceRepricingService repricing,
             IOptions<UploadSettings> uploads)
         {
             _context = context;
@@ -34,6 +36,7 @@ namespace Idara.API.Services
             _logger = logger;
             _emailService = emailService;
             _notif = notif;
+            _repricing = repricing;
             _uploads = uploads.Value;
         }
 
@@ -53,6 +56,45 @@ namespace Idara.API.Services
                     s.LastName.ToLower().Contains(search) ||
                     (s.StudentNumber != null && s.StudentNumber.ToLower().Contains(search)));
             }
+
+            // ----- Filtres (2026-08-09) -----
+            // Appliqués AVANT le Count et la pagination : sans quoi le total et
+            // le nombre de pages porteraient sur la liste non filtrée, et une
+            // page pourrait revenir à moitié vide.
+            if (pagination.HasCustomFee == true)
+                query = query.Where(s => _context.StudentFeeOverrides.Any(o => o.StudentId == s.Id));
+            else if (pagination.HasCustomFee == false)
+                query = query.Where(s => !_context.StudentFeeOverrides.Any(o => o.StudentId == s.Id));
+
+            if (pagination.ClassId.HasValue)
+                query = query.Where(s => s.ClassId == pagination.ClassId.Value);
+            else if (pagination.WithoutClass == true)
+                query = query.Where(s => s.ClassId == null);
+
+            // Les compteurs des onglets sont pris ICI, sur la requête filtrée
+            // par tout SAUF le régime : un onglet doit annoncer le nombre
+            // d'élèves qu'on verra en tapant dessus. Compter avant les filtres
+            // de classe ou de recherche ferait afficher « Interne (43) »
+            // au-dessus d'une liste de 4 élèves.
+            var counts = await query
+                .GroupBy(s => s.BoardingStatus)
+                .Select(g => new { Status = g.Key, Count = g.Count() })
+                .ToListAsync();
+
+            var boardingCounts = new BoardingCountsDto
+            {
+                Total = counts.Sum(c => c.Count),
+                Boarding = counts.FirstOrDefault(c => c.Status == Enums.BoardingStatus.Boarding)?.Count ?? 0,
+                HalfBoarding = counts.FirstOrDefault(c => c.Status == Enums.BoardingStatus.HalfBoarding)?.Count ?? 0,
+                Day = counts.FirstOrDefault(c => c.Status == Enums.BoardingStatus.Day)?.Count ?? 0,
+                Unset = counts.FirstOrDefault(c => c.Status == null)?.Count ?? 0,
+            };
+
+            // Le filtre de régime, lui, s'applique APRÈS le comptage.
+            if (pagination.BoardingStatus.HasValue)
+                query = query.Where(s => s.BoardingStatus == pagination.BoardingStatus.Value);
+            else if (pagination.BoardingStatusUnset == true)
+                query = query.Where(s => s.BoardingStatus == null);
 
             query = pagination.SortBy switch
             {
@@ -81,12 +123,22 @@ namespace Idara.API.Services
                 .Take(pageSize)
                 .ToListAsync();
 
+            // Tarifs personnalisés de la PAGE en UNE requête (pas de N+1) :
+            // c'est ce qui alimente le badge « tarif personnalisé » de la liste.
+            var pageIds = students.Select(s => s.Id).ToList();
+            var overrides = await _context.StudentFeeOverrides
+                .Where(o => pageIds.Contains(o.StudentId))
+                .ToDictionaryAsync(o => o.StudentId, o => o);
+
             return new StudentListResponseDto
             {
-                Items = students.Select(MapToResponseDto).ToList(),
+                Items = students
+                    .Select(s => MapToResponseDto(s, overrides.GetValueOrDefault(s.Id)))
+                    .ToList(),
                 TotalCount = totalCount,
                 Page = page,
-                PageSize = pageSize
+                PageSize = pageSize,
+                BoardingCounts = boardingCounts
             };
         }
 
@@ -99,7 +151,12 @@ namespace Idara.API.Services
                 .Include(s => s.Documents)
                 .FirstOrDefaultAsync(s => s.Id == id && s.SchoolId == schoolId && !s.IsDeleted);
 
-            return student == null ? null : MapToResponseDto(student);
+            if (student == null) return null;
+
+            var fee = await _context.StudentFeeOverrides
+                .FirstOrDefaultAsync(o => o.StudentId == student.Id);
+
+            return MapToResponseDto(student, fee);
         }
 
         public async Task<StudentResponseDto> CreateStudentAsync(int schoolId, int currentUserId, StudentCreateDto dto)
@@ -145,6 +202,7 @@ namespace Idara.API.Services
                 PreviousSchool = NullIfEmpty(dto.PreviousSchool),
                 PreviousClass = NullIfEmpty(dto.PreviousClass),
                 TransferReason = NullIfEmpty(dto.TransferReason),
+                BoardingStatus = dto.BoardingStatus,
 
                 BloodType = NullIfEmpty(dto.BloodType),
                 Allergies = NullIfEmpty(dto.Allergies),
@@ -186,6 +244,23 @@ namespace Idara.API.Services
                 await _context.SaveChangesAsync();
             }
 
+            // Tarif personnalisé saisi sur la fiche d'inscription. Écrit dans la
+            // MÊME table que l'écran « Tarif par classe » (StudentFeeOverride),
+            // jamais dans un second champ parallèle : deux sources de tarif
+            // finiraient par se contredire sans que personne ne le voie.
+            if (dto.MonthlyFeeFcfa is > 0)
+            {
+                _context.StudentFeeOverrides.Add(new StudentFeeOverride
+                {
+                    StudentId = student.Id,
+                    SchoolId = schoolId,
+                    AmountFcfa = dto.MonthlyFeeFcfa.Value,
+                    Reason = NullIfEmpty(dto.MonthlyFeeReason),
+                    CreatedById = currentUserId,
+                    CreatedAt = now
+                });
+            }
+
             // Liens responsables. On collecte les NOUVEAUX responsables (code +
             // requête SMS) pour l'affichage à l'école ET l'envoi POST-COMMIT.
             var newGuardians = new List<NewGuardianResult>();
@@ -224,6 +299,10 @@ namespace Idara.API.Services
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
 
+            // Pas de re-tarification ici : un élève qui vient d'être créé ne peut
+            // pas encore avoir de facture. Sa première facture sera générée par
+            // le cron, qui résout le tarif via le même FeeResolver.
+
             // POST-COMMIT : envoi SMS de bienvenue best-effort. Si la tx avait
             // rollback, aucun SMS ne serait parti (plus de compte fantôme).
             foreach (var g in newGuardians)
@@ -234,13 +313,21 @@ namespace Idara.API.Services
             return created;
         }
 
-        public async Task<StudentResponseDto?> UpdateStudentAsync(int schoolId, StudentUpdateDto dto)
+        public async Task<StudentResponseDto?> UpdateStudentAsync(int schoolId, int currentUserId, StudentUpdateDto dto)
         {
             var student = await _context.Students
                 .Include(s => s.StudentGuardians)
                 .FirstOrDefaultAsync(s => s.Id == dto.Id && s.SchoolId == schoolId && !s.IsDeleted);
 
             if (student == null) return null;
+
+            // Les 3 entrées de la hiérarchie tarifaire portées par la fiche
+            // élève. On mémorise leur valeur AVANT modification pour ne
+            // re-tarifer que si l'une d'elles a réellement changé (une simple
+            // correction d'orthographe ne doit pas relancer un balayage des
+            // factures).
+            var previousClassId = student.ClassId;
+            var previousBoarding = student.BoardingStatus;
 
             // Validation ClassId
             if (dto.ClassId.HasValue && dto.ClassId.Value > 0)
@@ -251,6 +338,14 @@ namespace Idara.API.Services
                     throw new InvalidOperationException("Classe introuvable pour cette école.");
                 student.ClassId = dto.ClassId.Value;
             }
+
+            // Régime d'hébergement. Une valeur nulle ne pouvant pas distinguer
+            // « ne pas toucher » de « vider », le vidage passe par un drapeau
+            // explicite (cf. StudentUpdateDto).
+            if (dto.ClearBoardingStatus)
+                student.BoardingStatus = null;
+            else if (dto.BoardingStatus.HasValue)
+                student.BoardingStatus = dto.BoardingStatus.Value;
 
             // PATCH partiel : un champ string null ⇒ pas touché. Pour vider, envoyer "".
             if (dto.FirstName != null)        student.FirstName = dto.FirstName;
@@ -293,6 +388,44 @@ namespace Idara.API.Services
 
             if (dto.Notes != null) student.Notes = NullIfEmpty(dto.Notes);
 
+            // Tarif personnalisé : null = ne pas toucher, 0 = supprimer, > 0 = poser.
+            var feeChanged = false;
+            if (dto.MonthlyFeeFcfa.HasValue)
+            {
+                var existingFee = await _context.StudentFeeOverrides
+                    .FirstOrDefaultAsync(o => o.StudentId == student.Id);
+
+                if (dto.MonthlyFeeFcfa.Value <= 0)
+                {
+                    if (existingFee != null)
+                    {
+                        _context.StudentFeeOverrides.Remove(existingFee);
+                        feeChanged = true;
+                    }
+                }
+                else if (existingFee == null)
+                {
+                    _context.StudentFeeOverrides.Add(new StudentFeeOverride
+                    {
+                        StudentId = student.Id,
+                        SchoolId = schoolId,
+                        AmountFcfa = dto.MonthlyFeeFcfa.Value,
+                        Reason = NullIfEmpty(dto.MonthlyFeeReason),
+                        CreatedById = currentUserId,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    feeChanged = true;
+                }
+                else
+                {
+                    feeChanged = existingFee.AmountFcfa != dto.MonthlyFeeFcfa.Value;
+                    existingFee.AmountFcfa = dto.MonthlyFeeFcfa.Value;
+                    if (dto.MonthlyFeeReason != null)
+                        existingFee.Reason = NullIfEmpty(dto.MonthlyFeeReason);
+                    existingFee.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(dto.PhotoBase64))
             {
                 if (!string.IsNullOrEmpty(student.PhotoUrl))
@@ -333,6 +466,25 @@ namespace Idara.API.Services
 
             student.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
+
+            // POST-ENREGISTREMENT : si l'un des trois leviers de tarif a bougé,
+            // on réaligne les factures IMPAYÉES de cet élève sur son nouveau
+            // montant — même règle que pour un changement de tarif côté école
+            // (décision produit 2026-07-07). Sans cela, déplacer un élève d'une
+            // classe à 10 000 vers une classe à 15 000 lui laisserait une facture
+            // à 10 000 : l'écran et la facture raconteraient deux choses
+            // différentes, sans erreur ni trace.
+            // Les factures payées, partiellement payées, annulées ou visées par
+            // un paiement en cours ne sont JAMAIS touchées (garanti par
+            // InvoiceRepricingService, qui est aussi best-effort : un échec ne
+            // doit pas annuler une modification de fiche déjà enregistrée).
+            if (feeChanged
+                || student.ClassId != previousClassId
+                || student.BoardingStatus != previousBoarding)
+            {
+                await _repricing.RepriceUnpaidInvoicesAsync(
+                    schoolId, new[] { student.Id }, CancellationToken.None);
+            }
 
             // POST-COMMIT : envoi SMS de bienvenue best-effort des nouveaux responsables.
             foreach (var g in newGuardians)
@@ -693,8 +845,13 @@ namespace Idara.API.Services
         private static string? NullIfEmpty(string? s) =>
             string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
-        private static StudentResponseDto MapToResponseDto(Student student) => new()
+        private static StudentResponseDto MapToResponseDto(
+            Student student, StudentFeeOverride? fee = null) => new()
         {
+            BoardingStatus = student.BoardingStatus,
+            MonthlyFeeFcfa = fee?.AmountFcfa,
+            MonthlyFeeReason = fee?.Reason,
+
             Id = student.Id,
             FirstName = student.FirstName,
             LastName = student.LastName,

@@ -360,6 +360,20 @@ namespace Idara.API.Controllers
             await _context.CoranDailyRecords.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.CoranCycles.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.StaffAttendances.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Journal du daara (photos avant événements). IgnoreQueryFilters :
+            // sans lui, le filtre global !IsDeleted laisserait les événements
+            // effacés en base, et la suppression de l'école échouerait sur la
+            // clé étrangère — après avoir déjà tout supprimé du reste.
+            await _context.DaaraEventPhotos.IgnoreQueryFilters()
+                .Where(p => p.DaaraEvent.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.DaaraEvents.IgnoreQueryFilters()
+                .Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Objectifs APRÈS les événements : un événement porte une clé
+            // étrangère vers son objectif.
+            await _context.DaaraObjectiveSteps.IgnoreQueryFilters()
+                .Where(s => s.DaaraObjective.SchoolId == id).ExecuteDeleteAsync(ct);
+            await _context.DaaraObjectives.IgnoreQueryFilters()
+                .Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.TimetableSlots.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.ClassSubjectTeachers.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.StudentDocuments.Where(d => d.Student.SchoolId == id).ExecuteDeleteAsync(ct);

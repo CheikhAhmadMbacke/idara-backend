@@ -15,6 +15,11 @@ namespace Idara.API.Data
         public DbSet<StudentDocument> StudentDocuments { get; set; }
         public DbSet<Class> Classes { get; set; }
 
+        public DbSet<DaaraEvent> DaaraEvents { get; set; }
+        public DbSet<DaaraEventPhoto> DaaraEventPhotos { get; set; }
+        public DbSet<DaaraObjective> DaaraObjectives { get; set; }
+        public DbSet<DaaraObjectiveStep> DaaraObjectiveSteps { get; set; }
+
         public DbSet<AcademicYear> AcademicYears { get; set; }
         public DbSet<AcademicPeriod> AcademicPeriods { get; set; }
         public DbSet<Subject> Subjects { get; set; }
@@ -355,6 +360,94 @@ namespace Idara.API.Data
 
             modelBuilder.Entity<StaffAttendance>()
                 .HasQueryFilter(a => !a.IsDeleted);
+
+            // ----- Journal du daara -----
+            modelBuilder.Entity<DaaraEvent>()
+                .HasOne(e => e.School)
+                .WithMany()
+                .HasForeignKey(e => e.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // La frise se lit toujours par école et du plus récent au plus
+            // ancien : c'est exactement ce que cet index sert.
+            modelBuilder.Entity<DaaraEvent>()
+                .HasIndex(e => new { e.SchoolId, e.Date });
+
+            modelBuilder.Entity<DaaraEvent>()
+                .Property(e => e.Title)
+                .HasMaxLength(200);
+
+            modelBuilder.Entity<DaaraEvent>()
+                .Property(e => e.Description)
+                .HasMaxLength(4000);
+
+            modelBuilder.Entity<DaaraEvent>()
+                .HasQueryFilter(e => !e.IsDeleted);
+
+            // Cascade : supprimer un événement emporte ses photos. Le fichier
+            // sur disque, lui, est retiré par le contrôleur — une ligne
+            // orpheline en base coûte moins cher qu'un fichier fantôme.
+            modelBuilder.Entity<DaaraEventPhoto>()
+                .HasOne(p => p.DaaraEvent)
+                .WithMany(e => e.Photos)
+                .HasForeignKey(p => p.DaaraEventId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Filtre miroir de celui de DaaraEvent. Sans lui, EF avertit d'une
+            // incohérence possible (une photo obligatoirement rattachée à un
+            // événement que le filtre global écarte) — et surtout, la photo
+            // d'un événement effacé resterait accessible par la table des
+            // photos alors que l'événement, lui, a disparu.
+            modelBuilder.Entity<DaaraEventPhoto>()
+                .HasQueryFilter(p => !p.DaaraEvent.IsDeleted);
+
+            // ----- Objectifs du daara -----
+            modelBuilder.Entity<DaaraObjective>()
+                .HasOne(o => o.School)
+                .WithMany()
+                .HasForeignKey(o => o.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DaaraObjective>()
+                .HasIndex(o => new { o.SchoolId, o.Status });
+
+            modelBuilder.Entity<DaaraObjective>()
+                .Property(o => o.Title)
+                .HasMaxLength(200);
+
+            modelBuilder.Entity<DaaraObjective>()
+                .Property(o => o.Description)
+                .HasMaxLength(4000);
+
+            modelBuilder.Entity<DaaraObjective>()
+                .Property(o => o.Unit)
+                .HasMaxLength(30);
+
+            modelBuilder.Entity<DaaraObjective>()
+                .HasQueryFilter(o => !o.IsDeleted);
+
+            modelBuilder.Entity<DaaraObjectiveStep>()
+                .HasOne(s => s.DaaraObjective)
+                .WithMany(o => o.Steps)
+                .HasForeignKey(s => s.DaaraObjectiveId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DaaraObjectiveStep>()
+                .Property(s => s.Label)
+                .HasMaxLength(200);
+
+            // Filtre miroir de celui de l'objectif (même raison que les photos).
+            modelBuilder.Entity<DaaraObjectiveStep>()
+                .HasQueryFilter(s => !s.DaaraObjective.IsDeleted);
+
+            // SetNull et non Cascade : supprimer un objectif ne doit JAMAIS
+            // effacer les événements qui lui étaient rattachés. Ils racontent
+            // ce qui s'est passé, indépendamment de l'objectif abandonné.
+            modelBuilder.Entity<DaaraEvent>()
+                .HasOne(e => e.DaaraObjective)
+                .WithMany()
+                .HasForeignKey(e => e.DaaraObjectiveId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<Grade>()
                 .HasOne(g => g.Student)

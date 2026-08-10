@@ -149,7 +149,7 @@ namespace Idara.API.Services
                 try
                 {
                     var perSchool = await GenerateForSchoolAsync(
-                        db, settings.SchoolId, settings.GeneralMonthlyFeeFcfa,
+                        db, settings.SchoolId, settings,
                         periodStart, periodEnd, dueDate, today, notif, bilingual,
                         periodeLabel, skipStudentsWithPeriodInvoice: catchUp, ct);
                     report.SchoolsProcessed++;
@@ -233,7 +233,7 @@ namespace Idara.API.Services
             // (skip=false) → l'unicité (élève, période) hors-annulées suffit, ce
             // qui autorise la régénération explicite d'une facture annulée (§67).
             var stats = await GenerateForSchoolAsync(
-                db, schoolId, settings.GeneralMonthlyFeeFcfa,
+                db, schoolId, settings,
                 periodStart, periodEnd, dueDate, today, notif, bilingual,
                 periodeLabel, skipStudentsWithPeriodInvoice: false, ct);
 
@@ -248,7 +248,7 @@ namespace Idara.API.Services
         private async Task<PerSchoolStats> GenerateForSchoolAsync(
             AppDbContext db,
             int schoolId,
-            long? generalFee,
+            SchoolPaymentSettings settings,
             DateTime periodStart,
             DateTime periodEnd,
             DateTime dueDate,
@@ -264,7 +264,7 @@ namespace Idara.API.Services
             // 2) Tous les élèves actifs avec leur ClassId (pour résoudre le tarif).
             var students = await db.Students
                 .Where(s => s.SchoolId == schoolId && !s.IsDeleted)
-                .Select(s => new { s.Id, s.ClassId, s.FirstName, s.LastName })
+                .Select(s => new { s.Id, s.ClassId, s.BoardingStatus, s.FirstName, s.LastName })
                 .ToListAsync(ct);
 
             if (students.Count == 0) return stats;
@@ -303,13 +303,14 @@ namespace Idara.API.Services
                 .GroupBy(g => g.StudentId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            // 4) Tarif résolu par élève (hiérarchie override > classe > général).
+            // 4) Tarif résolu par élève (tarif élève > statut > classe > général).
             //    Logique PARTAGÉE avec la re-tarification des factures impayées
             //    (InvoiceRepricingService) via FeeResolver → jamais de divergence
             //    entre une facture générée et une facture re-tarifée.
             var fees = await FeeResolver.ResolveAsync(
-                db, schoolId, generalFee,
-                students.Select(s => (s.Id, s.ClassId)).ToList(), today, ct);
+                db, schoolId, settings,
+                students.Select(s => new FeeTarget(s.Id, s.ClassId, s.BoardingStatus)).ToList(),
+                today, ct);
 
             // 5) Pour chaque élève, résout son montant et insère l'Invoice.
             //    INSERT individuel (pas AddRange + un seul SaveChanges) : on
@@ -323,14 +324,14 @@ namespace Idara.API.Services
                     continue;
                 }
 
-                // Tarif résolu (override > classe > général) via FeeResolver.
+                // Tarif résolu (élève > statut > classe > général) via FeeResolver.
                 long? amount = fees.TryGetValue(s.Id, out var f) ? f : null;
 
                 if (amount is null or <= 0)
                 {
                     stats.WithoutFee++;
                     _logger.LogWarning(
-                        "[invoice-cron] SchoolId={SchoolId} StudentId={StudentId} ({Name}) sans tarif (override, ClassFee ni tarif général) — skip",
+                        "[invoice-cron] SchoolId={SchoolId} StudentId={StudentId} ({Name}) sans tarif (ni tarif personnalisé, ni tarif de statut, ni ClassFee, ni tarif général) — skip",
                         schoolId, s.Id, $"{s.FirstName} {s.LastName}");
                     continue;
                 }
