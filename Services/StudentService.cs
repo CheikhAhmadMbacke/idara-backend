@@ -768,7 +768,7 @@ namespace Idara.API.Services
                     // (mais on ne touche PAS au mot de passe ni au numéro = identité).
                     existing.FirstName = dto.FirstName;
                     existing.LastName = dto.LastName;
-                    existing.FullName = $"{dto.FirstName} {dto.LastName}";
+                    existing.FullName = dto.ComposeFullName();
                     if (email != null) existing.Email = email;
                     await _context.SaveChangesAsync();
                 }
@@ -794,7 +794,7 @@ namespace Idara.API.Services
                 Email = email,
                 FirstName = dto.FirstName,
                 LastName = dto.LastName,
-                FullName = $"{dto.FirstName} {dto.LastName}",
+                FullName = dto.ComposeFullName(),
                 PhoneNumber = phone,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(code),
                 Role = UserRoles.Guardian,
@@ -814,16 +814,21 @@ namespace Idara.API.Services
             // doit pas envoyer un SMS si la transaction est ensuite rollback
             // (cf. §42/§57). Ici on prépare juste le message + le code.
             var platform = await _context.GetPlatformSettingsAsync();
+            var displayName = dto.ComposeFullName();
             var welcome = NotificationTemplates.InviteWelcome(
-                dto.FirstName, schoolName, "Responsable", "ولي الأمر", phone, code);
+                // Un responsable connu sous un seul nom n'a pas forcément de
+                // prénom : on retombe sur le nom composé plutôt que d'ouvrir le
+                // message par un vide (« Bonjour , … »).
+                string.IsNullOrWhiteSpace(dto.FirstName) ? displayName : dto.FirstName,
+                schoolName, "Responsable", "ولي الأمر", phone, code);
             // Message PARTAGÉ manuellement (modal récap) = FR simple ; le SMS auto
             // garde le template bilingue `welcome`.
             var messageText = NotificationTemplates.CredentialShare(
-                $"{dto.FirstName} {dto.LastName}".Trim(), phone, code);
+                displayName, phone, code);
 
             var credential = new DTOs.Common.UserCredentialDto
             {
-                FullName = $"{dto.FirstName} {dto.LastName}",
+                FullName = displayName,
                 Phone = phone,
                 Code = code,
                 Message = messageText,
