@@ -40,13 +40,26 @@ namespace Idara.API.Services
             _uploads = uploads.Value;
         }
 
-        public async Task<StudentListResponseDto> GetStudentsAsync(int schoolId, StudentPaginationDto pagination)
+        public async Task<StudentListResponseDto> GetStudentsAsync(
+            int schoolId, StudentPaginationDto pagination,
+            IReadOnlyList<int>? restrictToClassIds = null)
         {
             var query = _context.Students
                 .Include(s => s.Class)
                 .Include(s => s.StudentGuardians)
                     .ThenInclude(sg => sg.Guardian)
                 .Where(s => s.SchoolId == schoolId && !s.IsDeleted);
+
+            // Périmètre de l'appelant EN PREMIER : un enseignant ne voit que les
+            // élèves de ses classes. Placé avant tout le reste pour que la
+            // recherche, les compteurs d'onglets, le total et la pagination
+            // portent tous sur son seul périmètre (§141).
+            if (restrictToClassIds != null)
+            {
+                query = restrictToClassIds.Count == 0
+                    ? query.Where(s => false)
+                    : query.Where(s => s.ClassId != null && restrictToClassIds.Contains(s.ClassId.Value));
+            }
 
             if (!string.IsNullOrWhiteSpace(pagination.Search))
             {

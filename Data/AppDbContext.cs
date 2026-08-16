@@ -61,8 +61,13 @@ namespace Idara.API.Data
 
         // ----- Abonnement plateforme (Phase 4) -----
         public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
+        public DbSet<SubscriptionPlanFeature> SubscriptionPlanFeatures { get; set; }
         public DbSet<Subscription> Subscriptions { get; set; }
         public DbSet<SubscriptionInvoice> SubscriptionInvoices { get; set; }
+
+        // ----- Page publique des tarifs (idara.sn/plans) -----
+        public DbSet<PricingPageContent> PricingPageContents { get; set; }
+        public DbSet<PricingFaq> PricingFaqs { get; set; }
 
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
@@ -82,6 +87,29 @@ namespace Idara.API.Data
             modelBuilder.Entity<PlatformSettings>()
                 .Property(p => p.Id)
                 .ValueGeneratedNever();
+
+            // --- Page publique des tarifs ---
+            // Contenu éditorial : singleton, même motif que PlatformSettings.
+            modelBuilder.Entity<PricingPageContent>()
+                .Property(p => p.Id)
+                .ValueGeneratedNever();
+
+            modelBuilder.Entity<PricingFaq>()
+                .HasIndex(f => f.DisplayOrder);
+
+            // Avantages d'un plan : supprimer un plan emporte ses lignes (elles
+            // n'ont aucun sens seules) ; l'ordre d'affichage est indexé car la
+            // page publique trie dessus à chaque rendu.
+            modelBuilder.Entity<SubscriptionPlanFeature>(entity =>
+            {
+                entity.HasOne(f => f.Plan)
+                      .WithMany(p => p.Features)
+                      .HasForeignKey(f => f.PlanId)
+                      .OnDelete(DeleteBehavior.Cascade);
+                entity.HasIndex(f => new { f.PlanId, f.DisplayOrder });
+                entity.Property(f => f.Label).HasMaxLength(160).IsRequired();
+                entity.Property(f => f.LabelAr).HasMaxLength(160);
+            });
 
             // --- NotificationLog : index pour déduplication des rappels ---
             // (TemplateCode, RelatedEntityId) : « a-t-on déjà envoyé un rappel

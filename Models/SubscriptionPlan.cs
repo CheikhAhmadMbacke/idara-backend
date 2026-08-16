@@ -24,6 +24,31 @@ namespace Idara.API.Models
 
         public string Name { get; set; } = string.Empty;
 
+        /// <summary>Nom en arabe (facultatif) — la page publique est bilingue.</summary>
+        public string? NameAr { get; set; }
+
+        /// <summary>Accroche d'une ligne : « Pour les petits daara qui démarrent ».</summary>
+        public string? Tagline { get; set; }
+        public string? TaglineAr { get; set; }
+
+        /// <summary>Ordre d'affichage sur la page publique (croissant, puis prix).</summary>
+        public int DisplayOrder { get; set; }
+
+        /// <summary>Plan mis en avant sur la page publique (« le plus choisi »).</summary>
+        public bool IsHighlighted { get; set; }
+
+        /// <summary>
+        /// Visible sur la page publique des tarifs. Distinct de
+        /// <see cref="IsActive"/> : un plan peut rester souscriptible sans être
+        /// affiché publiquement (offre en extinction, plan de transition).
+        /// Un deal custom n'est JAMAIS listé publiquement, quoi qu'il vaille —
+        /// publier un prix négocié le rendrait opposable par toutes les écoles.
+        /// </summary>
+        public bool IsPubliclyListed { get; set; } = true;
+
+        /// <summary>Avantages affichés sur la page publique (ordonnables).</summary>
+        public List<SubscriptionPlanFeature> Features { get; set; } = new();
+
         /// <summary>Borne basse d'élèves indicative (informatif, pas contraignant).</summary>
         public int? StudentMin { get; set; }
 

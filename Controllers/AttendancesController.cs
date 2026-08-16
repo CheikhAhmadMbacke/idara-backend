@@ -46,11 +46,19 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Get([FromQuery] AttendanceQueryDto q)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant : un enseignant ne consulte que les
+            // présences des élèves de ses classes (§150).
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.Attendances
                 .Include(a => a.Student)
-                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
+                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted)
+                .Where(a => visible == null
+                    || (a.Student.ClassId != null && visible.Contains(a.Student.ClassId.Value)));
 
             if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.ToUtcDay());
             if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.ToUtcDay());
@@ -84,9 +92,18 @@ namespace Idara.API.Controllers
             var date = dto.Date.ToUtcDay();
             var studentIds = dto.Entries.Select(e => e.StudentId).ToList();
 
-            // Sécurité multi-tenant : tous les élèves doivent appartenir à l'école
+            // Périmètre de l'appelant : un enseignant ne pointe que ses classes.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
+
+            // Sécurité multi-tenant : tous les élèves doivent appartenir à l'école.
+            // Les élèves hors école OU hors périmètre sont silencieusement ignorés
+            // (§16) : l'écran ne propose de toute façon que le périmètre autorisé,
+            // un identifiant en dehors ne peut venir que d'une requête forgée.
             var validStudentIds = await _context.Students
                 .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => visible == null
+                    || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
                 .Select(s => s.Id).ToListAsync();
 
             // On inclut volontairement les soft-deleted dans le lookup pour pouvoir les "ressusciter"
@@ -163,11 +180,19 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Summary([FromQuery] AttendanceQueryDto q)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Même périmètre que la liste : une synthèse non filtrée révélerait
+            // les statistiques de présence de toute l'école.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.Attendances
                 .Include(a => a.Student)
-                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted);
+                .Where(a => a.SchoolId == schoolId.Value && !a.IsDeleted)
+                .Where(a => visible == null
+                    || (a.Student.ClassId != null && visible.Contains(a.Student.ClassId.Value)));
 
             if (q.From.HasValue) query = query.Where(a => a.Date >= q.From.Value.ToUtcDay());
             if (q.To.HasValue) query = query.Where(a => a.Date <= q.To.Value.ToUtcDay());

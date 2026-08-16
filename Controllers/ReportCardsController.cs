@@ -44,12 +44,20 @@ namespace Idara.API.Controllers
             [FromQuery] int? classId)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant : un enseignant ne voit que les bulletins
+            // des élèves de ses classes (§150).
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.ReportCards
                 .Include(r => r.Student).Include(r => r.AcademicPeriod).Include(r => r.Class)
                 .Include(r => r.Lines).ThenInclude(l => l.Subject)
-                .Where(r => r.SchoolId == schoolId.Value);
+                .Where(r => r.SchoolId == schoolId.Value)
+                .Where(r => visible == null
+                    || (r.Student.ClassId != null && visible.Contains(r.Student.ClassId.Value)));
 
             if (studentId.HasValue) query = query.Where(r => r.StudentId == studentId.Value);
             if (academicPeriodId.HasValue) query = query.Where(r => r.AcademicPeriodId == academicPeriodId.Value);
@@ -63,13 +71,20 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> GetById(int id)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
 
             var rc = await _context.ReportCards
                 .Include(r => r.Student).Include(r => r.AcademicPeriod).Include(r => r.Class)
                 .Include(r => r.Lines).ThenInclude(l => l.Subject)
                 .FirstOrDefaultAsync(r => r.Id == id && r.SchoolId == schoolId.Value);
-            return rc == null ? NotFound() : Ok(Map(rc));
+            if (rc == null) return NotFound();
+
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, rc.StudentId))
+                return NotFound();
+
+            return Ok(Map(rc));
         }
 
         /// <summary>
@@ -81,7 +96,13 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Generate([FromBody] GenerateReportCardDto dto)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Un enseignant ne génère de bulletin que pour ses classes (§150).
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
+                return NotFound(ApiResponse<bool>.Fail("Élève introuvable."));
 
             var student = await _context.Students
                 .FirstOrDefaultAsync(s => s.Id == dto.StudentId && s.SchoolId == schoolId.Value && !s.IsDeleted);
@@ -308,6 +329,13 @@ namespace Idara.API.Controllers
             else
             {
                 if (schoolId == null || card.SchoolId != schoolId.Value) return Forbid();
+
+                // Périmètre pédagogique : sans ce contrôle, le PDF complet d'un
+                // bulletin (notes, rang, appréciations) se téléchargerait en
+                // devinant un identifiant, alors que la liste est filtrée (§150).
+                if (!await _context.CanAccessStudentAsync(
+                        role, userId.Value, schoolId.Value, card.StudentId))
+                    return Forbid();
             }
 
             // Régénère si manquant.

@@ -22,11 +22,19 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> GetAll([FromQuery] int? classId, [FromQuery] int? teacherId)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant (§150) : sans ce filtre, un enseignant lit
+            // ici le nom de toutes les classes de l'école et de tous ses
+            // collègues. L'enseignant a `teachers/me/classes` pour les siennes.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.ClassSubjectTeachers
                 .Include(a => a.Class).Include(a => a.Subject).Include(a => a.Teacher)
-                .Where(a => a.SchoolId == schoolId.Value);
+                .Where(a => a.SchoolId == schoolId.Value)
+                .Where(a => visible == null || visible.Contains(a.ClassId));
 
             if (classId.HasValue)   query = query.Where(a => a.ClassId == classId.Value);
             if (teacherId.HasValue) query = query.Where(a => a.TeacherId == teacherId.Value);

@@ -22,11 +22,19 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Get([FromQuery] int? classId, [FromQuery] int? teacherId)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant (§150). L'enseignant dispose en plus de
+            // `my-classes`, qui inclut les classes où il assure un créneau sans
+            // affectation matière — cet endpoint-ci s'en tient aux affectations.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.TimetableSlots
                 .Include(t => t.Class).Include(t => t.Subject).Include(t => t.Teacher)
-                .Where(t => t.SchoolId == schoolId.Value);
+                .Where(t => t.SchoolId == schoolId.Value)
+                .Where(t => visible == null || visible.Contains(t.ClassId));
 
             if (classId.HasValue)   query = query.Where(t => t.ClassId == classId.Value);
             if (teacherId.HasValue) query = query.Where(t => t.TeacherId == teacherId.Value);

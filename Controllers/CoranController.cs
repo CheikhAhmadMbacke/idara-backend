@@ -236,7 +236,7 @@ namespace Idara.API.Controllers
                 .OrderByDescending(r => r.Date)
                 .ToListAsync();
 
-            return Ok(MapDailyList(records));
+            return Ok(MapDailyList(records, IsTeacherLocked(User.GetRole())));
         }
 
         /// <summary>Crée ou met à jour le suivi d'UNE journée (les 3 portions + remarques).</summary>
@@ -262,6 +262,16 @@ namespace Idara.API.Controllers
             var record = await _context.CoranDailyRecords
                 .Include(r => r.Portions)
                 .FirstOrDefaultAsync(r => r.StudentId == dto.StudentId && r.Date == date);
+
+            // Verrou 48 h (§151) : un enseignant ne peut plus REPRENDRE un suivi
+            // saisi il y a plus de 48 h. La création d'une journée ancienne
+            // reste permise — saisir en retard n'est pas modifier.
+            if (record != null && IsTeacherLocked(User.GetRole()) && !IsWithinEditWindow(record))
+            {
+                return BadRequest(ApiResponse<bool>.Fail(
+                    $"Ce suivi a été enregistré il y a plus de {EditWindowHours} heures : il n'est plus modifiable. " +
+                    "Demandez à la direction du daara de le corriger."));
+            }
 
             if (record == null)
             {
@@ -335,7 +345,7 @@ namespace Idara.API.Controllers
                 .FirstAsync(r => r.Id == record.Id);
             var dayIndex = await _context.CoranDailyRecords
                 .CountAsync(r => r.CycleId == saved.CycleId && r.Date <= saved.Date);
-            return Ok(MapDaily(saved, dayIndex));
+            return Ok(MapDaily(saved, dayIndex, IsTeacherLocked(User.GetRole())));
         }
 
         /// <summary>Supprime le suivi d'une journée.</summary>
@@ -352,6 +362,15 @@ namespace Idara.API.Controllers
             if (record == null) return NotFound();
             if (!await CanAccessStudentAsync(User.GetRole(), userId.Value, schoolId.Value, record.StudentId))
                 return Forbid();
+
+            // Même verrou que la modification (§151) — sans lui, il suffirait de
+            // supprimer puis de re-saisir pour contourner le délai.
+            if (IsTeacherLocked(User.GetRole()) && !IsWithinEditWindow(record))
+            {
+                return BadRequest(ApiResponse<bool>.Fail(
+                    $"Ce suivi a été enregistré il y a plus de {EditWindowHours} heures : il n'est plus supprimable. " +
+                    "Demandez à la direction du daara."));
+            }
 
             // Portions supprimées en cascade (FK Cascade). On ne réouvre PAS un
             // cycle déjà clôturé (le parent l'a peut-être déjà consulté).
@@ -528,32 +547,48 @@ namespace Idara.API.Controllers
             }
         }
 
-        /// <summary>Vrai si l'appelant peut accéder à cet élève : Admin/Staff sur
-        /// toute l'école ; Enseignant uniquement sur ses classes affectées.</summary>
-        private async Task<bool> CanAccessStudentAsync(string? role, int userId, int schoolId, int studentId)
-        {
-            var stu = await _context.Students
-                .Where(s => s.Id == studentId && s.SchoolId == schoolId && !s.IsDeleted)
-                .Select(s => new { s.ClassId })
-                .FirstOrDefaultAsync();
-            if (stu == null) return false;
-
-            if (role == UserRoles.SchoolAdmin || role == UserRoles.SchoolStaff) return true;
-            if (role == UserRoles.Teacher)
-            {
-                if (stu.ClassId == null) return false;
-                return await _context.ClassSubjectTeachers.AnyAsync(
-                    a => a.SchoolId == schoolId && a.TeacherId == userId && a.ClassId == stu.ClassId.Value);
-            }
-            return false;
-        }
+        /// <summary>
+        /// Vrai si l'appelant peut accéder à cet élève. Délègue au socle partagé
+        /// <see cref="AcademicScopeExtensions"/> — cette logique existait ici en
+        /// double avant août 2026, ce qui privait l'Observateur (dont
+        /// <c>GetRole()</c> renvoie « SchoolViewer ») de tout accès au suivi
+        /// Coran alors qu'il doit voir ce que voit le directeur.
+        /// </summary>
+        private Task<bool> CanAccessStudentAsync(string? role, int userId, int schoolId, int studentId)
+            => _context.CanAccessStudentAsync(role, userId, schoolId, studentId);
 
         private static string? TrimOrNull(string? s) =>
             string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+        // ===================================================================
+        // Verrou d'édition du suivi quotidien (§151)
+        // ===================================================================
+
+        /// <summary>
+        /// Délai pendant lequel un enseignant peut encore corriger un suivi
+        /// qu'il a saisi. Au-delà, seule la direction (SchoolAdmin /
+        /// SchoolStaff) peut intervenir : un verrou absolu graverait la moindre
+        /// faute de frappe repérée trop tard.
+        /// </summary>
+        public const int EditWindowHours = 48;
+
+        /// <summary>
+        /// Le délai part de la <b>saisie</b> (<c>CreatedAt</c>), pas de la date
+        /// de la journée : un maître qui reporte le jeudi la journée de lundi
+        /// doit garder ses 48 h pour se relire. Et surtout PAS de
+        /// <c>UpdatedAt</c> — chaque modification repousserait la fenêtre, le
+        /// verrou ne se fermerait jamais.
+        /// </summary>
+        private static bool IsWithinEditWindow(CoranDailyRecord r) =>
+            DateTime.UtcNow - r.CreatedAt <= TimeSpan.FromHours(EditWindowHours);
+
+        /// <summary>Seul l'enseignant est soumis au délai.</summary>
+        private static bool IsTeacherLocked(string? role) => role == UserRoles.Teacher;
+
         /// <summary>Mappe une liste de records en calculant le DayIndex (1..22)
         /// par ordre de date au sein de chaque cycle.</summary>
-        private static List<CoranDailyRecordDto> MapDailyList(List<CoranDailyRecord> records)
+        private static List<CoranDailyRecordDto> MapDailyList(
+            List<CoranDailyRecord> records, bool teacherLocked = false)
         {
             // index par cycle : position chronologique (ascendante) du jour.
             var indexByRecord = new Dictionary<int, int>();
@@ -563,10 +598,16 @@ namespace Idara.API.Controllers
                 foreach (var r in grp.OrderBy(r => r.Date))
                     indexByRecord[r.Id] = ++i;
             }
-            return records.Select(r => MapDaily(r, indexByRecord.TryGetValue(r.Id, out var di) ? di : 0)).ToList();
+            return records
+                .Select(r => MapDaily(
+                    r,
+                    indexByRecord.TryGetValue(r.Id, out var di) ? di : 0,
+                    teacherLocked))
+                .ToList();
         }
 
-        private static CoranDailyRecordDto MapDaily(CoranDailyRecord r, int dayIndex) => new()
+        private static CoranDailyRecordDto MapDaily(
+            CoranDailyRecord r, int dayIndex, bool teacherLocked = false) => new()
         {
             Id = r.Id,
             StudentId = r.StudentId,
@@ -576,6 +617,11 @@ namespace Idara.API.Controllers
             DayIndex = dayIndex,
             Date = r.Date,
             Remarks = r.Remarks,
+            // Verrou d'édition calculé PAR LE SERVEUR (§151) : l'app ne le
+            // recalcule pas, sinon un téléphone à l'heure fausse verrouillerait
+            // ou déverrouillerait à tort. Toujours modifiable pour la direction.
+            Editable = !teacherLocked || IsWithinEditWindow(r),
+            EditWindowHours = EditWindowHours,
             Portions = r.Portions
                 .OrderBy(p => p.Kind)
                 .Select(p => new CoranDailyPortionDto

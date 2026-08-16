@@ -30,9 +30,14 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> GetStudents([FromQuery] StudentPaginationDto pagination)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
 
-            var result = await _studentService.GetStudentsAsync(schoolId.Value, pagination);
+            // Un enseignant ne voit que les élèves de ses classes affectées (§150).
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
+
+            var result = await _studentService.GetStudentsAsync(schoolId.Value, pagination, visible);
             return Ok(result);
         }
 
@@ -41,7 +46,15 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> GetStudent(int id)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Accès unitaire : sans ce contrôle, la fiche complète d'un élève
+            // d'une autre classe (santé, responsables, documents) s'ouvrirait en
+            // devinant son identifiant, malgré la liste filtrée.
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, id))
+                return NotFound();
 
             var student = await _studentService.GetStudentByIdAsync(id, schoolId.Value);
             return student == null ? NotFound() : Ok(student);

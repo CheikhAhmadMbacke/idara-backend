@@ -155,7 +155,9 @@ namespace Idara.API.Controllers
             if (plan != null)
             {
                 dto.PlanName = plan.Name;
+                dto.StudentMin = plan.StudentMin;
                 dto.StudentMax = plan.StudentMax;
+                dto.PlanIsCustom = plan.IsCustom;
                 // Dépassement uniquement sur un plan PUBLIC borné (les deals custom
                 // ne sont jamais auto-ajustés — cf. §101).
                 if (!plan.IsCustom && plan.StudentMax.HasValue && studentCount > plan.StudentMax.Value)

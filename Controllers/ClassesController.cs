@@ -65,12 +65,20 @@ namespace Idara.API.Controllers
         public async Task<ActionResult<IEnumerable<ClassDto>>> GetClasses()
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Un enseignant ne voit QUE ses classes affectées (§150). `null` =
+            // aucune restriction ; une liste VIDE veut dire « aucune classe
+            // affectée » et doit renvoyer une liste vide, jamais toute l'école.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             // Récupération en 2 requêtes (pas N+1) : la liste des classes,
             // puis un GROUP BY pour le nombre d'élèves par classe.
             var rawClasses = await _context.Classes
                 .Where(c => c.SchoolId == schoolId.Value && !c.IsDeleted)
+                .Where(c => visible == null || visible.Contains(c.Id))
                 .OrderBy(c => c.Name)
                 .ToListAsync();
 
@@ -104,7 +112,14 @@ namespace Idara.API.Controllers
         public async Task<ActionResult<ClassDto>> GetClass(int id)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Contrôle unitaire indispensable : filtrer la LISTE sans filtrer ici
+            // laisserait ouvrir n'importe quelle classe en devinant son id.
+            if (!await _context.CanAccessClassAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, id))
+                return NotFound();
 
             var c = await _context.Classes
                 .FirstOrDefaultAsync(c => c.Id == id && c.SchoolId == schoolId.Value && !c.IsDeleted);

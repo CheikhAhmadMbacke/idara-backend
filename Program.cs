@@ -155,6 +155,7 @@ builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
 builder.Services.AddSingleton<IExportPdfService, ExportPdfService>();
 builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
+builder.Services.AddScoped<IPricingPageService, PricingPageService>();
 builder.Services.AddScoped<Idara.API.Services.Notifications.INotificationService, Idara.API.Services.Notifications.NotificationService>();
 
 // ---------- Observabilité (lot 1) ----------

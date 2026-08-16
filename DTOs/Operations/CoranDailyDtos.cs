@@ -31,6 +31,19 @@ namespace Idara.API.DTOs.Operations
         public DateTime Date { get; set; }
         public string? Remarks { get; set; }
         public List<CoranDailyPortionDto> Portions { get; set; } = new();
+
+        /// <summary>
+        /// Ce suivi est-il encore modifiable PAR L'APPELANT ? Calculé côté
+        /// serveur (§151) : un enseignant perd la main au-delà de
+        /// <see cref="EditWindowHours"/> heures après sa saisie, la direction
+        /// garde la main sans limite. Défaut <c>true</c> côté client si le
+        /// champ manque — une APK antérieure ne doit pas croire à un verrou
+        /// inexistant, le serveur reste de toute façon l'autorité.
+        /// </summary>
+        public bool Editable { get; set; } = true;
+
+        /// <summary>Durée du délai, pour l'expliquer à l'utilisateur.</summary>
+        public int EditWindowHours { get; set; }
     }
 
     public class CoranCycleDto

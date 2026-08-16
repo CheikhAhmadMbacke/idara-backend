@@ -26,11 +26,21 @@ namespace Idara.API.Controllers
             [FromQuery] int? classId)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant : un enseignant ne voit que les notes des
+            // élèves de ses classes (§150). Le filtre porte sur la classe ACTUELLE
+            // de l'élève, comme le contrôle d'accès unitaire — les deux doivent
+            // répondre pareil, sinon une note listée deviendrait inéditable.
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.Grades
                 .Include(g => g.Student).Include(g => g.Subject).Include(g => g.AcademicPeriod)
-                .Where(g => g.SchoolId == schoolId.Value && !g.IsDeleted);
+                .Where(g => g.SchoolId == schoolId.Value && !g.IsDeleted)
+                .Where(g => visible == null
+                    || (g.Student.ClassId != null && visible.Contains(g.Student.ClassId.Value)));
 
             if (studentId.HasValue)        query = query.Where(g => g.StudentId == studentId.Value);
             if (subjectId.HasValue)        query = query.Where(g => g.SubjectId == subjectId.Value);
@@ -51,6 +61,11 @@ namespace Idara.API.Controllers
 
             if (!await ValidateOwnership(dto.StudentId, dto.SubjectId, dto.AcademicPeriodId, dto.ClassId, schoolId.Value))
                 return BadRequest(ApiResponse<bool>.Fail("Référence invalide."));
+
+            // Un enseignant ne note que les élèves de ses classes (§150).
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève n'est pas dans vos classes."));
 
             var entity = new Grade
             {
@@ -83,11 +98,16 @@ namespace Idara.API.Controllers
         {
             if (id != dto.Id) return BadRequest(ApiResponse<bool>.Fail("ID mismatch."));
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
 
             var entity = await _context.Grades
                 .FirstOrDefaultAsync(g => g.Id == id && g.SchoolId == schoolId.Value && !g.IsDeleted);
             if (entity == null) return NotFound();
+
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, entity.StudentId))
+                return NotFound();
 
             entity.Value = dto.Value;
             entity.MaxValue = dto.MaxValue;
@@ -115,6 +135,10 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(g => g.Id == id && g.SchoolId == schoolId.Value);
             if (entity == null) return NotFound();
 
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, entity.StudentId))
+                return NotFound();
+
             // Soft-delete + audit (conformité : impact direct sur les bulletins).
             entity.IsDeleted = true;
             entity.DeletedAt = DateTime.UtcNow;
@@ -128,7 +152,12 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> Summary([FromQuery] int studentId, [FromQuery] int academicPeriodId)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, studentId))
+                return NotFound();
 
             var grades = await _context.Grades
                 .Include(g => g.Subject)

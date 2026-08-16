@@ -54,13 +54,21 @@ namespace Idara.API.Controllers
             [FromQuery] DateTime? date)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // Périmètre de l'appelant : un enseignant ne lit le journal que des
+            // élèves de ses classes (§150).
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
 
             var query = _context.DailyJournalEntries
                 .Include(j => j.Student)
                 .Include(j => j.Teacher)
                 .Include(j => j.Subject)
-                .Where(j => j.SchoolId == schoolId.Value && !j.IsDeleted);
+                .Where(j => j.SchoolId == schoolId.Value && !j.IsDeleted)
+                .Where(j => visible == null
+                    || (j.Student.ClassId != null && visible.Contains(j.Student.ClassId.Value)));
 
             if (studentId.HasValue) query = query.Where(j => j.StudentId == studentId.Value);
             if (classId.HasValue)   query = query.Where(j => j.Student.ClassId == classId.Value);
@@ -94,6 +102,11 @@ namespace Idara.API.Controllers
 
             if (!await ValidateRefs(dto.StudentId, dto.SubjectId, schoolId.Value))
                 return BadRequest(ApiResponse<bool>.Fail("Référence invalide."));
+
+            // Un enseignant n'écrit que sur les élèves de ses classes (§150).
+            if (!await _context.CanAccessStudentAsync(
+                    User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève n'est pas dans vos classes."));
 
             var date = dto.Date.ToUtcDay();
             // On charge meme les soft-deleted pour pouvoir les ressusciter si l'enseignant
@@ -153,8 +166,17 @@ namespace Idara.API.Controllers
 
             var date = dto.Date.ToUtcDay();
             var studentIds = dto.Entries.Select(e => e.StudentId).ToList();
+
+            // Périmètre de l'appelant : un enseignant ne rédige que pour ses
+            // classes. Les élèves hors périmètre sont ignorés comme ceux d'une
+            // autre école (§16).
+            var visible = await _context.VisibleClassIdsAsync(
+                User.GetRole(), userId.Value, schoolId.Value);
+
             var validIds = await _context.Students
                 .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => visible == null
+                    || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
                 .Select(s => s.Id).ToListAsync();
 
             // Existant pour upsert

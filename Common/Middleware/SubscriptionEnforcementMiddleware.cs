@@ -40,6 +40,10 @@ namespace Idara.API.Common.Middleware
             "/api/subscriptions/me",
             "/api/push",
             "/pay",
+            // Page publique des tarifs : c'est précisément quand une école est
+            // en impayé qu'elle a besoin de relire les formules.
+            "/plans",
+            "/api/public",
             "/uploads",
             "/swagger"
         };

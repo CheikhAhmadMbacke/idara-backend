@@ -9,6 +9,9 @@ namespace Idara.API.DTOs.Subscription
         public int Id { get; set; }
         public string Code { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string? NameAr { get; set; }
+        public string? Tagline { get; set; }
+        public string? TaglineAr { get; set; }
         public int? StudentMin { get; set; }
         public int? StudentMax { get; set; }
         public long MonthlyPriceFcfa { get; set; }
@@ -16,8 +19,37 @@ namespace Idara.API.DTOs.Subscription
         public int NotificationQuota { get; set; }
         public bool IsActive { get; set; }
         public bool IsCustom { get; set; }
+        public int DisplayOrder { get; set; }
+        public bool IsHighlighted { get; set; }
+        public bool IsPubliclyListed { get; set; }
         public int? SchoolId { get; set; }
         public string? SchoolName { get; set; }
+        public List<PlanFeatureDto> Features { get; set; } = new();
+    }
+
+    /// <summary>Un avantage affiché sous un plan (texte libre, ordonnable).</summary>
+    public class PlanFeatureDto
+    {
+        public int Id { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public string? LabelAr { get; set; }
+        public bool Included { get; set; } = true;
+        public int DisplayOrder { get; set; }
+    }
+
+    /// <summary>Création / édition d'un avantage (SuperAdmin).</summary>
+    public class UpsertPlanFeatureDto
+    {
+        [Required, StringLength(160, MinimumLength = 1)]
+        public string Label { get; set; } = string.Empty;
+
+        [StringLength(160)]
+        public string? LabelAr { get; set; }
+
+        public bool Included { get; set; } = true;
+
+        [Range(0, 1000)]
+        public int DisplayOrder { get; set; }
     }
 
     /// <summary>Édition d'un plan (public ou custom) par le SuperAdmin.</summary>
@@ -42,6 +74,35 @@ namespace Idara.API.DTOs.Subscription
 
         [Range(0, 100000)]
         public int? StudentMax { get; set; }
+
+        // ----- Page publique (tous facultatifs) -----
+
+        /// <summary>
+        /// 🔴 GARDE-FOU ANTI-EFFACEMENT (§140). Ce DTO est envoyé par TOUTES les
+        /// versions de l'application ; une version antérieure à ce chantier
+        /// n'envoie aucun des champs ci-dessous, qui arriveraient donc à null /
+        /// false / 0. Sans ce drapeau, éditer simplement le PRIX d'un plan
+        /// depuis un vieux téléphone effacerait son nom arabe, son accroche, son
+        /// ordre d'affichage et sa mise en avant — silencieusement.
+        /// Absent = false = le serveur IGNORE ces champs.
+        /// </summary>
+        public bool IncludesPublicPageFields { get; set; }
+
+        [StringLength(60)]
+        public string? NameAr { get; set; }
+
+        [StringLength(200)]
+        public string? Tagline { get; set; }
+
+        [StringLength(200)]
+        public string? TaglineAr { get; set; }
+
+        [Range(0, 1000)]
+        public int DisplayOrder { get; set; }
+
+        public bool IsHighlighted { get; set; }
+
+        public bool IsPubliclyListed { get; set; } = true;
     }
 
     /// <summary>Création d'un plan PUBLIC (visible/choisissable par toutes les écoles).</summary>
@@ -68,6 +129,22 @@ namespace Idara.API.DTOs.Subscription
 
         [Range(0, 100000)]
         public int? StudentMax { get; set; }
+
+        [StringLength(60)]
+        public string? NameAr { get; set; }
+
+        [StringLength(200)]
+        public string? Tagline { get; set; }
+
+        [StringLength(200)]
+        public string? TaglineAr { get; set; }
+
+        [Range(0, 1000)]
+        public int DisplayOrder { get; set; }
+
+        public bool IsHighlighted { get; set; }
+
+        public bool IsPubliclyListed { get; set; } = true;
     }
 
     /// <summary>Création d'un deal custom pour une école précise.</summary>
@@ -154,8 +231,16 @@ namespace Idara.API.DTOs.Subscription
     {
         public int StudentCount { get; set; }
         public string? PlanName { get; set; }
+        /// <summary>Borne basse d'élèves du plan courant (informatif).</summary>
+        public int? StudentMin { get; set; }
         /// <summary>Plafond d'élèves du plan courant (null = illimité).</summary>
         public int? StudentMax { get; set; }
+        /// <summary>
+        /// Deal négocié : son plafond n'est JAMAIS appliqué (§101, les plans
+        /// custom sont préservés de l'auto-ajustement). L'écran ne doit donc pas
+        /// afficher un plafond qui ne mordra jamais.
+        /// </summary>
+        public bool PlanIsCustom { get; set; }
         /// <summary>True si l'effectif dépasse le plafond d'un plan public borné.</summary>
         public bool ExceedsCap { get; set; }
         /// <summary>Plan vers lequel l'école sera auto-remontée au prochain prélèvement.</summary>

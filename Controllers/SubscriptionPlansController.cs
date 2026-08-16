@@ -34,12 +34,14 @@ namespace Idara.API.Controllers
         [HttpGet]
         public async Task<ActionResult<ApiResponse<List<SubscriptionPlanDto>>>> GetAll(CancellationToken ct)
         {
-            var plans = await _context.SubscriptionPlans
+            var rows = await _context.SubscriptionPlans
                 .Include(p => p.School)
+                .Include(p => p.Features)
                 .OrderBy(p => p.IsCustom)
+                .ThenBy(p => p.DisplayOrder)
                 .ThenBy(p => p.MonthlyPriceFcfa)
-                .Select(p => Map(p))
                 .ToListAsync(ct);
+            var plans = rows.Select(Map).ToList();
 
             return Ok(ApiResponse<List<SubscriptionPlanDto>>.Ok(plans));
         }
@@ -49,7 +51,8 @@ namespace Idara.API.Controllers
         public async Task<ActionResult<ApiResponse<SubscriptionPlanDto>>> Update(
             int id, [FromBody] UpdateSubscriptionPlanDto dto, CancellationToken ct)
         {
-            var plan = await _context.SubscriptionPlans.Include(p => p.School)
+            var plan = await _context.SubscriptionPlans
+                .Include(p => p.School).Include(p => p.Features)
                 .FirstOrDefaultAsync(p => p.Id == id, ct);
             if (plan == null) return NotFound(ApiResponse<SubscriptionPlanDto>.Fail("Plan introuvable."));
 
@@ -60,6 +63,19 @@ namespace Idara.API.Controllers
             plan.IsActive = dto.IsActive;
             plan.StudentMin = dto.StudentMin;
             plan.StudentMax = dto.StudentMax;
+            // Champs de la page publique : écrits UNIQUEMENT si l'appelant les a
+            // réellement envoyés (§140). Un client qui ne les connaît pas ne doit
+            // pas les effacer en éditant simplement un prix.
+            if (dto.IncludesPublicPageFields)
+            {
+                plan.NameAr = Norm(dto.NameAr);
+                plan.Tagline = Norm(dto.Tagline);
+                plan.TaglineAr = Norm(dto.TaglineAr);
+                plan.DisplayOrder = dto.DisplayOrder;
+                plan.IsHighlighted = dto.IsHighlighted;
+                // Un deal négocié n'est jamais listé publiquement, quoi qu'on envoie.
+                plan.IsPubliclyListed = !plan.IsCustom && dto.IsPubliclyListed;
+            }
             plan.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
@@ -99,6 +115,12 @@ namespace Idara.API.Controllers
                 IsActive = true,
                 IsCustom = false,
                 SchoolId = null,
+                NameAr = Norm(dto.NameAr),
+                Tagline = Norm(dto.Tagline),
+                TaglineAr = Norm(dto.TaglineAr),
+                DisplayOrder = dto.DisplayOrder,
+                IsHighlighted = dto.IsHighlighted,
+                IsPubliclyListed = dto.IsPubliclyListed,
                 CreatedAt = DateTime.UtcNow
             };
             _context.SubscriptionPlans.Add(plan);
@@ -162,6 +184,9 @@ namespace Idara.API.Controllers
                 IsActive = true,
                 IsCustom = true,
                 SchoolId = dto.SchoolId,
+                // Jamais sur la page publique : un prix négocié deviendrait
+                // opposable par toutes les autres écoles.
+                IsPubliclyListed = false,
                 CreatedAt = DateTime.UtcNow
             };
             _context.SubscriptionPlans.Add(plan);
@@ -172,20 +197,12 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<SubscriptionPlanDto>.Ok(Map(plan), "Deal custom créé."));
         }
 
-        private static SubscriptionPlanDto Map(SubscriptionPlan p) => new()
-        {
-            Id = p.Id,
-            Code = p.Code,
-            Name = p.Name,
-            StudentMin = p.StudentMin,
-            StudentMax = p.StudentMax,
-            MonthlyPriceFcfa = p.MonthlyPriceFcfa,
-            AnnualPriceFcfa = p.AnnualPriceFcfa,
-            NotificationQuota = p.NotificationQuota,
-            IsActive = p.IsActive,
-            IsCustom = p.IsCustom,
-            SchoolId = p.SchoolId,
-            SchoolName = p.School?.Name
-        };
+        /// <summary>Une seule fabrique de DTO, partagée avec la page publique.</summary>
+        private static SubscriptionPlanDto Map(SubscriptionPlan p) =>
+            Services.PricingPageService.MapPlan(p);
+
+        /// <summary>Chaîne vide = champ effacé → null en base.</summary>
+        private static string? Norm(string? s) =>
+            string.IsNullOrWhiteSpace(s) ? null : s.Trim();
     }
 }
