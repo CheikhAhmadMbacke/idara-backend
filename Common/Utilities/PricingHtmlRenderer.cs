@@ -46,9 +46,14 @@ namespace Idara.API.Common.Utilities
             // Le titre de l'onglet et le référencement portent la marque et le
             // métier : c'est cette page qu'on veut voir sortir sur « prix
             // logiciel gestion daara ».
+            // « écoles coraniques (daara) » : la forme employée partout ailleurs
+            // sur le site (index.html, manifest, politique de confidentialité).
+            // Les deux mots sont gardés parce qu'un directeur cherche l'un OU
+            // l'autre sur Google — mais « daara et écoles coraniques » serait un
+            // pléonasme, les deux termes désignant la même chose.
             var metaTitle = ar
-                ? "أسعار إدارة — برنامج إدارة الدارات"
-                : "Tarifs Idara — logiciel de gestion pour daara et écoles coraniques";
+                ? "أسعار إدارة — برنامج إدارة المدارس القرآنية (الدارات)"
+                : "Tarifs Idara — logiciel de gestion pour écoles coraniques (daara)";
             var metaDesc = Trim(StripTags(subtitle), 155);
             if (string.IsNullOrWhiteSpace(metaDesc))
                 metaDesc = ar
