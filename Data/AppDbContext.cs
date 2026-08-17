@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Idara.API.Enums;
 using Idara.API.Models;
 
 namespace Idara.API.Data
@@ -752,11 +753,25 @@ namespace Idara.API.Data
                 .HasForeignKey(i => i.StudentId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            // Idempotence du cron de génération : un seul Invoice actif
-            // (non Cancelled) par élève par période. On filtre sur Status pour
-            // permettre une régénération si l'admin annule manuellement.
+            // 🔴 Invoice.Type : PAS de HasDefaultValue ici, exprès. Le défaut des
+            // lignes DÉJÀ en production (toutes des mensualités) est porté par la
+            // migration RegistrationFeeInvoices, dont l'AddColumn a été corrigé en
+            // defaultValue: 1 (précédent §152 — EF génère 0, c'est-à-dire aucune
+            // nature valide). Un HasDefaultValue+HasSentinel aurait fait omettre la
+            // colonne à chaque insert de mensualité : correct sur PostgreSQL, mais
+            // le fournisseur InMemory ignore les défauts relationnels et écrirait
+            // 0 — les bancs d'essai (§143) deviendraient mensongers. Sans défaut
+            // EF, la valeur du CLR (initialiseur = MonthlyFee) est TOUJOURS écrite
+            // explicitement, sur tous les fournisseurs.
+
+            // Idempotence : un seul Invoice actif (non Cancelled) par élève, par
+            // période ET PAR NATURE. Le Type dans la clé permet à une mensualité et
+            // à une facture d'inscription de coexister sur la même date (élève
+            // inscrit le jour de l'échéance) ; il bloque toujours le double envoi
+            // (deux inscriptions le même jour, deux mensualités le même mois). On
+            // filtre sur Status pour permettre une régénération après annulation.
             modelBuilder.Entity<Invoice>()
-                .HasIndex(i => new { i.StudentId, i.PeriodStart })
+                .HasIndex(i => new { i.StudentId, i.PeriodStart, i.Type })
                 .IsUnique()
                 .HasFilter("\"Status\" <> 3"); // 3 = InvoiceStatus.Cancelled
 

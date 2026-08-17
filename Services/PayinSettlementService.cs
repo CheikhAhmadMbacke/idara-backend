@@ -235,10 +235,7 @@ namespace Idara.API.Services
             List<ReceiptConsolidatedLine>? consolidatedLines = isConsolidated
                 ? payment.InvoiceAllocations
                     .OrderBy(a => a.Invoice.Student.FirstName)
-                    .Select(a => new ReceiptConsolidatedLine(
-                        $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
-                        FrenchMonthYear(a.Invoice.PeriodStart),
-                        a.AmountFcfa))
+                    .Select(ReceiptConsolidatedLine.For)
                     .ToList()
                 : null;
             var singleChildName = isConsolidated && payment.InvoiceAllocations.Count == 1
@@ -435,13 +432,7 @@ namespace Idara.API.Services
             }
         }
 
-        private static readonly string[] FrMonths =
-        {
-            "janvier", "fevrier", "mars", "avril", "mai", "juin",
-            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
-        };
-
-        /// <summary>"juin 2026" — sans accent (GSM-7) ni dépendance culture.</summary>
-        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
+        // Le libellé de mois des lignes de reçu vit désormais dans
+        // ReceiptConsolidatedLine.For (source unique des trois sites).
     }
 }

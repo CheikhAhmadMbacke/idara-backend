@@ -102,10 +102,7 @@ namespace Idara.API.Controllers
                 List<ReceiptConsolidatedLine>? consolidatedLines = p.InvoiceAllocations.Count > 0
                     ? p.InvoiceAllocations
                         .OrderBy(a => a.Invoice.Student.FirstName)
-                        .Select(a => new ReceiptConsolidatedLine(
-                            $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
-                            FrenchMonthYear(a.Invoice.PeriodStart),
-                            a.AmountFcfa))
+                        .Select(ReceiptConsolidatedLine.For)
                         .ToList()
                     : null;
                 var regenerated = await _receiptPdf.GenerateAsync(p, school, p.Student, invoice, null, consolidatedLines);
@@ -357,12 +354,6 @@ namespace Idara.API.Controllers
                 return StatusCode(500, ApiResponse<InitiatePaymentResponseDto>.Fail(
                     "Configuration de paiement de l'école introuvable. Contactez le support."));
             }
-            if (settings.BillingMode != BillingMode.FixedAmount)
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Le paiement global n'est disponible que pour les écoles en montant fixe."));
-            }
-
             // Toutes les factures impayables du parent DANS cette école : enfants
             // liés (non supprimés), factures Pending/Overdue, reste dû > 0.
             // Le lien StudentGuardian garantit le cloisonnement multi-tenant.
@@ -374,13 +365,27 @@ namespace Idara.API.Controllers
                                 sg.StudentId == i.StudentId
                                 && sg.GuardianId == guardianId
                                 && !sg.Student.IsDeleted))
-                .Select(i => new { i.Id, Remaining = i.AmountDueFcfa - i.AmountPaidFcfa })
+                .Select(i => new { i.Id, i.Type, Remaining = i.AmountDueFcfa - i.AmountPaidFcfa })
                 .ToListAsync(ct);
+
+            // Garde « montant fixe » ASSOUPLIE (2026-08-17) : elle protégeait le
+            // paiement global des écoles en montant libre, qui n'ont pas de
+            // mensualités pré-générées. Mais une facture d'INSCRIPTION est un
+            // montant fixe par nature, quel que soit le BillingMode — sans cette
+            // exception, une école en montant libre avec des frais d'inscription
+            // montrerait la facture dans « À payer » sans jamais pouvoir
+            // l'encaisser (400 systématique).
+            if (settings.BillingMode != BillingMode.FixedAmount
+                && outstanding.Any(o => o.Type == InvoiceType.MonthlyFee))
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Le paiement global n'est disponible que pour les écoles en montant fixe."));
+            }
 
             if (outstanding.Count == 0)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Aucune mensualité à payer pour vos enfants dans cette école."));
+                    "Aucune facture à payer pour vos enfants dans cette école."));
             }
 
             var targetAmount = outstanding.Sum(o => o.Remaining);
@@ -524,14 +529,6 @@ namespace Idara.API.Controllers
         /// </summary>
         private static string GeneratePublicToken() =>
             Guid.NewGuid().ToString("N");
-
-        private static readonly string[] FrMonths =
-        {
-            "janvier", "fevrier", "mars", "avril", "mai", "juin",
-            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
-        };
-
-        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
 
         private string? GuardianName()
         {

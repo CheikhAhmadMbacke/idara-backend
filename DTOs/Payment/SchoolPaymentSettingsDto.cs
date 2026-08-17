@@ -26,6 +26,9 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Tarif mensuel des externes. Null = non défini.</summary>
         public long? DayMonthlyFeeFcfa { get; set; }
 
+        /// <summary>Frais d'inscription (une fois par élève). Null = non défini.</summary>
+        public long? RegistrationFeeFcfa { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }
@@ -78,5 +81,15 @@ namespace Idara.API.DTOs.Payment
         /// enregistrement des réglages, silencieusement.
         /// </summary>
         public bool IncludesBoardingFees { get; set; }
+
+        /// <summary>Frais d'inscription (FCFA, une fois par élève). Null ou 0 = pas de frais.</summary>
+        [Range(0, 100_000_000, ErrorMessage = "Les frais d'inscription doivent être entre 0 et 100 000 000 FCFA.")]
+        public long? RegistrationFeeFcfa { get; set; }
+
+        /// <summary>
+        /// Même garde-fou de capacité que IncludesBoardingFees, pour le champ
+        /// RegistrationFeeFcfa : absent = le serveur n'y touche pas.
+        /// </summary>
+        public bool IncludesRegistrationFee { get; set; }
     }
 }

@@ -274,6 +274,41 @@ namespace Idara.API.Services
                 });
             }
 
+            // Frais d'inscription → facture Registration, DANS la transaction :
+            // un élève créé sans sa facture d'inscription (crash entre les deux)
+            // serait indétectable — personne ne relancerait la facturation.
+            //
+            // Résolution du montant : la valeur EXPLICITE du formulaire prime
+            // (0 = exonération voulue → pas de facture) ; null = le corps vient
+            // d'une version de l'application antérieure au champ → repli sur le
+            // réglage d'école. L'app à jour envoie toujours une valeur.
+            // PeriodStart = PeriodEnd = jour d'inscription (ce n'est pas une
+            // période) ; échéance +7 jours — au jour même, la facture passerait
+            // « En retard » dès le lendemain et déclencherait un rappel
+            // automatique à une famille qui vient d'inscrire son enfant.
+            var registrationFee = dto.RegistrationFeeFcfa
+                ?? (await _context.SchoolPaymentSettings
+                        .Where(ps => ps.SchoolId == schoolId)
+                        .Select(ps => ps.RegistrationFeeFcfa)
+                        .FirstOrDefaultAsync());
+            if (registrationFee is > 0)
+            {
+                var enrollDay = student.EnrollmentDate.ToUtcDay();
+                _context.Invoices.Add(new Invoice
+                {
+                    SchoolId = schoolId,
+                    StudentId = student.Id,
+                    Type = InvoiceType.Registration,
+                    PeriodStart = enrollDay,
+                    PeriodEnd = enrollDay,
+                    DueDate = enrollDay.AddDays(7),
+                    AmountDueFcfa = registrationFee.Value,
+                    AmountPaidFcfa = 0,
+                    Status = InvoiceStatus.Pending,
+                    CreatedAt = now
+                });
+            }
+
             // Liens responsables. On collecte les NOUVEAUX responsables (code +
             // requête SMS) pour l'affichage à l'école ET l'envoi POST-COMMIT.
             var newGuardians = new List<NewGuardianResult>();

@@ -273,11 +273,16 @@ namespace Idara.API.Services
             // la période (TOUT statut, ANNULÉE comprise) → jamais de recréation
             // d'une facture annulée volontairement, jamais de double facturation.
             // Garantit AU PLUS une tentative de génération par élève et par mois.
+            // ⚠️ MENSUALITÉS uniquement : sans ce filtre, un élève inscrit le 1er
+            // du mois (facture d'inscription à PeriodStart = ce jour-là) ne
+            // recevrait JAMAIS sa mensualité du même mois — sans erreur, sans trace.
             HashSet<int> alreadyInvoiced = new();
             if (skipStudentsWithPeriodInvoice)
             {
                 alreadyInvoiced = (await db.Invoices
-                    .Where(i => i.SchoolId == schoolId && i.PeriodStart == periodStart)
+                    .Where(i => i.SchoolId == schoolId
+                                && i.PeriodStart == periodStart
+                                && i.Type == InvoiceType.MonthlyFee)
                     .Select(i => i.StudentId)
                     .Distinct()
                     .ToListAsync(ct)).ToHashSet();

@@ -57,6 +57,13 @@ namespace Idara.API.Models
         /// <summary>Tarif mensuel des externes. Null = non configuré.</summary>
         public long? DayMonthlyFeeFcfa { get; set; }
 
+        /// <summary>
+        /// Frais d'inscription (FCFA, une fois par élève). Pré-remplit le champ du
+        /// formulaire d'ajout d'élève, où il reste modifiable élève par élève
+        /// (exonération possible). Null = pas de frais d'inscription par défaut.
+        /// </summary>
+        public long? RegistrationFeeFcfa { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }

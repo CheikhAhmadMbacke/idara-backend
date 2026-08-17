@@ -1,3 +1,4 @@
+using Idara.API.Enums;
 using Idara.API.Models;
 
 namespace Idara.API.Services
@@ -30,5 +31,27 @@ namespace Idara.API.Services
     }
 
     /// <summary>Une ligne du reçu consolidé : un enfant réglé, sa période et son montant.</summary>
-    public record ReceiptConsolidatedLine(string StudentName, string PeriodLabel, long AmountFcfa);
+    public record ReceiptConsolidatedLine(string StudentName, string PeriodLabel, long AmountFcfa)
+    {
+        /// <summary>
+        /// Fabrique UNIQUE de la ligne à partir d'une allocation (le webhook, le reçu
+        /// école et le reçu parent construisaient chacun la leur — trois copies qui
+        /// auraient divergé au premier libellé dépendant du type de facture, §118).
+        /// Le libellé est DÉRIVÉ du type : « Frais d'inscription » pour une
+        /// inscription — imprimer « aout 2026 » dessus la ferait passer pour la
+        /// mensualité du mois. Sans accents : GSM-7, même règle que les SMS (§88).
+        /// </summary>
+        public static ReceiptConsolidatedLine For(PaymentInvoiceAllocation a) => new(
+            $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
+            a.Invoice.Type == InvoiceType.Registration
+                ? "Frais d'inscription"
+                : $"{FrMonths[a.Invoice.PeriodStart.Month - 1]} {a.Invoice.PeriodStart.Year}",
+            a.AmountFcfa);
+
+        private static readonly string[] FrMonths =
+        {
+            "janvier", "fevrier", "mars", "avril", "mai", "juin",
+            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+        };
+    }
 }

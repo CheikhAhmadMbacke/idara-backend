@@ -23,6 +23,10 @@ namespace Idara.API.DTOs.Payment
         public string? StudentNumber { get; set; }
         public string? ClassName { get; set; }
 
+        /// <summary>Nature (mensualité / frais d'inscription). Le libellé affiché est
+        /// TOUJOURS dérivé de ce champ, jamais stocké en texte libre.</summary>
+        public InvoiceType Type { get; set; } = InvoiceType.MonthlyFee;
+
         public DateTime PeriodStart { get; set; }
         public DateTime PeriodEnd { get; set; }
         public DateTime DueDate { get; set; }

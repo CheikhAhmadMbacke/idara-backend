@@ -72,10 +72,14 @@ namespace Idara.API.Services
                 var sids = students.Select(s => s.StudentId).ToList();
 
                 // Factures IMPAYÉES (Pending/Overdue), rien encore réglé dessus,
-                // hors annulées/payées.
+                // hors annulées/payées. MENSUALITÉS uniquement : le montant d'une
+                // facture d'inscription est FIGÉ à la création — la re-tarifer au
+                // tarif mensuel courant remplacerait 25 000 F d'inscription par la
+                // mensualité de 15 000 au premier changement de tarif, en silence.
                 var invoices = await _db.Invoices
                     .Where(i => i.SchoolId == schoolId
                                 && sids.Contains(i.StudentId)
+                                && i.Type == InvoiceType.MonthlyFee
                                 && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
                                 && i.AmountPaidFcfa == 0)
                     .ToListAsync(ct);

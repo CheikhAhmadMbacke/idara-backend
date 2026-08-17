@@ -463,6 +463,7 @@ namespace Idara.API.Controllers
                 StudentLastName = i.Student.LastName,
                 StudentNumber = i.Student.StudentNumber,
                 ClassName = i.Student.Class?.Name,
+                Type = i.Type,
                 PeriodStart = i.PeriodStart,
                 PeriodEnd = i.PeriodEnd,
                 DueDate = i.DueDate,

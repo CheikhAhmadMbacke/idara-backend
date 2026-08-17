@@ -136,6 +136,16 @@ namespace Idara.API.Controllers
                     (dto.DayMonthlyFeeFcfa is > 0) ? dto.DayMonthlyFeeFcfa : null;
             }
 
+            // Frais d'inscription : même garde-fou de capacité que les tarifs de
+            // statut (3ᵉ occurrence du piège §137/§140/§152) — une version
+            // antérieure de l'application n'envoie pas ce champ, le recopier tel
+            // quel effacerait le montant à chaque enregistrement des réglages.
+            if (dto.IncludesRegistrationFee)
+            {
+                settings.RegistrationFeeFcfa =
+                    (dto.RegistrationFeeFcfa is > 0) ? dto.RegistrationFeeFcfa : null;
+            }
+
             settings.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
@@ -236,10 +246,7 @@ namespace Idara.API.Controllers
                 List<ReceiptConsolidatedLine>? lines = p.InvoiceAllocations.Count > 0
                     ? p.InvoiceAllocations
                         .OrderBy(a => a.Invoice.Student.FirstName)
-                        .Select(a => new ReceiptConsolidatedLine(
-                            $"{a.Invoice.Student.FirstName} {a.Invoice.Student.LastName}".Trim(),
-                            FrenchMonthYear(a.Invoice.PeriodStart),
-                            a.AmountFcfa))
+                        .Select(ReceiptConsolidatedLine.For)
                         .ToList()
                     : null;
 
@@ -255,13 +262,6 @@ namespace Idara.API.Controllers
             var bytes = await System.IO.File.ReadAllBytesAsync(fullPath, ct);
             return File(bytes, "application/pdf", $"recu-idara-{p.Id:D6}.pdf");
         }
-
-        private static readonly string[] FrMonths =
-        {
-            "janvier", "fevrier", "mars", "avril", "mai", "juin",
-            "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
-        };
-        private static string FrenchMonthYear(DateTime d) => $"{FrMonths[d.Month - 1]} {d.Year}";
 
         // ========================================================
         // ===== ClassFee =====
@@ -529,6 +529,92 @@ namespace Idara.API.Controllers
             return NoContent();
         }
 
+        /// <summary>
+        /// Facture les frais d'inscription d'un élève APRÈS COUP — le chemin
+        /// explicite quand l'école a oublié le montant à la création. Jamais un
+        /// effet de bord de l'enregistrement de la fiche : modifier une fiche ne
+        /// crée pas de facture.
+        /// </summary>
+        [HttpPost("students/{studentId}/registration-invoice")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<InvoiceDto>>> CreateRegistrationInvoice(
+            int studentId, [FromQuery] long? amountFcfa, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var student = await _context.Students
+                .Include(s => s.Class)
+                .FirstOrDefaultAsync(
+                    s => s.Id == studentId && s.SchoolId == schoolId.Value && !s.IsDeleted, ct);
+            if (student == null)
+                return NotFound(ApiResponse<InvoiceDto>.Fail("Élève introuvable."));
+
+            // Garde anti double facturation : l'index unique ne bloque que le même
+            // JOUR (PeriodStart) — deux appels à des dates différentes créeraient
+            // deux factures d'inscription. Une inscription se facture UNE fois ;
+            // pour recommencer, annuler d'abord l'existante.
+            var already = await _context.Invoices.AnyAsync(
+                i => i.StudentId == studentId
+                     && i.Type == InvoiceType.Registration
+                     && i.Status != InvoiceStatus.Cancelled, ct);
+            if (already)
+                return BadRequest(ApiResponse<InvoiceDto>.Fail(
+                    "Cet élève a déjà une facture d'inscription. Annulez-la d'abord si le montant est à reprendre."));
+
+            var amount = amountFcfa
+                ?? await _context.SchoolPaymentSettings
+                    .Where(ps => ps.SchoolId == schoolId.Value)
+                    .Select(ps => ps.RegistrationFeeFcfa)
+                    .FirstOrDefaultAsync(ct);
+            if (amount is not > 0)
+                return BadRequest(ApiResponse<InvoiceDto>.Fail(
+                    "Aucun montant : passez amountFcfa ou configurez les frais d'inscription de l'école."));
+
+            // PeriodStart = AUJOURD'HUI, pas le jour d'inscription de l'élève :
+            // une échéance calée sur une inscription ancienne naîtrait « en
+            // retard » et déclencherait un rappel immédiat.
+            var today = DateTime.UtcNow.ToUtcDay();
+            var invoice = new Invoice
+            {
+                SchoolId = schoolId.Value,
+                StudentId = studentId,
+                Type = InvoiceType.Registration,
+                PeriodStart = today,
+                PeriodEnd = today,
+                DueDate = today.AddDays(7),
+                AmountDueFcfa = amount.Value,
+                AmountPaidFcfa = 0,
+                Status = InvoiceStatus.Pending,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Invoices.Add(invoice);
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[fees] Facture d'inscription {InvoiceId} créée après coup SchoolId={SchoolId} StudentId={StudentId} Montant={Amount}",
+                invoice.Id, schoolId, studentId, amount.Value);
+
+            return Ok(ApiResponse<InvoiceDto>.Ok(new InvoiceDto
+            {
+                Id = invoice.Id,
+                SchoolId = invoice.SchoolId,
+                StudentId = invoice.StudentId,
+                StudentFirstName = student.FirstName,
+                StudentLastName = student.LastName,
+                StudentNumber = student.StudentNumber,
+                ClassName = student.Class?.Name,
+                Type = invoice.Type,
+                PeriodStart = invoice.PeriodStart,
+                PeriodEnd = invoice.PeriodEnd,
+                DueDate = invoice.DueDate,
+                AmountDueFcfa = invoice.AmountDueFcfa,
+                AmountPaidFcfa = invoice.AmountPaidFcfa,
+                Status = invoice.Status,
+                CreatedAt = invoice.CreatedAt
+            }, "Facture d'inscription créée."));
+        }
+
         // ========================================================
         // ===== Vue école : Invoices émises =====
         // ========================================================
@@ -552,8 +638,11 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            // !IsDeleted : un élève SUPPRIMÉ (doublon, erreur de saisie) ne doit pas
+            // laisser ses impayés dans le recouvrement — oubli préexistant corrigé
+            // le 2026-08-17 (les DEUX natures de facture restent listées, avec badge).
             var query = _context.Invoices
-                .Where(i => i.SchoolId == schoolId.Value);
+                .Where(i => i.SchoolId == schoolId.Value && !i.Student.IsDeleted);
 
             if (status.HasValue) query = query.Where(i => i.Status == status.Value);
             if (studentId.HasValue) query = query.Where(i => i.StudentId == studentId.Value);
@@ -572,6 +661,7 @@ namespace Idara.API.Controllers
                     StudentLastName = i.Student.LastName,
                     StudentNumber = i.Student.StudentNumber,
                     ClassName = i.Student.Class != null ? i.Student.Class.Name : null,
+                    Type = i.Type,
                     PeriodStart = i.PeriodStart,
                     PeriodEnd = i.PeriodEnd,
                     DueDate = i.DueDate,
@@ -641,9 +731,14 @@ namespace Idara.API.Controllers
 
             // Factures du mois (hors annulées) — matérialisées pour faire la
             // comparaison d'échéance en mémoire (évite tout souci de traduction).
+            // MENSUALITÉS uniquement : le roster est le cahier d'appel des
+            // mensualités — une facture d'inscription impayée ne doit pas faire
+            // apparaître l'élève « en retard » sur son mois, ni payée le faire
+            // apparaître « à jour » alors que sa mensualité n'existe pas.
             var invoices = await _context.Invoices
                 .Where(i => i.SchoolId == schoolId
                     && i.PeriodStart == periodStart
+                    && i.Type == InvoiceType.MonthlyFee
                     && i.Status != InvoiceStatus.Cancelled)
                 .Select(i => new
                 {
@@ -913,6 +1008,7 @@ namespace Idara.API.Controllers
                 StudentLastName = invoice.Student.LastName,
                 StudentNumber = invoice.Student.StudentNumber,
                 ClassName = invoice.Student.Class?.Name,
+                Type = invoice.Type,
                 PeriodStart = invoice.PeriodStart,
                 PeriodEnd = invoice.PeriodEnd,
                 DueDate = invoice.DueDate,
@@ -1566,6 +1662,7 @@ namespace Idara.API.Controllers
             BoardingMonthlyFeeFcfa = s.BoardingMonthlyFeeFcfa,
             HalfBoardingMonthlyFeeFcfa = s.HalfBoardingMonthlyFeeFcfa,
             DayMonthlyFeeFcfa = s.DayMonthlyFeeFcfa,
+            RegistrationFeeFcfa = s.RegistrationFeeFcfa,
             CreatedAt = s.CreatedAt,
             UpdatedAt = s.UpdatedAt
         };

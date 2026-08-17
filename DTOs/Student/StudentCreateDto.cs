@@ -62,6 +62,19 @@ namespace Idara.API.DTOs.Student
         /// <summary>Motif du tarif personnalisé (affiché à l'école, jamais au parent).</summary>
         [StringLength(200)] public string? MonthlyFeeReason { get; set; }
 
+        /// <summary>
+        /// Frais d'inscription facturés au parent pour CET élève.
+        /// Convention à trois états :
+        ///  - <c>&gt; 0</c> : une facture d'inscription de ce montant est créée ;
+        ///  - <c>0</c> : exonération explicite, AUCUNE facture (même si l'école a
+        ///    un montant par défaut) ;
+        ///  - <c>null</c> : le corps vient d'une version de l'application
+        ///    antérieure au champ → repli sur le réglage d'école
+        ///    (SchoolPaymentSettings.RegistrationFeeFcfa).
+        /// L'application à jour envoie TOUJOURS une valeur explicite.
+        /// </summary>
+        [Range(0, 100_000_000)] public long? RegistrationFeeFcfa { get; set; }
+
         // ----- Santé -----
         [StringLength(10)]  public string? BloodType { get; set; }
         [StringLength(500)] public string? Allergies { get; set; }
