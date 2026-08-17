@@ -972,6 +972,34 @@ namespace Idara.API.Data
             modelBuilder.Entity<CashCategory>()
                 .HasIndex(c => new { c.SchoolId, c.Type });
 
+            // ===== Écoles partenaires de la landing (« Ils nous font confiance ») =====
+
+            // Rattachement optionnel à un daara Idara : son nom (FR/AR) et son logo
+            // sont alors lus sur sa fiche à chaque affichage, jamais recopiés ici.
+            // Cascade : un daara supprimé disparaît de la landing — afficher le logo
+            // d'une école qui a quitté Idara sous « Ils nous font confiance » serait faux.
+            modelBuilder.Entity<TrustedSchool>()
+                .HasOne(t => t.School)
+                .WithMany()
+                .HasForeignKey(t => t.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Un daara ne peut pas figurer deux fois. Index FILTRÉ : plusieurs
+            // partenaires saisis à la main (SchoolId NULL) restent possibles.
+            modelBuilder.Entity<TrustedSchool>()
+                .HasIndex(t => t.SchoolId)
+                .IsUnique()
+                .HasFilter("\"SchoolId\" IS NOT NULL");
+
+            // Longueur bornée sur le NOUVEAU champ seulement. Poser HasMaxLength sur
+            // Name (aujourd'hui `text`) générerait un ALTER COLUMN qui ÉCHOUE si une
+            // ligne existante dépasse la borne — donc MigrateAsync en échec au
+            // démarrage, donc l'API en boucle de redémarrage (§98). La validation du
+            // DTO borne déjà la saisie à 150 : le gain serait nul.
+            modelBuilder.Entity<TrustedSchool>()
+                .Property(t => t.NameAr)
+                .HasMaxLength(150);
+
             // ===== Abonnement plateforme (Phase 4) =====
 
             // Plan public : Code unique parmi les plans NON custom (les deals

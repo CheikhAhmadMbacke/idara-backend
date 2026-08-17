@@ -415,7 +415,12 @@ namespace Idara.API.Controllers
                     .ExecuteDeleteAsync(ct);
             }
 
-            // 5) L'école elle-même
+            // 5) Vitrine publique : le daara disparaît de « Ils nous font confiance ».
+            // La FK est déjà en ON DELETE CASCADE, mais on le fait explicitement pour
+            // rester sur la discipline de ce cascade (toute entité rattachée y figure).
+            await _context.TrustedSchools.Where(t => t.SchoolId == id).ExecuteDeleteAsync(ct);
+
+            // 6) L'école elle-même
             await _context.Schools.Where(s => s.Id == id).ExecuteDeleteAsync(ct);
 
             await tx.CommitAsync(ct);
