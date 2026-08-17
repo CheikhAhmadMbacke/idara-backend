@@ -62,6 +62,36 @@ namespace Idara.API.Models
         public string? MotherEmail { get; set; }
         public string? MotherProfession { get; set; }
 
+        // ----- Sortie de l'effectif (2026-08-17) -----
+        // « Sorti » ≠ « supprimé » : IsDeleted veut dire « cet élève n'aurait
+        // jamais dû exister » (doublon, erreur de saisie) ; ExitDate veut dire
+        // « il a été élève et il est parti » — historique conservé, fiche
+        // consultable, dette payable.
+
+        /// <summary>
+        /// Date de sortie de l'effectif, éventuellement dans le FUTUR (sortie
+        /// programmée : « il part fin juin » saisi en mai). Trois états, tous
+        /// DÉRIVÉS de cette seule date — jamais de booléen parallèle, qui
+        /// finirait par la contredire sans que rien ne le signale :
+        ///   null            → inscrit
+        ///   &gt; aujourd'hui   → inscrit, sortie prévue
+        ///   &lt;= aujourd'hui  → sorti
+        /// La bascule se fait par comparaison de dates à chaque requête
+        /// (StudentScopeExtensions), PAS par une tâche planifiée : un cron en
+        /// panne laisserait des élèves partis facturés et comptés dans le
+        /// palier d'abonnement (même principe que §144 — ce qui se calcule ne
+        /// se stocke pas).
+        /// </summary>
+        public DateTime? ExitDate { get; set; }
+
+        public StudentExitReason? ExitReason { get; set; }
+
+        /// <summary>Précision libre. Obligatoire quand ExitReason == Other.</summary>
+        public string? ExitReasonDetail { get; set; }
+
+        public DateTime? ExitRecordedAt { get; set; }
+        public int? ExitRecordedById { get; set; }
+
         // ----- Métadonnées -----
         public string? Notes { get; set; }
         public int SchoolId { get; set; }

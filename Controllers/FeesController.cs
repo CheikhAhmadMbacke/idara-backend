@@ -290,9 +290,10 @@ namespace Idara.API.Controllers
 
             var classIds = classes.Select(c => c.Id).ToList();
 
-            // Compteur d'élèves
+            // Compteur d'élèves (effectif : mêmes chiffres que la liste des classes)
             var counts = await _context.Students
-                .Where(s => s.ClassId != null && classIds.Contains(s.ClassId.Value) && !s.IsDeleted)
+                .Where(s => s.ClassId != null && classIds.Contains(s.ClassId.Value))
+                .Enrolled()
                 .GroupBy(s => s.ClassId!.Value)
                 .Select(g => new { ClassId = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(x => x.ClassId, x => x.Count, ct);
@@ -402,7 +403,8 @@ namespace Idara.API.Controllers
             // Nouveau tarif courant pour la classe → re-tarifer les factures
             // impayées de ses élèves (sauf ceux à override, préservés par le résolveur).
             var classStudentIds = await _context.Students
-                .Where(s => s.ClassId == classId && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => s.ClassId == classId && s.SchoolId == schoolId.Value)
+                .Enrolled()
                 .Select(s => s.Id)
                 .ToListAsync(ct);
             await _repricing.RepriceUnpaidInvoicesAsync(schoolId.Value, classStudentIds, ct);
@@ -704,8 +706,12 @@ namespace Idara.API.Controllers
             var periodStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
             var todayUtc = DateTime.UtcNow.Date;
 
+            // EnrolledDuring(periodStart), PAS Enrolled() : le suivi d'octobre
+            // doit encore montrer un élève parti en novembre (il devait sa
+            // mensualité d'octobre), et ne plus montrer celui parti en septembre.
             var students = await _context.Students
-                .Where(s => s.SchoolId == schoolId && !s.IsDeleted)
+                .Where(s => s.SchoolId == schoolId)
+                .EnrolledDuring(periodStart)
                 .Select(s => new
                 {
                     s.Id,

@@ -83,8 +83,10 @@ namespace Idara.API.Controllers
                 .ToListAsync();
 
             var classIds = rawClasses.Select(c => c.Id).ToList();
+            // Enrolled() : l'effectif d'une classe = les élèves encore là.
             var counts = await _context.Students
-                .Where(s => s.ClassId != null && classIds.Contains(s.ClassId.Value) && !s.IsDeleted)
+                .Where(s => s.ClassId != null && classIds.Contains(s.ClassId.Value))
+                .Enrolled()
                 .GroupBy(s => s.ClassId!.Value)
                 .Select(g => new { ClassId = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(x => x.ClassId, x => x.Count);
@@ -126,7 +128,8 @@ namespace Idara.API.Controllers
             if (c == null) return NotFound();
 
             var studentCount = await _context.Students
-                .CountAsync(s => s.ClassId == c.Id && !s.IsDeleted);
+                .Where(s => s.ClassId == c.Id).Enrolled()
+                .CountAsync();
             var fees = await CurrentClassFeesAsync(schoolId.Value, new[] { c.Id });
 
             return Ok(new ClassDto
@@ -272,7 +275,8 @@ namespace Idara.API.Controllers
                 // Sans cela, changer le tarif depuis la fiche classe et depuis
                 // l'écran des tarifs ne produirait pas le même résultat.
                 var classStudentIds = await _context.Students
-                    .Where(s => s.ClassId == entity.Id && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                    .Where(s => s.ClassId == entity.Id && s.SchoolId == schoolId.Value)
+                    .Enrolled()
                     .Select(s => s.Id)
                     .ToListAsync();
                 await _repricing.RepriceUnpaidInvoicesAsync(
@@ -280,7 +284,8 @@ namespace Idara.API.Controllers
             }
 
             var studentCount = await _context.Students
-                .CountAsync(s => s.ClassId == entity.Id && !s.IsDeleted);
+                .Where(s => s.ClassId == entity.Id).Enrolled()
+                .CountAsync();
 
             return Ok(new ClassDto
             {
@@ -308,8 +313,15 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(c => c.Id == id && c.SchoolId == schoolId.Value && !c.IsDeleted);
             if (entity == null) return NotFound();
 
-            // Détacher les élèves de la classe avant suppression
-            var students = await _context.Students.Where(s => s.ClassId == id).ToListAsync();
+            // Détacher les élèves de la classe avant suppression — TOUS, y
+            // compris supprimés et sortis : la classe disparaît pour tout le
+            // monde, une fiche archivée ne doit pas pointer une classe morte.
+            // ⚠️ SchoolId ajouté (oubli préexistant corrigé le 2026-08-17) : sans
+            // lui, un identifiant de classe d'une AUTRE école — déjà refusé plus
+            // haut, mais la défense en profondeur ne coûte qu'un prédicat.
+            var students = await _context.Students
+                .Where(s => s.ClassId == id && s.SchoolId == schoolId.Value)
+                .ToListAsync();
             foreach (var s in students) s.ClassId = null;
 
             entity.IsDeleted = true;

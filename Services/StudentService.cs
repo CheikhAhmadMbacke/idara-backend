@@ -89,10 +89,14 @@ namespace Idara.API.Services
             // d'élèves qu'on verra en tapant dessus. Compter avant les filtres
             // de classe ou de recherche ferait afficher « Interne (43) »
             // au-dessus d'une liste de 4 élèves.
-            var counts = await query
+            // Les onglets de régime comptent l'EFFECTIF (une sortie programmée y
+            // reste jusqu'à sa date) ; l'onglet « Sortis » a son propre compte —
+            // chacun calculé sur son périmètre, quel que soit l'onglet actif.
+            var counts = await query.Enrolled()
                 .GroupBy(s => s.BoardingStatus)
                 .Select(g => new { Status = g.Key, Count = g.Count() })
                 .ToListAsync();
+            var exitedCount = await query.Exited().CountAsync();
 
             var boardingCounts = new BoardingCountsDto
             {
@@ -101,7 +105,12 @@ namespace Idara.API.Services
                 HalfBoarding = counts.FirstOrDefault(c => c.Status == Enums.BoardingStatus.HalfBoarding)?.Count ?? 0,
                 Day = counts.FirstOrDefault(c => c.Status == Enums.BoardingStatus.Day)?.Count ?? 0,
                 Unset = counts.FirstOrDefault(c => c.Status == null)?.Count ?? 0,
+                Exited = exitedCount,
             };
+
+            // L'onglet « Sortis » REMPLACE le périmètre normal (comme un onglet
+            // de régime remplace son filtre, §141) ; sinon, liste = l'effectif.
+            query = pagination.Exited == true ? query.Exited() : query.Enrolled();
 
             // Le filtre de régime, lui, s'applique APRÈS le comptage.
             if (pagination.BoardingStatus.HasValue)
@@ -544,6 +553,144 @@ namespace Idara.API.Services
             return updated;
         }
 
+        // ================= Sortie de l'effectif (2026-08-17) =================
+
+        public async Task<StudentExitPreviewDto?> GetExitPreviewAsync(
+            int studentId, int schoolId, DateTime exitDate, CancellationToken ct)
+        {
+            var exists = await _context.Students.AnyAsync(
+                s => s.Id == studentId && s.SchoolId == schoolId && !s.IsDeleted, ct);
+            if (!exists) return null;
+
+            var day = exitDate.ToUtcDay();
+            var unpaid = await _context.Invoices
+                .Where(i => i.StudentId == studentId
+                            && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue))
+                .Select(i => new { i.Type, i.PeriodStart, i.AmountDueFcfa, i.AmountPaidFcfa })
+                .ToListAsync(ct);
+
+            var zero = unpaid.Where(i => i.AmountPaidFcfa == 0).ToList();
+            var cancellable = zero
+                .Where(i => i.Type == InvoiceType.MonthlyFee && i.PeriodStart >= day)
+                .ToList();
+            var partial = unpaid.Where(i => i.AmountPaidFcfa > 0).ToList();
+
+            return new StudentExitPreviewDto
+            {
+                UnpaidInvoiceCount = zero.Count,
+                UnpaidTotalFcfa = zero.Sum(i => i.AmountDueFcfa),
+                CancellableCount = cancellable.Count,
+                CancellableTotalFcfa = cancellable.Sum(i => i.AmountDueFcfa),
+                PartiallyPaidCount = partial.Count,
+                PartiallyPaidRemainingFcfa = partial.Sum(i => i.AmountDueFcfa - i.AmountPaidFcfa),
+            };
+        }
+
+        public async Task<StudentExitResult> ExitStudentAsync(
+            int studentId, int schoolId, int currentUserId, bool canCancelInvoices,
+            StudentExitRequestDto dto, CancellationToken ct)
+        {
+            var student = await _context.Students.FirstOrDefaultAsync(
+                s => s.Id == studentId && s.SchoolId == schoolId && !s.IsDeleted, ct);
+            if (student == null) return StudentExitResult.Fail("Élève introuvable.");
+
+            var today = DateTime.UtcNow.Date;
+            var exitDay = dto.ExitDate!.Value.ToUtcDay();
+
+            // Déjà sorti (date passée) → un doublon, pas une modification. Une
+            // sortie PROGRAMMÉE, elle, peut être redatée (l'école apprend qu'il
+            // part finalement le 15) : ce n'est pas un doublon.
+            if (student.ExitDate != null && student.ExitDate.Value.Date <= today)
+                return StudentExitResult.Fail(
+                    $"Cet élève est déjà sorti le {student.ExitDate:dd/MM/yyyy}. " +
+                    "Réintégrez-le d'abord si c'est une erreur.");
+
+            if (exitDay < student.EnrollmentDate.Date)
+                return StudentExitResult.Fail(
+                    "La date de sortie ne peut pas être antérieure à la date d'inscription.");
+
+            // Borne anti-faute-de-frappe : 2036 saisi pour 2026 laisserait
+            // l'élève facturé indéfiniment, sans que rien ne le signale.
+            if (exitDay > today.AddMonths(24))
+                return StudentExitResult.Fail(
+                    "La date de sortie ne peut pas dépasser 24 mois. Vérifiez l'année saisie.");
+
+            var isFuture = exitDay > today;
+
+            var cancelled = 0;
+            if (dto.CancelUnpaidInvoices)
+            {
+                // Sur une sortie FUTURE, il n'y a rien à annuler : l'élève est
+                // encore là, les mensualités émises sont dues, et celles d'après
+                // son départ ne seront jamais générées. On le DIT plutôt que
+                // d'ignorer le drapeau en silence.
+                if (isFuture)
+                    return StudentExitResult.Fail(
+                        "Une sortie prévue dans le futur n'annule aucune facture : les mensualités " +
+                        "déjà émises restent dues, et celles d'après la sortie ne seront pas créées.");
+                if (!canCancelInvoices)
+                    return StudentExitResult.Fail(
+                        "Seul le directeur (SchoolAdmin) peut annuler les mensualités impayées.");
+
+                // MENSUALITÉS uniquement, rien d'encaissé, période commençant à
+                // partir de la sortie. Jamais une facture partiellement payée
+                // (l'annulation ne rembourse pas, §67), jamais une inscription
+                // (légitimement due à l'arrivée).
+                var toCancel = await _context.Invoices
+                    .Where(i => i.StudentId == studentId
+                                && i.Type == InvoiceType.MonthlyFee
+                                && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
+                                && i.AmountPaidFcfa == 0
+                                && i.PeriodStart >= exitDay)
+                    .ToListAsync(ct);
+                foreach (var inv in toCancel)
+                {
+                    inv.Status = InvoiceStatus.Cancelled;
+                    inv.UpdatedAt = DateTime.UtcNow;
+                }
+                cancelled = toCancel.Count;
+            }
+
+            student.ExitDate = exitDay;
+            student.ExitReason = dto.Reason;
+            student.ExitReasonDetail = NullIfEmpty(dto.ReasonDetail);
+            student.ExitRecordedAt = DateTime.UtcNow;
+            student.ExitRecordedById = currentUserId;
+            student.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[students] Élève {StudentId} (School {SchoolId}) marqué sortant le {ExitDate:yyyy-MM-dd} " +
+                "(motif {Reason}, futur={Future}, factures annulées={Cancelled}) par {UserId}",
+                studentId, schoolId, exitDay, dto.Reason, isFuture, cancelled, currentUserId);
+
+            return StudentExitResult.Success(cancelled);
+        }
+
+        public async Task<StudentExitResult> ReinstateStudentAsync(
+            int studentId, int schoolId, CancellationToken ct)
+        {
+            var student = await _context.Students.FirstOrDefaultAsync(
+                s => s.Id == studentId && s.SchoolId == schoolId && !s.IsDeleted, ct);
+            if (student == null) return StudentExitResult.Fail("Élève introuvable.");
+            if (student.ExitDate == null)
+                return StudentExitResult.Fail("Cet élève fait déjà partie de l'effectif.");
+
+            student.ExitDate = null;
+            student.ExitReason = null;
+            student.ExitReasonDetail = null;
+            student.ExitRecordedAt = null;
+            student.ExitRecordedById = null;
+            student.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[students] Élève {StudentId} (School {SchoolId}) réintégré dans l'effectif",
+                studentId, schoolId);
+            return StudentExitResult.Success();
+        }
+
         public async Task<bool> DeleteStudentAsync(int id, int schoolId)
         {
             var student = await _context.Students
@@ -904,6 +1051,14 @@ namespace Idara.API.Services
             BoardingStatus = student.BoardingStatus,
             MonthlyFeeFcfa = fee?.AmountFcfa,
             MonthlyFeeReason = fee?.Reason,
+
+            ExitDate = student.ExitDate,
+            ExitReason = student.ExitReason,
+            ExitReasonDetail = student.ExitReasonDetail,
+            // Calculé PAR LE SERVEUR : l'app ne compare jamais la date à sa
+            // propre horloge (un téléphone mal réglé afficherait « sorti » un
+            // élève présent, §151).
+            IsExited = StudentScopeExtensions.IsExited(student.ExitDate),
 
             Id = student.Id,
             FirstName = student.FirstName,

@@ -147,8 +147,13 @@ namespace Idara.API.Controllers
             var sub = await _context.Subscriptions
                 .Include(s => s.Plan)
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId.Value, ct);
+            // Enrolled() : un daara ne paie pas pour ses anciens élèves. ⚠️ Doit
+            // rester STRICTEMENT identique au comptage de change-plan et à celui
+            // du prélèvement (SubscriptionBillingService) — sinon l'avertissement
+            // affiché et le palier réellement facturé divergent.
             var studentCount = await _context.Students
-                .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted, ct);
+                .Where(s => s.SchoolId == schoolId.Value).Enrolled()
+                .CountAsync(ct);
 
             var dto = new SubscriptionCapacityDto { StudentCount = studentCount };
             var plan = sub?.Plan;
@@ -209,8 +214,10 @@ namespace Idara.API.Controllers
             // choisir elle-même un plan dont le plafond d'élèves est dépassé par son
             // effectif réel (anti-downgrade abusif). Le SuperAdmin, lui, reste libre
             // (AssignPlan) pour gérer les exceptions / deals custom.
+            // Enrolled() : même comptage que me/capacity et que le prélèvement.
             var studentCount = await _context.Students
-                .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted, ct);
+                .Where(s => s.SchoolId == schoolId.Value).Enrolled()
+                .CountAsync(ct);
             if (plan.StudentMax.HasValue && studentCount > plan.StudentMax.Value)
                 return BadRequest(ApiResponse<SubscriptionDto>.Fail(
                     $"Le plan « {plan.Name} » est limité à {plan.StudentMax} élèves, or votre école en compte {studentCount}. Choisissez un plan adapté à votre effectif."));

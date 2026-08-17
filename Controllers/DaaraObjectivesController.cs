@@ -367,8 +367,12 @@ namespace Idara.API.Controllers
             long studentCount = 0;
             if (objectives.Any(o => o.MeasureMode == ObjectiveMeasureMode.StudentCount))
             {
+                // Enrolled() : « Atteindre 200 élèves » compte l'effectif réel —
+                // une sortie fait redescendre la barre, c'est voulu (§144, la
+                // valeur est lue à chaque affichage).
                 studentCount = await _context.Students
-                    .CountAsync(s => s.SchoolId == schoolId && !s.IsDeleted, ct);
+                    .Where(s => s.SchoolId == schoolId).Enrolled()
+                    .CountAsync(ct);
             }
 
             var ids = objectives.Select(o => o.Id).ToList();

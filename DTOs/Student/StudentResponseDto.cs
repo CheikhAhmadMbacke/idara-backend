@@ -41,6 +41,20 @@ namespace Idara.API.DTOs.Student
         /// <summary>Motif du tarif personnalisé (usage interne à l'école).</summary>
         public string? MonthlyFeeReason { get; set; }
 
+        // ----- Sortie de l'effectif -----
+
+        /// <summary>Date de sortie (éventuellement future = programmée). Null = inscrit.</summary>
+        public DateTime? ExitDate { get; set; }
+        public StudentExitReason? ExitReason { get; set; }
+        public string? ExitReasonDetail { get; set; }
+
+        /// <summary>
+        /// « Déjà sorti » — CALCULÉ PAR LE SERVEUR : l'app ne compare jamais
+        /// ExitDate à l'horloge du téléphone (§151). false + ExitDate non nulle
+        /// = sortie programmée, encore dans l'effectif.
+        /// </summary>
+        public bool IsExited { get; set; }
+
         public string? BloodType { get; set; }
         public string? Allergies { get; set; }
         public string? ChronicConditions { get; set; }

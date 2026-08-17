@@ -234,6 +234,15 @@ namespace Idara.API.Data
             modelBuilder.Entity<Student>()
                 .HasIndex(s => new { s.SchoolId, s.IsDeleted });
 
+            // Périmètre « effectif actuel » (StudentScopeExtensions) : toutes les
+            // listes et tous les comptages filtrent sur ce trio.
+            modelBuilder.Entity<Student>()
+                .HasIndex(s => new { s.SchoolId, s.IsDeleted, s.ExitDate });
+
+            modelBuilder.Entity<Student>()
+                .Property(s => s.ExitReasonDetail)
+                .HasMaxLength(300);
+
             modelBuilder.Entity<Student>()
                 .HasIndex(s => new { s.SchoolId, s.StudentNumber })
                 .IsUnique()

@@ -72,6 +72,11 @@ namespace Idara.API.Controllers
             var payment = await LookupAsync(paymentId, token, ct);
             if (payment == null) return NotFound(new { error = "not_found" });
 
+            // VOLONTAIREMENT sans !IsDeleted ni filtre « sorti » (décision
+            // 2026-08-17) : l'élève d'un paiement est une donnée HISTORIQUE —
+            // le reçu d'un paiement réel doit porter son nom même si sa fiche a
+            // été supprimée depuis (même logique que les jointures Invoice.Student
+            // des historiques). L'accès est déjà gardé par le jeton 128 bits.
             var student = payment.StudentId.HasValue
                 ? await _context.Students.FirstOrDefaultAsync(s => s.Id == payment.StudentId.Value, ct)
                 : null;

@@ -30,8 +30,11 @@ namespace Idara.API.Controllers
         private async Task NotifyJournalAsync(IReadOnlyCollection<int> studentIds)
         {
             if (studentIds.Count == 0) return;
+            // Enrolled() : !IsDeleted manquait (oubli préexistant corrigé le
+            // 2026-08-17) et un sortant ne notifie plus ses parents.
             var names = await _context.Students
                 .Where(s => studentIds.Contains(s.Id))
+                .Enrolled()
                 .Select(s => new { s.Id, s.FirstName, s.LastName })
                 .ToListAsync();
             foreach (var s in names)
@@ -173,8 +176,11 @@ namespace Idara.API.Controllers
             var visible = await _context.VisibleClassIdsAsync(
                 User.GetRole(), userId.Value, schoolId.Value);
 
+            // Enrolled() : un élève sorti est ignoré comme un élève d'une autre
+            // école (§16) — plus de saisie de journal sur lui (D4).
             var validIds = await _context.Students
-                .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value)
+                .Enrolled()
                 .Where(s => visible == null
                     || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
                 .Select(s => s.Id).ToListAsync();
@@ -315,7 +321,12 @@ namespace Idara.API.Controllers
 
         private async Task<bool> ValidateRefs(int studentId, int? subjectId, int schoolId)
         {
-            var sOk = await _context.Students.AnyAsync(s => s.Id == studentId && s.SchoolId == schoolId && !s.IsDeleted);
+            // Enrolled() : la saisie unitaire suit la même règle que le lot —
+            // plus de journal sur un élève sorti (D4).
+            var sOk = await _context.Students
+                .Where(s => s.Id == studentId && s.SchoolId == schoolId)
+                .Enrolled()
+                .AnyAsync();
             if (!sOk) return false;
             if (subjectId.HasValue)
             {

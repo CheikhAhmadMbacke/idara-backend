@@ -67,6 +67,12 @@ namespace Idara.API.Controllers
                     User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
                 return BadRequest(ApiResponse<bool>.Fail("Cet élève n'est pas dans vos classes."));
 
+            // Garde d'ÉCRITURE : plus de saisie de note sur un élève sorti (D4).
+            // La consultation de son historique et son bulletin restent libres.
+            if (!await _context.IsEnrolledAsync(dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Cet élève ne fait plus partie de l'effectif."));
+
             var entity = new Grade
             {
                 SchoolId = schoolId.Value,
@@ -109,6 +115,11 @@ namespace Idara.API.Controllers
                     User.GetRole(), userId.Value, schoolId.Value, entity.StudentId))
                 return NotFound();
 
+            // Même garde d'écriture que la création (D4).
+            if (!await _context.IsEnrolledAsync(entity.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Cet élève ne fait plus partie de l'effectif."));
+
             entity.Value = dto.Value;
             entity.MaxValue = dto.MaxValue;
             entity.Coefficient = dto.Coefficient;
@@ -138,6 +149,12 @@ namespace Idara.API.Controllers
             if (!await _context.CanAccessStudentAsync(
                     User.GetRole(), userId.Value, schoolId.Value, entity.StudentId))
                 return NotFound();
+
+            // PAS de garde « sorti » sur la suppression, exprès : retirer une note
+            // erronée d'un élève parti est une correction légitime — la bloquer
+            // graverait la faute dans son bulletin d'archive. Le contournement qui
+            // impose d'aligner suppression et modification au §151 (supprimer puis
+            // re-saisir) est impossible ici : la CRÉATION est bloquée.
 
             // Soft-delete + audit (conformité : impact direct sur les bulletins).
             entity.IsDeleted = true;

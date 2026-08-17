@@ -160,8 +160,15 @@ namespace Idara.API.Controllers
                     var staffIds = await _context.Users
                         .Where(u => !u.IsDeleted && u.SchoolId == sid)
                         .Select(u => u.Id).ToListAsync(ct);
+                    // Parents de l'EFFECTIF : un parent dont l'enfant est parti
+                    // (ou supprimé — oubli préexistant corrigé le 2026-08-17) ne
+                    // reçoit plus les annonces de l'école.
+                    var bTdy = DateTime.UtcNow.Date;
                     var guardianIds = await _context.StudentGuardians
-                        .Where(sg => sg.Student.SchoolId == sid && !sg.Guardian.IsDeleted)
+                        .Where(sg => sg.Student.SchoolId == sid
+                                     && !sg.Guardian.IsDeleted
+                                     && !sg.Student.IsDeleted
+                                     && (sg.Student.ExitDate == null || sg.Student.ExitDate > bTdy))
                         .Select(sg => sg.GuardianId).Distinct().ToListAsync(ct);
                     userIds = staffIds.Concat(guardianIds).Distinct().ToList();
                     break;

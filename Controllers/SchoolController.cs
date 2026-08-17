@@ -433,12 +433,21 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            // Enrolled() : l'effectif affiché = l'effectif facturé (même
+            // périmètre que le palier d'abonnement).
             var totalStudents = await _context.Students
-                .CountAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted);
+                .Where(s => s.SchoolId == schoolId.Value).Enrolled()
+                .CountAsync();
             var totalTeachers = await _context.Users
                 .CountAsync(u => u.SchoolId == schoolId.Value && u.Role == UserRoles.Teacher && !u.IsDeleted);
+            // Parents de l'EFFECTIF (élèves supprimés — oubli préexistant corrigé
+            // le 2026-08-17 — et sortis exclus). Périmètre Enrolled écrit en ligne :
+            // l'extension ne s'applique qu'à IQueryable<Student>.
+            var today = DateTime.UtcNow.Date;
             var totalGuardians = await _context.StudentGuardians
-                .Where(sg => sg.Student.SchoolId == schoolId.Value)
+                .Where(sg => sg.Student.SchoolId == schoolId.Value
+                             && !sg.Student.IsDeleted
+                             && (sg.Student.ExitDate == null || sg.Student.ExitDate > today))
                 .Select(sg => sg.GuardianId)
                 .Distinct()
                 .CountAsync();
@@ -601,6 +610,11 @@ namespace Idara.API.Controllers
                     "Impossible de supprimer un administrateur depuis cet espace."));
 
             // Scoping strict : l'utilisateur doit appartenir à mon école.
+            // ⚠️ VOLONTAIREMENT sans !Student.IsDeleted ni filtre « sorti »
+            // (décision 2026-08-17) : un flux de SUPPRESSION doit voir tous les
+            // liens — filtrer rendrait insupprimable un parent dont le seul
+            // enfant a été supprimé (orphelin permanent). Même logique que la
+            // cascade d'école (§77).
             var belongsToSchool = user.Role == UserRoles.Guardian
                 ? await _context.StudentGuardians.AnyAsync(
                     sg => sg.GuardianId == userId && sg.Student.SchoolId == schoolId.Value, ct)

@@ -29,8 +29,12 @@ namespace Idara.API.Controllers
         private async Task NotifyAbsencesAsync(IReadOnlyCollection<int> absentStudentIds)
         {
             if (absentStudentIds.Count == 0) return;
+            // Enrolled() : !IsDeleted manquait (oubli préexistant corrigé le
+            // 2026-08-17) et un sortant ne notifie plus ses parents — double
+            // filet avec le point central de NotificationService.
             var names = await _context.Students
                 .Where(s => absentStudentIds.Contains(s.Id))
+                .Enrolled()
                 .Select(s => new { s.Id, s.FirstName, s.LastName })
                 .ToListAsync();
             foreach (var s in names)
@@ -97,11 +101,13 @@ namespace Idara.API.Controllers
                 User.GetRole(), userId.Value, schoolId.Value);
 
             // Sécurité multi-tenant : tous les élèves doivent appartenir à l'école.
-            // Les élèves hors école OU hors périmètre sont silencieusement ignorés
-            // (§16) : l'écran ne propose de toute façon que le périmètre autorisé,
-            // un identifiant en dehors ne peut venir que d'une requête forgée.
+            // Les élèves hors école, hors périmètre OU SORTIS sont silencieusement
+            // ignorés (§16) : l'écran ne propose de toute façon que le périmètre
+            // autorisé, un identifiant en dehors ne peut venir que d'une requête
+            // forgée. Enrolled() = plus de pointage sur un élève parti (D4).
             var validStudentIds = await _context.Students
-                .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value && !s.IsDeleted)
+                .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value)
+                .Enrolled()
                 .Where(s => visible == null
                     || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
                 .Select(s => s.Id).ToListAsync();

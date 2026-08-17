@@ -84,10 +84,16 @@ namespace Idara.API.Services
 
             if (overdue.Count == 0) return 0;
 
-            // Responsables joignables, groupés par élève.
+            // Responsables joignables, groupés par élève. Enrolled() (2026-08-17) :
+            // le recouvrement d'une famille partie se fait par téléphone, pas par
+            // un SMS automatique répété — un élève SORTI (ou supprimé : oubli
+            // préexistant, un rappel pouvait partir pour lui) sort du dictionnaire,
+            // et la boucle plus bas saute sa facture. Sa dette reste visible côté
+            // école et payable côté parent.
             var studentIds = overdue.Select(o => o.StudentId).Distinct().ToList();
             var students = await db.Students
                 .Where(s => studentIds.Contains(s.Id))
+                .Enrolled()
                 .Select(s => new { s.Id, s.FirstName, s.LastName })
                 .ToDictionaryAsync(s => s.Id, s => $"{s.FirstName} {s.LastName}".Trim(), ct);
 
@@ -118,7 +124,11 @@ namespace Idara.API.Services
                 if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians))
                     continue;
 
-                var eleve = students.TryGetValue(inv.StudentId, out var name) ? name : "votre enfant";
+                // Élève absent du dictionnaire = hors effectif (sorti/supprimé) :
+                // aucun rappel automatique. Avant : repli « votre enfant » et le
+                // SMS partait quand même.
+                if (!students.TryGetValue(inv.StudentId, out var eleve))
+                    continue;
                 var msg = NotificationTemplates.InvoiceOverdue(eleve, inv.Remaining);
                 foreach (var g in guardians)
                 {

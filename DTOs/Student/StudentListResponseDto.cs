@@ -22,6 +22,14 @@ namespace Idara.API.DTOs.Student
 
         /// <summary>Élèves dont le régime n'est pas renseigné.</summary>
         public int Unset { get; set; }
+
+        /// <summary>
+        /// Élèves SORTIS de l'effectif (onglet « Sortis »). Compté sur son
+        /// propre périmètre : les onglets de régime comptent l'effectif, celui-ci
+        /// compte les partis — chacun annonce ce qu'on verra en tapant dessus.
+        /// Une sortie PROGRAMMÉE (date future) n'y figure pas encore.
+        /// </summary>
+        public int Exited { get; set; }
     }
 
     public class StudentListResponseDto

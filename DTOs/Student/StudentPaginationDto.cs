@@ -41,5 +41,13 @@ namespace Idara.API.DTOs.Student
         /// déjà dire « pas de filtre ».
         /// </summary>
         public bool? WithoutClass { get; set; }
+
+        /// <summary>
+        /// true = l'onglet « Sortis » (élèves qui ne font plus partie de
+        /// l'effectif). Null/false = l'effectif — le défaut, donc une ancienne
+        /// version de l'app qui n'envoie pas le champ voit l'effectif, comme
+        /// avant. Les sorties PROGRAMMÉES (date future) restent côté effectif.
+        /// </summary>
+        public bool? Exited { get; set; }
     }
 }

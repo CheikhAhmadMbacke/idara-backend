@@ -842,9 +842,14 @@ namespace Idara.API.Controllers
                     "Ce compte n'a pas de numéro : aucun code à régénérer."));
 
             // Scoping strict multi-tenant : la cible appartient à mon école.
+            // !Student.IsDeleted (oubli préexistant corrigé le 2026-08-17) ; un
+            // enfant SORTI suffit en revanche — son parent utilise encore l'app
+            // pour consulter et payer ce qu'il doit (D2).
             var belongsToSchool = target.Role == UserRoles.Guardian
                 ? await _context.StudentGuardians.AnyAsync(
-                    sg => sg.GuardianId == userId && sg.Student.SchoolId == currentUser.SchoolId.Value)
+                    sg => sg.GuardianId == userId
+                          && sg.Student.SchoolId == currentUser.SchoolId.Value
+                          && !sg.Student.IsDeleted)
                 : target.SchoolId == currentUser.SchoolId.Value;
             if (!belongsToSchool)
                 return BadRequest(ApiResponse<UserCredentialDto>.Fail(

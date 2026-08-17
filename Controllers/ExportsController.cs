@@ -28,9 +28,11 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
 
+            // Enrolled() : l'export suit la liste (§116) — l'effectif, pas les sortis.
             var query = _context.Students
                 .Include(s => s.Class)
-                .Where(s => s.SchoolId == schoolId.Value && !s.IsDeleted);
+                .Where(s => s.SchoolId == schoolId.Value)
+                .Enrolled();
 
             if (classId.HasValue)
                 query = query.Where(s => s.ClassId == classId.Value);

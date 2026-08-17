@@ -1,3 +1,4 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -57,8 +58,11 @@ namespace Idara.API.Services
                 var today = DateTime.UtcNow.Date;
 
                 // Élèves concernés (avec leur classe, pour résoudre le tarif).
+                // Enrolled() : la dette d'un élève SORTI est figée — un changement
+                // de tarif postérieur à son départ ne la re-tarife plus.
                 var studentsQuery = _db.Students
-                    .Where(s => s.SchoolId == schoolId && !s.IsDeleted);
+                    .Where(s => s.SchoolId == schoolId)
+                    .Enrolled();
                 if (studentIds != null)
                     studentsQuery = studentsQuery.Where(s => studentIds.Contains(s.Id));
                 var students = await studentsQuery

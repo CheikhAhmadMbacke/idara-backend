@@ -230,8 +230,17 @@ namespace Idara.API.Services.Notifications
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    // Point de coupure CENTRAL des notifs élève : un élève
+                    // supprimé (oubli préexistant corrigé le 2026-08-17) ou SORTI
+                    // ne déclenche plus rien vers ses parents — absence, journal,
+                    // cycle Coran, bulletin, d'un coup. Périmètre Enrolled écrit
+                    // en ligne (l'extension porte sur IQueryable<Student>).
+                    var today = DateTime.UtcNow.Date;
                     guardians = await db.StudentGuardians
-                        .Where(sg => sg.StudentId == studentId && !sg.Guardian.IsDeleted)
+                        .Where(sg => sg.StudentId == studentId
+                                     && !sg.Guardian.IsDeleted
+                                     && !sg.Student.IsDeleted
+                                     && (sg.Student.ExitDate == null || sg.Student.ExitDate > today))
                         .Select(sg => new GuardianRef(sg.GuardianId, sg.Guardian.PreferredLanguage))
                         .ToListAsync(ct);
                 }

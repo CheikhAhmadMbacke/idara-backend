@@ -261,9 +261,13 @@ namespace Idara.API.Services
         {
             var stats = new PerSchoolStats();
 
-            // 2) Tous les élèves actifs avec leur ClassId (pour résoudre le tarif).
+            // 2) Tous les élèves de l'EFFECTIF avec leur ClassId (pour résoudre le
+            // tarif). Enrolled() : plus aucune facture pour un élève sorti — c'est
+            // LE point le plus critique du chantier « élève sortant ». Une sortie
+            // programmée (date future) reste facturée jusqu'à sa date.
             var students = await db.Students
-                .Where(s => s.SchoolId == schoolId && !s.IsDeleted)
+                .Where(s => s.SchoolId == schoolId)
+                .Enrolled()
                 .Select(s => new { s.Id, s.ClassId, s.BoardingStatus, s.FirstName, s.LastName })
                 .ToListAsync(ct);
 

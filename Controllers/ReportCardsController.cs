@@ -117,10 +117,20 @@ namespace Idara.API.Controllers
             List<int> classmateIds;
             if (student.ClassId.HasValue)
             {
+                // EnrolledDuring(début de période) : un élève parti AVANT la
+                // période ne gonfle plus le rang ni le « /N élèves » ; celui qui
+                // l'a suivie — dont l'élève sorti pour qui on génère ce bulletin
+                // final (D4) — y reste classé. SchoolId ajouté au passage
+                // (défense en profondeur : la classe vient de l'élève contrôlé).
                 classmateIds = await _context.Students
-                    .Where(s => s.ClassId == student.ClassId && !s.IsDeleted)
+                    .Where(s => s.ClassId == student.ClassId && s.SchoolId == schoolId.Value)
+                    .EnrolledDuring(period.StartDate)
                     .Select(s => s.Id)
                     .ToListAsync();
+                // L'élève cible appartient toujours à son propre classement,
+                // même si sa sortie est antérieure au début de la période (cas
+                // limite : bulletin de rattrapage) — sans lui, son rang n'existe pas.
+                if (!classmateIds.Contains(student.Id)) classmateIds.Add(student.Id);
             }
             else
             {

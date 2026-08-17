@@ -41,7 +41,10 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
-            // 1) Liste des enfants liés au guardian.
+            // 1) Liste des enfants liés au guardian. Les enfants SORTIS restent
+            // inclus (D2) : le parent garde bulletins et historique, et sa dette
+            // reste payable — l'app les regroupe sous « N'est plus inscrit ».
+            var todayForExit = DateTime.UtcNow.Date;
             var students = await _context.StudentGuardians
                 .Include(sg => sg.Student).ThenInclude(s => s.Class)
                 .Include(sg => sg.Student).ThenInclude(s => s.School)
@@ -58,6 +61,10 @@ namespace Idara.API.Controllers
                     SchoolId = sg.Student.SchoolId,
                     StudentNumber = sg.Student.StudentNumber,
                     IsPrimaryGuardian = sg.IsPrimaryGuardian,
+                    ExitDate = sg.Student.ExitDate,
+                    // Calculé côté serveur (§151) — une sortie PROGRAMMÉE n'est
+                    // pas « sorti » : l'enfant est encore en classe.
+                    IsExited = sg.Student.ExitDate != null && sg.Student.ExitDate <= todayForExit,
                 })
                 .ToListAsync();
 
@@ -887,6 +894,14 @@ namespace Idara.API.Controllers
         public int SchoolId { get; set; }
         public string? StudentNumber { get; set; }
         public bool IsPrimaryGuardian { get; set; }
+
+        /// <summary>Date de sortie de l'effectif (éventuellement future = programmée). Null = inscrit.</summary>
+        public DateTime? ExitDate { get; set; }
+
+        /// <summary>« N'est plus inscrit » — calculé PAR LE SERVEUR (§151), jamais
+        /// recomparé à l'horloge du téléphone. L'app regroupe ces enfants dans une
+        /// section dédiée, en lecture seule, dette payable.</summary>
+        public bool IsExited { get; set; }
 
         /// <summary>
         /// Mode de facturation de l'école de cet enfant. Le client l'utilise

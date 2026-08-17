@@ -196,8 +196,12 @@ namespace Idara.API.Services
                     : null;
                 if (currentPlan != null && !currentPlan.IsCustom && currentPlan.StudentMax.HasValue)
                 {
+                    // Enrolled() : le palier facturé suit l'effectif RÉEL — un
+                    // daara ne paie pas pour ses anciens élèves. Identique aux
+                    // deux comptages de SubscriptionsController.
                     var studentCount = await _db.Students
-                        .CountAsync(s => s.SchoolId == sub.SchoolId && !s.IsDeleted, ct);
+                        .Where(s => s.SchoolId == sub.SchoolId).Enrolled()
+                        .CountAsync(ct);
                     if (studentCount > currentPlan.StudentMax.Value)
                     {
                         // Tri déterministe (cf. bug du tarif classe) : prix croissant,

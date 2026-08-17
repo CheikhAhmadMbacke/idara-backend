@@ -65,6 +65,10 @@ namespace Idara.API.Controllers
             if (!await StudentBelongsToSchool(studentId, schoolId.Value))
                 return NotFound();
 
+            // Garde d'ÉCRITURE : plus de saisie Coran sur un élève sorti (D4).
+            if (!await _context.IsEnrolledAsync(studentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève ne fait plus partie de l'effectif."));
+
             var p = await _context.CoranProgresses.FirstOrDefaultAsync(x => x.StudentId == studentId);
             if (p == null)
             {
@@ -121,6 +125,10 @@ namespace Idara.API.Controllers
 
             if (!await StudentBelongsToSchool(dto.StudentId, schoolId.Value))
                 return BadRequest(ApiResponse<bool>.Fail("Élève introuvable."));
+
+            // Garde d'ÉCRITURE : plus de séance sur un élève sorti (D4).
+            if (!await _context.IsEnrolledAsync(dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève ne fait plus partie de l'effectif."));
 
             // Au moins un score doit être fourni (sinon la session n'a aucun sens
             // et ne mettra pas à jour les moyennes).
@@ -250,6 +258,11 @@ namespace Idara.API.Controllers
             if (!await CanAccessStudentAsync(User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
                 return BadRequest(ApiResponse<bool>.Fail("Élève introuvable ou hors de votre périmètre."));
 
+            // Garde d'ÉCRITURE : plus de suivi quotidien sur un élève sorti (D4).
+            // La consultation de ses cycles reste libre.
+            if (!await _context.IsEnrolledAsync(dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève ne fait plus partie de l'effectif."));
+
             var kinds = dto.Portions.Select(p => p.Kind).ToList();
             if (kinds.Count != kinds.Distinct().Count())
                 return BadRequest(ApiResponse<bool>.Fail("Chaque type de portion ne peut apparaître qu'une fois."));
@@ -332,7 +345,11 @@ namespace Idara.API.Controllers
             // Notif parents (push, best-effort, post-commit) une seule fois à la clôture.
             if (cycleJustCompleted)
             {
-                var st = await _context.Students.Where(s => s.Id == dto.StudentId)
+                // !IsDeleted manquait ici (oubli préexistant corrigé le
+                // 2026-08-17) ; le sortant est déjà exclu en amont (garde
+                // d'écriture) et au centre (NotificationService).
+                var st = await _context.Students
+                    .Where(s => s.Id == dto.StudentId && !s.IsDeleted)
                     .Select(s => new { s.FirstName, s.LastName }).FirstOrDefaultAsync();
                 var eleve = st == null ? string.Empty : $"{st.FirstName} {st.LastName}".Trim();
                 await _notif.NotifyGuardiansOfStudentAsync(
@@ -413,6 +430,10 @@ namespace Idara.API.Controllers
             if (schoolId == null || userId == null) return Unauthorized();
             if (!await StudentBelongsToSchool(dto.StudentId, schoolId.Value))
                 return BadRequest(ApiResponse<bool>.Fail("Élève introuvable."));
+
+            // Garde d'ÉCRITURE : plus d'évaluation sur un élève sorti (D4).
+            if (!await _context.IsEnrolledAsync(dto.StudentId))
+                return BadRequest(ApiResponse<bool>.Fail("Cet élève ne fait plus partie de l'effectif."));
 
             var entity = new CoranEvaluation
             {

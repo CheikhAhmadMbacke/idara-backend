@@ -98,6 +98,75 @@ namespace Idara.API.Controllers
             return result ? NoContent() : NotFound();
         }
 
+        // ----- Sortie de l'effectif (2026-08-17) -----
+        // « Sorti » ≠ « supprimé » : la fiche reste consultable, l'historique
+        // lisible, la dette payable. Décisions produit D1-D5 du plan
+        // STUDENT_LIFECYCLE_PLAN.md.
+
+        /// <summary>
+        /// Ce que la sortie impliquerait pour les dettes de l'élève à la date
+        /// donnée (défaut : aujourd'hui) — appelé par le formulaire de sortie
+        /// pour que la case d'annulation ne soit jamais un choix aveugle.
+        /// </summary>
+        [HttpGet("{id}/exit-preview")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> GetExitPreview(
+            int id, [FromQuery] DateTime? exitDate, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var preview = await _studentService.GetExitPreviewAsync(
+                id, schoolId.Value, exitDate ?? DateTime.UtcNow, ct);
+            return preview == null
+                ? NotFound(ApiResponse<bool>.Fail("Élève introuvable."))
+                : Ok(preview);
+        }
+
+        [HttpPost("{id}/exit")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<IActionResult> ExitStudent(
+            int id, [FromBody] StudentExitRequestDto dto, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            // L'annulation des mensualités est réservée au SchoolAdmin (alignée
+            // sur l'annulation unitaire de facture) ; le service reçoit le droit,
+            // jamais le rôle — il ne fait aucun contrôle d'autorisation (§77).
+            var canCancel = User.GetRole() == UserRoles.SchoolAdmin;
+            var result = await _studentService.ExitStudentAsync(
+                id, schoolId.Value, userId.Value, canCancel, dto, ct);
+
+            if (!result.Ok) return BadRequest(ApiResponse<bool>.Fail(result.Error!));
+
+            var updated = await _studentService.GetStudentByIdAsync(id, schoolId.Value);
+            return Ok(ApiResponse<StudentResponseDto>.Ok(updated!,
+                result.CancelledInvoices > 0
+                    ? $"Sortie enregistrée. {result.CancelledInvoices} mensualité(s) impayée(s) annulée(s)."
+                    : "Sortie enregistrée."));
+        }
+
+        /// <summary>
+        /// Annule la sortie (prévue ou effective). SchoolAdmin SEUL : réintégrer
+        /// remet l'élève dans l'effectif FACTURABLE — le cron le refacturera et
+        /// il recompte dans le palier d'abonnement (§101).
+        /// </summary>
+        [HttpPost("{id}/reinstate")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> ReinstateStudent(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var result = await _studentService.ReinstateStudentAsync(id, schoolId.Value, ct);
+            if (!result.Ok) return BadRequest(ApiResponse<bool>.Fail(result.Error!));
+
+            var updated = await _studentService.GetStudentByIdAsync(id, schoolId.Value);
+            return Ok(ApiResponse<StudentResponseDto>.Ok(updated!, "Élève réintégré dans l'effectif."));
+        }
+
         // ----- Documents -----
 
         [HttpPost("{id}/documents")]
@@ -146,8 +215,13 @@ namespace Idara.API.Controllers
             // l'invitation /auth/invite-user (qui cree le guardian + envoie ses identifiants).
             // Sans ce check, un SchoolStaff malicieux pourrait lier n'importe quel Guardian
             // global a un eleve de son ecole.
+            // !Student.IsDeleted (oubli préexistant corrigé le 2026-08-17) : un
+            // lien vers un élève supprimé ne doit pas suffire à rattacher le
+            // responsable. Un lien vers un élève SORTI, si — la fratrie reste.
             var guardianBelongsToSchool = await _context.StudentGuardians
-                .AnyAsync(sg => sg.GuardianId == guardianId && sg.Student.SchoolId == schoolId.Value);
+                .AnyAsync(sg => sg.GuardianId == guardianId
+                                && sg.Student.SchoolId == schoolId.Value
+                                && !sg.Student.IsDeleted);
             if (!guardianBelongsToSchool)
                 return BadRequest(ApiResponse<bool>.Fail(
                     "Responsable inconnu dans cette école. Utilisez l'invitation pour créer un nouveau responsable."));
