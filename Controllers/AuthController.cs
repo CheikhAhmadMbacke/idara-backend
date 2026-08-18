@@ -884,6 +884,31 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Met à jour la langue préférée du compte CONNECTÉ. Appelé par l'app à
+        /// chaque changement de langue : la préférence — qui décide de la langue
+        /// des SMS et des push (règle d'or : la langue ACTUELLE du RÉCEPTEUR) —
+        /// n'attend ainsi pas la prochaine connexion pour refléter la réalité.
+        /// </summary>
+        [Authorize]
+        [HttpPost("me/language")]
+        public async Task<IActionResult> UpdateMyLanguage([FromBody] UpdateLanguageRequest request)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            var lang = (request.Language ?? string.Empty).Trim().ToLowerInvariant();
+            if (lang != "fr" && lang != "ar")
+                return BadRequest(ApiResponse<bool>.Fail("Langue non prise en charge."));
+
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (user == null) return Unauthorized();
+
+            user.PreferredLanguage = lang;
+            await _context.SaveChangesAsync();
+            return Ok(ApiResponse<bool>.Ok(true));
+        }
+
+        /// <summary>
         /// Envoie par SMS (via l'API Orange) les identifiants affichés dans le
         /// modal récap — déclenché par le bouton « SMS » du modal, JAMAIS
         /// automatiquement. Le code vient du client (il n'existe qu'en BCrypt côté
