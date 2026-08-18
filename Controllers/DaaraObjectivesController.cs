@@ -50,7 +50,7 @@ namespace Idara.API.Controllers
         // ========================================================
 
         [HttpGet]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
         public async Task<ActionResult<List<DaaraObjectiveDto>>> GetObjectives(
             [FromQuery] ObjectiveStatus? status, CancellationToken ct = default)
         {
@@ -79,7 +79,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet("{id}")]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
         public async Task<ActionResult<DaaraObjectiveDto>> GetObjective(int id, CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();

@@ -51,8 +51,13 @@ namespace Idara.API.Controllers
         /// <c>e.Visibility &gt;= seuil</c>.
         ///
         /// ⚠️ Une seule définition, utilisée par TOUTES les lectures : si un
-        /// endpoint décidait seul de ce qu'un enseignant peut lire, une note
+        /// endpoint décidait seul de ce qu'un surveillant peut lire, une note
         /// « direction seule » finirait par fuiter par l'un des chemins.
+        ///
+        /// ⚠️ L'enseignant n'a PLUS accès au journal depuis le 2026-08-18
+        /// (décision produit : réservé au personnel et à la direction) — il est
+        /// retiré des listes de rôles des endpoints de lecture, pas seulement
+        /// de l'interface.
         ///
         /// ⚠️ Décision : l'observateur (SchoolViewer) est traité comme l'équipe,
         /// PAS comme la direction — alors qu'ailleurs il voit tout ce que voit
@@ -79,7 +84,7 @@ namespace Idara.API.Controllers
         /// ancien, filtrable par catégorie, période et recherche libre.
         /// </summary>
         [HttpGet]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
         public async Task<ActionResult<DaaraEventListDto>> GetEvents(
             [FromQuery] string? q,
             [FromQuery] DaaraEventCategory? category,
@@ -155,7 +160,7 @@ namespace Idara.API.Controllers
         }
 
         [HttpGet("{id}")]
-        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Surveillant},{UserRoles.SchoolViewer}")]
         public async Task<ActionResult<DaaraEventDto>> GetEvent(int id, CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
