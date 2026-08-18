@@ -945,20 +945,17 @@ namespace Idara.API.Controllers
                     "Ce code n'est plus valide. Régénérez un nouveau code."));
 
             var platform = await _context.GetPlatformSettingsAsync();
-            // BILINGUE pour un compte JAMAIS connecté : sa « préférence » de
-            // langue n'est que l'héritage de l'admin qui l'a créé — la langue de
-            // l'ENVOYEUR, pas celle du RÉCEPTEUR. Dès qu'il s'est connecté une
-            // fois, sa préférence reflète la langue réelle de son app (mise à
-            // jour à chaque connexion) → mono-langue fiable. Le réglage
-            // plateforme « bilingue » force les deux langues s'il est ON.
-            var bilingual = platform.SmsBilingual || target.LastLoginAt == null;
+            // La langue est décidée par NotificationService (règle d'or, source
+            // unique) : jamais connecté → bilingue ; sinon la langue ACTUELLE du
+            // destinataire, relue en base. Ici on ne transmet que le réglage
+            // plateforme (bilingue forcé partout s'il est ON).
             var sent = await _notif.SendSmsAsync(new NotificationSmsRequest(
                 UserId: target.Id,
                 RawPhone: target.PhoneNumber,
                 PreferredLanguage: target.PreferredLanguage,
                 Message: NotificationTemplates.CredentialsSms(
                     target.FullName ?? string.Empty, target.PhoneNumber, request.Code),
-                Bilingual: bilingual,
+                Bilingual: platform.SmsBilingual,
                 TemplateCode: "CREDENTIALS_SMS",
                 RelatedEntityId: target.Id));
 

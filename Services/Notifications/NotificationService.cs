@@ -44,11 +44,51 @@ namespace Idara.API.Services.Notifications
 
         public async Task<bool> SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default)
         {
-            // Push d'abord (indépendant du numéro), best-effort isolé.
+            // ===== RÈGLE D'OR de la langue (décision utilisateur 2026-08-18) =====
+            // Appliquée ICI, au point de passage unique de TOUS les SMS, pour
+            // qu'aucun appelant présent ou futur ne puisse l'oublier. La langue
+            // se détermine depuis le compte du RÉCEPTEUR, jamais depuis le
+            // contexte de l'envoyeur (daara) :
+            //  (1) destinataire JAMAIS connecté → BILINGUE — sa « préférence »
+            //      stockée n'est que l'héritage de la langue de l'admin qui a
+            //      créé le compte, pas la sienne ;
+            //  (2) sinon → SA langue ACTUELLE, relue FRAÎCHE en base (mise à
+            //      jour à chaque connexion depuis l'Accept-Language réel de son
+            //      app), et non la valeur passée par l'appelant, qui peut être
+            //      périmée (chargée avant une connexion récente).
+            var bilingual = req.Bilingual;
+            var lang = req.PreferredLanguage;
+            if (req.UserId != null)
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var target = await db.Users.AsNoTracking()
+                        .Where(u => u.Id == req.UserId.Value)
+                        .Select(u => new { u.LastLoginAt, u.PreferredLanguage })
+                        .FirstOrDefaultAsync(ct);
+                    if (target != null)
+                    {
+                        if (target.LastLoginAt == null) bilingual = true;
+                        if (!string.IsNullOrWhiteSpace(target.PreferredLanguage))
+                            lang = target.PreferredLanguage;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[notif] Échec relecture langue du destinataire {UserId} — envoi avec les valeurs fournies",
+                        req.UserId);
+                }
+            }
+
+            // Push d'abord (indépendant du numéro), best-effort isolé — dans la
+            // langue ACTUELLE du destinataire, comme le SMS.
             if (req.UserId != null)
             {
                 await DispatchPushAsync(
-                    req.UserId.Value, req.PreferredLanguage, req.Message,
+                    req.UserId.Value, lang, req.Message,
                     req.TemplateCode, req.RelatedEntityId, req.PushRoute, url: null, ct);
             }
 
@@ -66,7 +106,7 @@ namespace Idara.API.Services.Notifications
                     return false;
                 }
 
-                var text = req.Message.Compose(req.Bilingual, req.PreferredLanguage);
+                var text = req.Message.Compose(bilingual, lang);
                 var result = await _sms.SendAsync(phone, text, ct);
 
                 await WriteLogAsync(req.UserId, "Sms", phone, req.TemplateCode, req.RelatedEntityId,

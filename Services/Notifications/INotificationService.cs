@@ -5,9 +5,14 @@ namespace Idara.API.Services.Notifications
     /// </summary>
     /// <param name="UserId">Destinataire (si connu), pour l'audit + le push.</param>
     /// <param name="RawPhone">Numéro brut (sera normalisé en E.164 +221).</param>
-    /// <param name="PreferredLanguage">Langue de l'utilisateur ("fr"/"ar") — utilisée si mode non bilingue.</param>
+    /// <param name="PreferredLanguage">Langue de REPLI ("fr"/"ar") si le compte du
+    /// destinataire est introuvable — la langue réellement utilisée est RELUE
+    /// depuis le compte du RÉCEPTEUR au moment de l'envoi (règle d'or 2026-08-18),
+    /// jamais déduite du contexte de l'envoyeur.</param>
     /// <param name="Message">Le message dans ses deux versions FR/AR.</param>
-    /// <param name="Bilingual">true = FR+AR dans le même corps ; false = une seule langue.</param>
+    /// <param name="Bilingual">Réglage plateforme : true = FR+AR dans le même corps.
+    /// Le service force de toute façon le bilingue pour un destinataire JAMAIS
+    /// connecté (sa préférence stockée n'est qu'un héritage de l'admin créateur).</param>
     /// <param name="TemplateCode">Code template (INVOICE_DUE, PAYMENT_RECEIVED, INVOICE_OVERDUE, INVITE…).</param>
     /// <param name="RelatedEntityId">Id métier lié (InvoiceId / PaymentId…), pour dédup des rappels.</param>
     /// <param name="PushRoute">Route in-app ouverte au clic de la notif push (ex. "/guardian/invoices"). Optionnel.</param>
