@@ -121,14 +121,14 @@ namespace Idara.API.Services
                 return new SmsSendResult(false, Error: $"HTTP {(int)httpResponse.StatusCode}");
             }
 
-            // Réponse en texte brut : STATUS_CODE / STATUS_TEXT / MESSAGE_ID /
-            // MESSAGEDETAIL_ID / RECIPIENT. Les codes d'erreur sont ICI, pas dans
-            // le statut HTTP.
-            var statusCode = Extract(body, "STATUS_CODE");
-            var statusText = Extract(body, "STATUS_TEXT");
-            // MESSAGEDETAIL_ID = l'identifiant par destinataire (celui des DLR) ;
-            // repli sur MESSAGE_ID s'il manque.
-            var messageId = Extract(body, "MESSAGEDETAIL_ID") ?? Extract(body, "MESSAGE_ID");
+            // ⚠️ La doc décrit une réponse TEXTE (« STATUS_CODE: 200 ») mais
+            // l'API réelle répond en JSON (constaté en prod le 2026-08-18) :
+            // {"response":[{"status_code":200,"status_text":"Message envoye",
+            //  "message_id":…,"messagedetail_id":…,"recipient":"…"}]}.
+            // On accepte LES DEUX formes — même leçon qu'avec SenePay (§53/§66) :
+            // le comportement observé fait foi, jamais la doc. Les codes d'erreur
+            // sont dans le CORPS, pas dans le statut HTTP.
+            var (statusCode, statusText, messageId) = ParseResponse(body);
 
             var ok = statusCode == "200";
             if (ok)
@@ -152,10 +152,13 @@ namespace Idara.API.Services
                 _ => null,
             };
 
+            // Le corps brut est loggé (tronqué) : c'est lui qui a permis de
+            // découvrir le format JSON non documenté — sans lui, « code=? »
+            // ne dit rien d'exploitable.
             _logger.LogError(
-                "[orange-sms] REJECTED code={Code} text={Text} to={To} elapsedMs={Elapsed:0}{Hint}",
+                "[orange-sms] REJECTED code={Code} text={Text} to={To} elapsedMs={Elapsed:0} body={Body}{Hint}",
                 statusCode ?? "?", statusText, MaskPhone(toE164), elapsedMs,
-                hint == null ? "" : " — " + hint);
+                Truncate(body, 300), hint == null ? "" : " — " + hint);
 
             return new SmsSendResult(false, messageId, statusText,
                 Error: $"{statusCode ?? "?"} {statusText}".Trim());
@@ -173,6 +176,62 @@ namespace Idara.API.Services
         private static string BuildQuery(IEnumerable<(string Name, string Value)> parameters) =>
             string.Join("&", parameters.Select(p =>
                 $"{Uri.EscapeDataString(p.Name)}={Uri.EscapeDataString(p.Value)}"));
+
+        /// <summary>
+        /// Extrait (code, texte, identifiant de message) de la réponse Orange,
+        /// quelle que soit sa forme : JSON réel
+        /// (<c>{"response":[{"status_code":…}]}</c>, constaté en prod) ou texte
+        /// documenté (<c>STATUS_CODE: …</c>). Public et statique EXPRÈS : une
+        /// réponse qu'on ne peut vérifier qu'en payant un SMS ne se vérifie
+        /// jamais (§133) — le banc d'essai la contrôle sur les corps réels.
+        /// </summary>
+        public static (string? Code, string? Text, string? MessageId) ParseResponse(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return (null, null, null);
+
+            var trimmed = body.TrimStart();
+            if (trimmed.StartsWith("{") || trimmed.StartsWith("["))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && root.TryGetProperty("response", out var arr)
+                        && arr.ValueKind == System.Text.Json.JsonValueKind.Array
+                        && arr.GetArrayLength() > 0)
+                    {
+                        var e = arr[0];
+                        return (
+                            JsonScalar(e, "status_code"),
+                            JsonScalar(e, "status_text"),
+                            JsonScalar(e, "messagedetail_id") ?? JsonScalar(e, "message_id"));
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // Corps qui ressemble à du JSON sans en être : retombe sur le texte.
+                }
+            }
+
+            return (
+                Extract(body, "STATUS_CODE"),
+                Extract(body, "STATUS_TEXT"),
+                Extract(body, "MESSAGEDETAIL_ID") ?? Extract(body, "MESSAGE_ID"));
+        }
+
+        /// <summary>Valeur scalaire d'une propriété JSON (string OU number →
+        /// string), null si absente ou d'un autre type.</summary>
+        private static string? JsonScalar(System.Text.Json.JsonElement e, string name)
+        {
+            if (!e.TryGetProperty(name, out var v)) return null;
+            return v.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => v.GetString(),
+                System.Text.Json.JsonValueKind.Number => v.GetRawText(),
+                _ => null,
+            };
+        }
 
         /// <summary>Extrait la valeur d'une ligne <c>NOM: valeur</c> de la réponse
         /// texte. Insensible aux espaces. Null si absente.</summary>
