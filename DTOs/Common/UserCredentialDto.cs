@@ -9,6 +9,11 @@ namespace Idara.API.DTOs.Common
     /// </summary>
     public class UserCredentialDto
     {
+        /// <summary>Id du compte créé/régénéré — cible du bouton « SMS » du modal
+        /// (POST /api/auth/users/{id}/credentials-sms). Additif : une vieille app
+        /// l'ignore et garde l'envoi manuel.</summary>
+        public int? UserId { get; set; }
+
         public string FullName { get; set; } = string.Empty;
         public string Phone { get; set; } = string.Empty;
         public string Code { get; set; } = string.Empty;

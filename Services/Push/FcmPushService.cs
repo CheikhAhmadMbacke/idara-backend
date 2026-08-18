@@ -9,7 +9,7 @@ namespace Idara.API.Services.Push
     /// <summary>
     /// Service de notifications push via Firebase Cloud Messaging (SDK officiel
     /// FirebaseAdmin, API HTTP v1 — l'OAuth et le rafraîchissement de token sont
-    /// gérés par le SDK). Calqué sur <see cref="AfricasTalkingSmsService"/> :
+    /// gérés par le SDK). Calqué sur <see cref="OrangeSmsService"/> :
     /// NE LÈVE JAMAIS, et NO-OP propre si aucun compte de service n'est configuré
     /// (déploiement avant configuration sans risque).
     ///

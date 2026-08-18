@@ -13,7 +13,7 @@ namespace Idara.API.Options
     ///
     /// Si AUCUN des deux n'est renseigné, le service push est en NO-OP (aucun
     /// envoi, warning de log) — un déploiement avant configuration ne casse rien,
-    /// exactement comme le SMS (cf. <see cref="AfricasTalkingSettings"/>).
+    /// exactement comme le SMS (cf. <see cref="OrangeSmsSettings"/>).
     /// </summary>
     public class FcmSettings
     {

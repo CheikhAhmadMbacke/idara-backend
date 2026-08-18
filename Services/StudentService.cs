@@ -18,7 +18,6 @@ namespace Idara.API.Services
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<StudentService> _logger;
         private readonly IEmailService _emailService;
-        private readonly INotificationService _notif;
         private readonly IInvoiceRepricingService _repricing;
         private readonly UploadSettings _uploads;
 
@@ -27,7 +26,6 @@ namespace Idara.API.Services
             IWebHostEnvironment env,
             ILogger<StudentService> logger,
             IEmailService emailService,
-            INotificationService notif,
             IInvoiceRepricingService repricing,
             IOptions<UploadSettings> uploads)
         {
@@ -35,7 +33,6 @@ namespace Idara.API.Services
             _env = env;
             _logger = logger;
             _emailService = emailService;
-            _notif = notif;
             _repricing = repricing;
             _uploads = uploads.Value;
         }
@@ -318,12 +315,12 @@ namespace Idara.API.Services
                 });
             }
 
-            // Liens responsables. On collecte les NOUVEAUX responsables (code +
-            // requête SMS) pour l'affichage à l'école ET l'envoi POST-COMMIT.
+            // Liens responsables. On collecte les NOUVEAUX responsables (leur
+            // code) pour l'affichage à l'école dans le modal récap.
             var newGuardians = new List<NewGuardianResult>();
             foreach (var guardianDto in dto.Guardians)
             {
-                var (guardian, newG) = await GetOrCreateGuardianAsync(guardianDto, schoolId, school.Name ?? "Idara");
+                var (guardian, newG) = await GetOrCreateGuardianAsync(guardianDto, schoolId);
                 if (newG != null) newGuardians.Add(newG);
                 _context.StudentGuardians.Add(new StudentGuardian
                 {
@@ -359,11 +356,6 @@ namespace Idara.API.Services
             // Pas de re-tarification ici : un élève qui vient d'être créé ne peut
             // pas encore avoir de facture. Sa première facture sera générée par
             // le cron, qui résout le tarif via le même FeeResolver.
-
-            // POST-COMMIT : envoi SMS de bienvenue best-effort. Si la tx avait
-            // rollback, aucun SMS ne serait parti (plus de compte fantôme).
-            foreach (var g in newGuardians)
-                await _notif.SendSmsAsync(g.Sms);
 
             var created = await GetStudentByIdAsync(student.Id, schoolId);
             created!.NewGuardianCredentials = newGuardians.Select(g => g.Credential).ToList();
@@ -504,12 +496,9 @@ namespace Idara.API.Services
                 var existingLinks = _context.StudentGuardians.Where(sg => sg.StudentId == student.Id);
                 _context.StudentGuardians.RemoveRange(existingLinks);
 
-                var school = await _context.Schools.FindAsync(schoolId);
-                var schoolName = school?.Name ?? "Idara";
-
                 foreach (var guardianDto in dto.Guardians)
                 {
-                    var (guardian, created) = await GetOrCreateGuardianAsync(guardianDto, schoolId, schoolName);
+                    var (guardian, created) = await GetOrCreateGuardianAsync(guardianDto, schoolId);
                     if (created != null) newGuardians.Add(created);
                     _context.StudentGuardians.Add(new StudentGuardian
                     {
@@ -542,10 +531,6 @@ namespace Idara.API.Services
                 await _repricing.RepriceUnpaidInvoicesAsync(
                     schoolId, new[] { student.Id }, CancellationToken.None);
             }
-
-            // POST-COMMIT : envoi SMS de bienvenue best-effort des nouveaux responsables.
-            foreach (var g in newGuardians)
-                await _notif.SendSmsAsync(g.Sms);
 
             var updated = await GetStudentByIdAsync(student.Id, schoolId);
             if (updated != null)
@@ -924,15 +909,15 @@ namespace Idara.API.Services
         ///   ses données personnelles (FirstName/LastName/PhoneNumber) pour éviter qu'une école A
         ///   modifie les infos d'un parent connu d'une école B.
         /// </summary>
-        /// <summary>Responsable nouvellement créé : son identifiant à afficher
-        /// + la requête SMS à envoyer APRÈS le commit (best-effort).</summary>
-        private sealed record NewGuardianResult(
-            DTOs.Common.UserCredentialDto Credential, NotificationSmsRequest Sms);
+        /// <summary>Responsable nouvellement créé : ses identifiants à afficher
+        /// dans le modal récap. AUCUN SMS automatique (décision produit
+        /// 2026-08-18) : l'envoi éventuel est déclenché par le bouton « SMS » du
+        /// modal (endpoint credentials-sms), le choix du canal reste à l'école.</summary>
+        private sealed record NewGuardianResult(DTOs.Common.UserCredentialDto Credential);
 
         private async Task<(User user, NewGuardianResult? created)> GetOrCreateGuardianAsync(
             GuardianInputDto dto,
             int schoolId,
-            string schoolName,
             string adminLanguage = "fr")
         {
             // Identité = TÉLÉPHONE (incrément 2). Email facultatif (normalisé minuscules).
@@ -1004,39 +989,23 @@ namespace Idara.API.Services
             _context.Users.Add(newGuardian);
             await _context.SaveChangesAsync();
 
-            // Message de bienvenue (numéro + code). ⚠️ L'ENVOI SMS est fait en
-            // POST-COMMIT par l'appelant (CreateStudent/UpdateStudent) : on ne
-            // doit pas envoyer un SMS si la transaction est ensuite rollback
-            // (cf. §42/§57). Ici on prépare juste le message + le code.
-            var platform = await _context.GetPlatformSettingsAsync();
+            // Message prêt à partager pour le modal récap (Copier / WhatsApp /
+            // SMS). Aucun SMS automatique : l'envoi éventuel est déclenché par le
+            // bouton du modal, après le commit — donc jamais de SMS pour une
+            // transaction ensuite rollback (§42/§57 respecté par construction).
             var displayName = dto.ComposeFullName();
-            var welcome = NotificationTemplates.InviteWelcome(
-                // Un responsable connu sous un seul nom n'a pas forcément de
-                // prénom : on retombe sur le nom composé plutôt que d'ouvrir le
-                // message par un vide (« Bonjour , … »).
-                string.IsNullOrWhiteSpace(dto.FirstName) ? displayName : dto.FirstName,
-                schoolName, "Responsable", "ولي الأمر", phone, code);
-            // Message PARTAGÉ manuellement (modal récap) = FR simple ; le SMS auto
-            // garde le template bilingue `welcome`.
             var messageText = NotificationTemplates.CredentialShare(
                 displayName, phone, code);
 
             var credential = new DTOs.Common.UserCredentialDto
             {
+                UserId = newGuardian.Id,
                 FullName = displayName,
                 Phone = phone,
                 Code = code,
                 Message = messageText,
             };
-            var sms = new NotificationSmsRequest(
-                UserId: newGuardian.Id,
-                RawPhone: phone,
-                PreferredLanguage: adminLanguage,
-                Message: welcome,
-                Bilingual: platform.SmsBilingual,
-                TemplateCode: "INVITE",
-                RelatedEntityId: newGuardian.Id);
-            return (newGuardian, new NewGuardianResult(credential, sms));
+            return (newGuardian, new NewGuardianResult(credential));
         }
 
         private static string SixDigitCode() =>

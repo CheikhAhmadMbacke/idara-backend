@@ -42,7 +42,7 @@ namespace Idara.API.Services.Notifications
 
         // ===================== SMS + push (fan-out) =====================
 
-        public async Task SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default)
+        public async Task<bool> SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default)
         {
             // Push d'abord (indépendant du numéro), best-effort isolé.
             if (req.UserId != null)
@@ -63,7 +63,7 @@ namespace Idara.API.Services.Notifications
                     await WriteLogAsync(req.UserId, "Sms", req.RawPhone ?? string.Empty, req.TemplateCode,
                         req.RelatedEntityId, success: false, providerMessageId: null,
                         error: "invalid_phone", cost: null, ct);
-                    return;
+                    return false;
                 }
 
                 var text = req.Message.Compose(req.Bilingual, req.PreferredLanguage);
@@ -72,11 +72,13 @@ namespace Idara.API.Services.Notifications
                 await WriteLogAsync(req.UserId, "Sms", phone, req.TemplateCode, req.RelatedEntityId,
                     success: result.Success, providerMessageId: result.MessageId,
                     error: result.Error, cost: result.Cost, ct);
+                return result.Success;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[notif] Exception inattendue sur SMS {Template} (userId={UserId})",
                     req.TemplateCode, req.UserId);
+                return false;
             }
         }
 

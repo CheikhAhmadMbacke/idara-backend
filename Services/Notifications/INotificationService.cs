@@ -50,8 +50,12 @@ namespace Idara.API.Services.Notifications
         /// <summary>
         /// Envoie un SMS + un push (fan-out) et trace le résultat. NE LÈVE JAMAIS
         /// (best-effort) : à appeler après le commit de la transaction métier.
+        /// Renvoie true si le SMS est parti (accepté par le fournisseur) — les
+        /// appelants best-effort ignorent le retour ; l'envoi d'identifiants
+        /// piloté par le modal (bouton SMS) s'en sert pour dire à l'école si
+        /// l'envoi automatique a réussi ou s'il faut repasser en manuel.
         /// </summary>
-        Task SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default);
+        Task<bool> SendSmsAsync(NotificationSmsRequest req, CancellationToken ct = default);
 
         /// <summary>
         /// Envoie UNIQUEMENT un push à un utilisateur (aucun SMS). Best-effort,

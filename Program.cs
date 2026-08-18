@@ -63,7 +63,7 @@ builder.Services.Configure<SuperAdminSettings>(builder.Configuration.GetSection(
 builder.Services.Configure<OtpSettings>(builder.Configuration.GetSection(OtpSettings.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
 builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
-builder.Services.Configure<AfricasTalkingSettings>(builder.Configuration.GetSection(AfricasTalkingSettings.SectionName));
+builder.Services.Configure<OrangeSmsSettings>(builder.Configuration.GetSection(OrangeSmsSettings.SectionName));
 builder.Services.Configure<FcmSettings>(builder.Configuration.GetSection(FcmSettings.SectionName));
 builder.Services.Configure<AppDistributionSettings>(builder.Configuration.GetSection(AppDistributionSettings.SectionName));
 
@@ -247,18 +247,14 @@ builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 
-// ---------- Africa's Talking SMS (HttpClient typé) ----------
-// On NE throw PAS si l'ApiKey manque (contrairement à SenePay) : le service
-// no-op proprement tant que la clé n'est pas configurée, pour qu'un déploiement
-// prod avant configuration ne casse pas le démarrage. La clé est ajoutée par
-// requête dans le service (jamais bakée ici), pour rester fraîche.
-builder.Services.AddHttpClient<ISmsService, AfricasTalkingSmsService>((sp, client) =>
+// ---------- Orange SMS Pro (HttpClient typé) ----------
+// On NE throw PAS si les identifiants manquent (contrairement à SenePay) : le
+// service no-op proprement tant que la config est incomplète, pour qu'un
+// déploiement prod avant configuration ne casse pas le démarrage. Les
+// identifiants sont relus par requête dans le service (jamais bakés ici).
+// L'URL est absolue dans le service (port 8443 non standard) — pas de BaseAddress.
+builder.Services.AddHttpClient<ISmsService, OrangeSmsService>(client =>
 {
-    var at = sp.GetRequiredService<IOptions<AfricasTalkingSettings>>().Value;
-    var baseUrl = string.IsNullOrWhiteSpace(at.BaseUrl)
-        ? "https://api.sandbox.africastalking.com"
-        : at.BaseUrl;
-    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 

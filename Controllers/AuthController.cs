@@ -776,28 +776,16 @@ namespace Idara.API.Controllers
                 }, "Personnel ajouté (sans accès à l'application)."));
             }
 
-            // Message de bienvenue (numéro + code à 6 chiffres = mot de passe).
-            // Sert au SMS best-effort ET au modal récap côté école (Copier /
-            // WhatsApp / SMS) → onboarding sûr même sans SMS automatique.
-            var platform = await _context.GetPlatformSettingsAsync();
-            var (fonctionFr, fonctionAr) = FunctionLabels(request.Function);
-            var welcome = NotificationTemplates.InviteWelcome(
-                request.FullName, currentUser.School.Name ?? "Idara", fonctionFr, fonctionAr, phone, code);
-            // Message PARTAGÉ manuellement (modal récap) = FR simple ; le SMS auto
-            // garde le template bilingue `welcome` ci-dessous.
+            // Message prêt à partager pour le modal récap (Copier / WhatsApp /
+            // SMS). AUCUN envoi automatique ici (décision produit 2026-08-18) :
+            // le SMS ne part que si l'école appuie sur le bouton « SMS » du modal
+            // (endpoint credentials-sms ci-dessous) — le choix du canal lui
+            // appartient, comme avant.
             var messageText = NotificationTemplates.CredentialShare(request.FullName, phone, code);
-
-            await _notif.SendSmsAsync(new NotificationSmsRequest(
-                UserId: newUser.Id,
-                RawPhone: phone,
-                PreferredLanguage: newUser.PreferredLanguage,
-                Message: welcome,
-                Bilingual: platform.SmsBilingual,
-                TemplateCode: "INVITE",
-                RelatedEntityId: newUser.Id));
 
             return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
             {
+                UserId = newUser.Id,
                 FullName = request.FullName,
                 Phone = phone,
                 Code = code,
@@ -864,20 +852,9 @@ namespace Idara.API.Controllers
 
             var phone = target.PhoneNumber!;
             var fullName = target.FullName ?? string.Empty;
-            var platform = await _context.GetPlatformSettingsAsync();
-            var msg = NotificationTemplates.AccessCodeReset(
-                fullName, currentUser.School.Name ?? "Idara", phone, code);
-            // Message PARTAGÉ manuellement = FR simple ; le SMS auto garde `msg` bilingue.
+            // Message prêt à partager (modal récap). Aucun envoi automatique :
+            // l'école choisit le canal dans le modal (WhatsApp / SMS / Copier).
             var messageText = NotificationTemplates.CredentialShare(fullName, phone, code);
-
-            await _notif.SendSmsAsync(new NotificationSmsRequest(
-                UserId: target.Id,
-                RawPhone: phone,
-                PreferredLanguage: target.PreferredLanguage,
-                Message: msg,
-                Bilingual: platform.SmsBilingual,
-                TemplateCode: "ACCESS_CODE_RESET",
-                RelatedEntityId: target.Id));
 
             _logger.LogInformation(
                 "[auth] Code d'accès régénéré pour user {UserId} ({Role}) par {AdminId} (école {SchoolId})",
@@ -885,6 +862,7 @@ namespace Idara.API.Controllers
 
             return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
             {
+                UserId = target.Id,
                 FullName = fullName,
                 Phone = phone,
                 Code = code,
@@ -892,16 +870,87 @@ namespace Idara.API.Controllers
             }, "Nouveau code généré."));
         }
 
-        /// <summary>Libellés de fonction localisés (FR, AR) pour les SMS.</summary>
-        private static (string Fr, string Ar) FunctionLabels(string role) => role switch
+        /// <summary>
+        /// Envoie par SMS (via l'API Orange) les identifiants affichés dans le
+        /// modal récap — déclenché par le bouton « SMS » du modal, JAMAIS
+        /// automatiquement. Le code vient du client (il n'existe qu'en BCrypt côté
+        /// serveur) mais est strictement validé : 6 chiffres ET vérifié contre le
+        /// hash du compte cible — impossible d'utiliser l'endpoint comme relais de
+        /// texte libre ou d'envoyer un code périmé. Le SMS part UNIQUEMENT vers le
+        /// numéro enregistré du compte cible, scopé à l'école de l'appelant.
+        /// </summary>
+        [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
+        [HttpPost("users/{userId}/credentials-sms")]
+        public async Task<IActionResult> SendCredentialsSms(int userId, [FromBody] SendCredentialsSmsRequest request)
         {
-            UserRoles.Teacher => ("Enseignant", "معلّم"),
-            UserRoles.SchoolStaff => ("Personnel", "موظف"),
-            UserRoles.Guardian => ("Responsable", "ولي الأمر"),
-            UserRoles.Surveillant => ("Surveillant", "مراقب"),
-            UserRoles.SchoolViewer => ("Observateur", "مُطّلِع"),
-            _ => (role, role)
-        };
+            var currentUserId = User.GetUserId();
+            if (currentUserId == null) return Unauthorized();
+
+            var currentUser = await _context.Users
+                .FirstOrDefaultAsync(u => u.Id == currentUserId && !u.IsDeleted);
+            if (currentUser?.SchoolId == null)
+                return BadRequest(ApiResponse<bool>.Fail("École non trouvée pour cet utilisateur."));
+            if (currentUser.AccountStatus != AccountStatus.Active)
+                return BadRequest(ApiResponse<bool>.Fail("Votre compte doit être actif."));
+
+            // Anti-spam : 3 envois / cible / 15 min (une école qui mitraille le
+            // même parent paie chaque SMS — et le rate-limit ferme aussi tout
+            // usage de la vérification BCrypt comme oracle).
+            var rlKey = $"credsms:{userId}";
+            if (IsRateLimited(rlKey, max: 3))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Trop d'envois vers ce compte. Réessayez dans quelques minutes."));
+            RegisterAttempt(rlKey);
+
+            var target = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (target == null)
+                return NotFound(ApiResponse<bool>.Fail("Utilisateur introuvable."));
+            if (target.Role == UserRoles.SuperAdmin || target.Role == UserRoles.SchoolAdmin)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Le code d'accès ne concerne que les parents, enseignants et personnel."));
+            if (!target.CanLogin || string.IsNullOrWhiteSpace(target.PhoneNumber))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Ce compte n'a pas de numéro ou pas d'accès à l'application."));
+
+            // Scoping strict multi-tenant : la cible appartient à mon école
+            // (même règle que regenerate-code — un enfant sorti suffit, D2).
+            var belongsToSchool = target.Role == UserRoles.Guardian
+                ? await _context.StudentGuardians.AnyAsync(
+                    sg => sg.GuardianId == userId
+                          && sg.Student.SchoolId == currentUser.SchoolId.Value
+                          && !sg.Student.IsDeleted)
+                : target.SchoolId == currentUser.SchoolId.Value;
+            if (!belongsToSchool)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Cet utilisateur n'appartient pas à votre école."));
+
+            // Le code envoyé DOIT être le code actuel du compte : si l'école a
+            // gardé un vieux modal ouvert après une régénération, on refuse
+            // plutôt que d'envoyer un code qui ne marche plus.
+            if (!BCrypt.Net.BCrypt.Verify(request.Code, target.PasswordHash))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Ce code n'est plus valide. Régénérez un nouveau code."));
+
+            var platform = await _context.GetPlatformSettingsAsync();
+            var sent = await _notif.SendSmsAsync(new NotificationSmsRequest(
+                UserId: target.Id,
+                RawPhone: target.PhoneNumber,
+                PreferredLanguage: target.PreferredLanguage,
+                Message: NotificationTemplates.CredentialsSms(
+                    target.FullName ?? string.Empty, target.PhoneNumber, request.Code),
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "CREDENTIALS_SMS",
+                RelatedEntityId: target.Id));
+
+            if (!sent)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "L'envoi automatique du SMS a échoué. Vous pouvez l'envoyer manuellement."));
+
+            _logger.LogInformation(
+                "[auth] Identifiants envoyés par SMS à user {UserId} par {AdminId} (école {SchoolId})",
+                target.Id, currentUserId, currentUser.SchoolId);
+            return Ok(ApiResponse<bool>.Ok(true, "SMS envoyé."));
+        }
 
         /// <summary>
         /// Champ texte optionnel normalisé : une chaîne vide ou faite d'espaces

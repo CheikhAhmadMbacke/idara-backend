@@ -45,29 +45,29 @@ namespace Idara.API.Services.Notifications
             Fr: $"Idara : rappel. La mensualite de {eleve} ({montantFcfa} FCFA) reste a regler. Reglez sur idara.sn.",
             Ar: $"Idara: تذكير. قسط {eleve} ({montantFcfa} FCFA) ما زال غير مدفوع. ادفع عبر idara.sn.");
 
-        // ===== Invitation par numéro (incrément 2) =====
-        // Le code à 6 chiffres EST le mot de passe initial (non-expirant). Le
-        // parent se connecte avec son numero + ce code, puis pourra le changer
-        // dans l'app.
-        public static BilingualMessage InviteWelcome(
-            string prenom, string ecole, string fonctionFr, string fonctionAr,
-            string phone, string code) => new(
-            Fr: $"Idara : bienvenue {prenom}. {ecole} vous a ajoute comme {fonctionFr}. Connectez-vous sur idara.sn avec votre numero {phone} et le code {code}. Vous pourrez le changer dans l'app.",
-            Ar: $"Idara: مرحبا {prenom}، أضافتك {ecole} بصفة {fonctionAr}. سجّل الدخول على idara.sn برقمك {phone} والرمز {code}. يمكنك تغييره لاحقا في التطبيق.");
+        // ===== Envoi des identifiants par SMS (déclenché par le MODAL, jamais
+        // automatique) =====
+        // Le SMS ne part QUE quand l'école appuie sur le bouton « SMS » du modal
+        // récap (décision produit 2026-08-18 : le SMS est un canal EN PLUS, le
+        // choix WhatsApp/SMS/Copier reste à l'école). Un seul template neutre
+        // pour l'invitation ET la régénération de code : dans les deux cas le
+        // destinataire reçoit « voici vos identifiants ».
+        public static BilingualMessage CredentialsSms(
+            string nom, string phone, string code)
+        {
+            var local = LocalPhone(phone);
+            var prenom = string.IsNullOrWhiteSpace(nom) ? "" : " " + nom.Trim();
+            return new(
+                Fr: $"Idara : Salam{prenom}, voici vos identifiants. Connectez-vous sur idara.sn avec votre numero {local} et le code {code}. Vous pourrez le changer dans l'app.",
+                Ar: $"Idara: السلام عليكم{prenom}، إليك بيانات دخولك. سجّل الدخول على idara.sn برقمك {local} والرمز {code}. يمكنك تغييره لاحقا في التطبيق.");
+        }
 
-        // ===== Régénération du code d'accès (reset par l'école, sans SMS auto) =====
-        // L'école régénère un nouveau code à 6 chiffres pour un parent/enseignant
-        // qui a oublié le sien, et le lui recommunique (modal récap + WhatsApp).
-        public static BilingualMessage AccessCodeReset(
-            string prenom, string ecole, string phone, string code) => new(
-            Fr: $"Idara : {prenom}, {ecole} a regenere votre code d'acces. Connectez-vous sur idara.sn avec votre numero {phone} et le nouveau code {code}. Vous pourrez le changer dans l'app.",
-            Ar: $"Idara: {prenom}، أعادت {ecole} إنشاء رمز دخولك. سجّل الدخول على idara.sn برقمك {phone} والرمز الجديد {code}. يمكنك تغييره لاحقا في التطبيق.");
-
-        // ===== Message d'identifiants PARTAGÉ MANUELLEMENT (WhatsApp/SMS/Copier) =====
+        // ===== Message d'identifiants PARTAGÉ MANUELLEMENT (WhatsApp/Copier) =====
         // Volontairement court et EN FRANÇAIS UNIQUEMENT : c'est le texte que
         // l'école copie-colle à ses parents/enseignants (modal récap, §94). Les
-        // retours terrain ont jugé l'ancien message bilingue trop chargé. Le SMS
-        // automatique (dormant) garde, lui, le template bilingue InviteWelcome.
+        // retours terrain ont jugé l'ancien message bilingue trop chargé. Le
+        // bouton « SMS » du modal, lui, passe par le template bilingue
+        // CredentialsSms ci-dessus (envoyé par le serveur via l'API Orange).
         // Le numéro est affiché « sans indicatif » (forme locale, plus familière —
         // le login accepte de toute façon les deux formes).
         public static string CredentialShare(string fullName, string phone, string code)
