@@ -242,6 +242,15 @@ namespace Idara.API.Controllers
                 return Unauthorized(ApiResponse<bool>.Fail("Votre compte a été suspendu. Contactez l'administration."));
 
             user.LastLoginAt = DateTime.UtcNow;
+            // La préférence de langue suit la langue RÉELLE de l'app du
+            // destinataire, réactualisée à chaque connexion. Sans ça, elle
+            // resterait figée sur la langue de l'ADMIN qui a créé le compte
+            // (héritage à l'invitation) et un parent arabophone d'un daara
+            // francophone recevrait ses SMS mono-langue en français à vie.
+            // Uniquement si le header est présent (l'app l'envoie toujours ;
+            // un client nu ne doit pas écraser la préférence avec le défaut).
+            if (!string.IsNullOrWhiteSpace(Request.Headers.AcceptLanguage))
+                user.PreferredLanguage = HttpContext.GetPreferredLanguage();
             await _context.SaveChangesAsync();
 
             var refreshToken = await _refreshTokens.CreateAsync(user.Id);
@@ -334,6 +343,10 @@ namespace Idara.API.Controllers
             if (user.AccountStatus == AccountStatus.Inactive)
                 user.AccountStatus = AccountStatus.Active;
             user.LastLoginAt = DateTime.UtcNow;
+            // Même règle qu'à Login : la préférence suit la langue réelle de
+            // l'app du destinataire (ce chemin auto-login est une connexion).
+            if (!string.IsNullOrWhiteSpace(Request.Headers.AcceptLanguage))
+                user.PreferredLanguage = HttpContext.GetPreferredLanguage();
             await _context.SaveChangesAsync();
 
             var refreshToken = await _refreshTokens.CreateAsync(user.Id);
@@ -932,13 +945,20 @@ namespace Idara.API.Controllers
                     "Ce code n'est plus valide. Régénérez un nouveau code."));
 
             var platform = await _context.GetPlatformSettingsAsync();
+            // BILINGUE pour un compte JAMAIS connecté : sa « préférence » de
+            // langue n'est que l'héritage de l'admin qui l'a créé — la langue de
+            // l'ENVOYEUR, pas celle du RÉCEPTEUR. Dès qu'il s'est connecté une
+            // fois, sa préférence reflète la langue réelle de son app (mise à
+            // jour à chaque connexion) → mono-langue fiable. Le réglage
+            // plateforme « bilingue » force les deux langues s'il est ON.
+            var bilingual = platform.SmsBilingual || target.LastLoginAt == null;
             var sent = await _notif.SendSmsAsync(new NotificationSmsRequest(
                 UserId: target.Id,
                 RawPhone: target.PhoneNumber,
                 PreferredLanguage: target.PreferredLanguage,
                 Message: NotificationTemplates.CredentialsSms(
                     target.FullName ?? string.Empty, target.PhoneNumber, request.Code),
-                Bilingual: platform.SmsBilingual,
+                Bilingual: bilingual,
                 TemplateCode: "CREDENTIALS_SMS",
                 RelatedEntityId: target.Id));
 
