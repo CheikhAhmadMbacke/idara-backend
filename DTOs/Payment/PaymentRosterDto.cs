@@ -41,6 +41,18 @@ namespace Idara.API.DTOs.Payment
         /// direct ou part d'un paiement global consolidé). Null si non payé.
         /// </summary>
         public System.DateTime? PaidAt { get; set; }
+
+        /// <summary>
+        /// True si l'élève a au moins un responsable LIÉ à un compte (condition
+        /// pour générer un lien de paiement). Père/mère du dossier ne comptent pas.
+        /// </summary>
+        public bool HasLinkedGuardian { get; set; }
+
+        /// <summary>Dernier envoi (génération/renvoi) du lien de paiement du responsable lié ; null = jamais.</summary>
+        public System.DateTime? PaymentLinkSentAt { get; set; }
+
+        /// <summary>Dernière ouverture du lien par le parent ; null = jamais ouvert.</summary>
+        public System.DateTime? PaymentLinkOpenedAt { get; set; }
     }
 
     /// <summary>Roster complet d'un mois + compteurs par statut.</summary>

@@ -26,8 +26,7 @@ namespace Idara.API.Controllers
     public class PaymentsController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly ISenePayClient _senepay;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly IGuardianPaymentService _guardianPayments;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<PaymentsController> _logger;
@@ -37,15 +36,13 @@ namespace Idara.API.Controllers
 
         public PaymentsController(
             AppDbContext context,
-            ISenePayClient senepay,
-            IOptions<SenePaySettings> senepaySettings,
+            IGuardianPaymentService guardianPayments,
             IReceiptPdfService receiptPdf,
             IWebHostEnvironment env,
             ILogger<PaymentsController> logger)
         {
             _context = context;
-            _senepay = senepay;
-            _senepaySettings = senepaySettings.Value;
+            _guardianPayments = guardianPayments;
             _receiptPdf = receiptPdf;
             _env = env;
             _logger = logger;
@@ -66,6 +63,7 @@ namespace Idara.API.Controllers
             var p = await _context.Payments
                 .Include(x => x.Student)
                 .Include(x => x.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
+                .Include(x => x.StudentAllocations).ThenInclude(a => a.Student)
                 .FirstOrDefaultAsync(x => x.Id == id && x.GuardianId == guardianId, ct);
             if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
             if (p.Status != PaymentStatus.Completed)
@@ -99,12 +97,7 @@ namespace Idara.API.Controllers
                     : null;
                 if (school == null) return NotFound();
 
-                List<ReceiptConsolidatedLine>? consolidatedLines = p.InvoiceAllocations.Count > 0
-                    ? p.InvoiceAllocations
-                        .OrderBy(a => a.Invoice.Student.FirstName)
-                        .Select(ReceiptConsolidatedLine.For)
-                        .ToList()
-                    : null;
+                var consolidatedLines = ReceiptConsolidatedLine.LinesFor(p);
                 var regenerated = await _receiptPdf.GenerateAsync(p, school, p.Student, invoice, null, consolidatedLines);
                 if (string.IsNullOrEmpty(p.ReceiptPdfPath))
                 {
@@ -328,6 +321,9 @@ namespace Idara.API.Controllers
         /// total des mensualités dues de TOUS les enfants du parent dans une
         /// école (mode FixedAmount). Le backend recalcule lui-même l'ensemble
         /// des factures impayées (source de vérité, anti-falsification).
+        /// Le calcul et la création vivent dans <see cref="IGuardianPaymentService"/>,
+        /// partagé avec la page publique du LIEN DE PAIEMENT (2026-08-20) : un
+        /// parent connecté ou non règle exactement la même dette.
         /// </summary>
         [HttpPost("initiate-consolidated")]
         public async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> InitiateConsolidated(
@@ -342,151 +338,55 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail("SchoolId est requis."));
             }
 
-            await _context.EnsurePaymentFoundationsAsync(schoolId, ct);
-            var platform = await _context.GetPlatformSettingsAsync(ct);
-
-            var settings = await _context.SchoolPaymentSettings
-                .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
-            if (settings == null)
+            var outstanding = await _guardianPayments.GetOutstandingAsync(guardianId, schoolId, ct);
+            if (outstanding == null)
             {
                 _logger.LogError(
                     "[payment/consolidated] SchoolPaymentSettings manquant pour SchoolId={SchoolId}", schoolId);
                 return StatusCode(500, ApiResponse<InitiatePaymentResponseDto>.Fail(
                     "Configuration de paiement de l'école introuvable. Contactez le support."));
             }
-            // Toutes les factures impayables du parent DANS cette école : enfants
-            // liés (non supprimés), factures Pending/Overdue, reste dû > 0.
-            // Le lien StudentGuardian garantit le cloisonnement multi-tenant.
-            var outstanding = await _context.Invoices
-                .Where(i => i.SchoolId == schoolId
-                            && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
-                            && i.AmountDueFcfa - i.AmountPaidFcfa > 0
-                            && _context.StudentGuardians.Any(sg =>
-                                sg.StudentId == i.StudentId
-                                && sg.GuardianId == guardianId
-                                && !sg.Student.IsDeleted))
-                .Select(i => new { i.Id, i.Type, Remaining = i.AmountDueFcfa - i.AmountPaidFcfa })
-                .ToListAsync(ct);
 
-            // Garde « montant fixe » ASSOUPLIE (2026-08-17) : elle protégeait le
-            // paiement global des écoles en montant libre, qui n'ont pas de
-            // mensualités pré-générées. Mais une facture d'INSCRIPTION est un
-            // montant fixe par nature, quel que soit le BillingMode — sans cette
-            // exception, une école en montant libre avec des frais d'inscription
-            // montrerait la facture dans « À payer » sans jamais pouvoir
-            // l'encaisser (400 systématique).
-            if (settings.BillingMode != BillingMode.FixedAmount
-                && outstanding.Any(o => o.Type == InvoiceType.MonthlyFee))
+            Payment payment;
+            try
             {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Le paiement global n'est disponible que pour les écoles en montant fixe."));
+                payment = await _guardianPayments.CreateConsolidatedPaymentAsync(outstanding, null, ct);
             }
-
-            if (outstanding.Count == 0)
+            catch (InvalidOperationException ex)
             {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Aucune facture à payer pour vos enfants dans cette école."));
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(ex.Message));
             }
-
-            var targetAmount = outstanding.Sum(o => o.Remaining);
-            if (targetAmount < platform.MinPayinFcfa)
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    $"Le montant minimum est de {platform.MinPayinFcfa} FCFA."));
-            }
-
-            long amountToCharge = settings.FeesPayer == FeesPayer.Parent
-                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
-                : targetAmount;
-
-            var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
-
-            var payment = new Payment
-            {
-                SchoolId = schoolId,
-                StudentId = null,            // consolidé → pas d'élève unique
-                GuardianId = guardianId,
-                InvoiceId = null,            // consolidé → factures portées par les allocations
-                Purpose = PaymentPurpose.SchoolFee,
-                AmountFcfa = amountToCharge,
-                TargetAmountFcfa = targetAmount,
-                FeesFcfa = 0,
-                NetCreditedFcfa = 0,
-                Operator = operatorEnum,
-                FeesPayer = settings.FeesPayer,
-                Status = PaymentStatus.Pending,
-                InitiatedAt = DateTime.UtcNow,
-                PublicResultToken = GeneratePublicToken(),
-                InvoiceAllocations = outstanding
-                    .Select(o => new PaymentInvoiceAllocation { InvoiceId = o.Id, AmountFcfa = o.Remaining })
-                    .ToList()
-            };
-            _context.Payments.Add(payment);
-            await _context.SaveChangesAsync(ct);
 
             return await FinalizeSenePayInitiateAsync(payment, ct);
         }
 
         /// <summary>
         /// Tronc commun aux deux flows d'initiation (unitaire + consolidé) :
-        /// appelle SenePay, stocke les identifiants sur le Payment déjà persisté,
-        /// gère l'échec synchrone, et renvoie la réponse client. Le Payment est
-        /// créé AVANT (anti-race webhook) par l'appelant.
+        /// délègue l'appel SenePay au service partagé et traduit l'issue en
+        /// réponse HTTP. Le Payment est créé AVANT (anti-race webhook).
         /// </summary>
         private async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> FinalizeSenePayInitiateAsync(
             Payment payment, CancellationToken ct)
         {
-            // Numéro du parent récupéré en base (identité par téléphone) — plus
-            // aucune saisie côté client (refonte UX 2026-07-07).
-            var payerPhone = payment.GuardianId is int gid
-                ? await _context.Users.Where(u => u.Id == gid).Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct)
-                : null;
-            if (string.IsNullOrWhiteSpace(payerPhone))
+            var outcome = await _guardianPayments.InitiateWithSenePayAsync(payment, GuardianName(), ct);
+            if (!outcome.Ok && outcome.HttpStatus == 400)
             {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Aucun numéro de téléphone n'est associé à votre compte. Contactez votre école."));
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(outcome.ErrorMessage ?? "Paiement impossible."));
             }
-
-            SenePayInitiatePaymentResponse senepayResponse;
-            try
+            if (!outcome.Ok && outcome.HttpStatus == 502)
             {
-                senepayResponse = await _senepay.InitiatePaymentAsync(
-                    BuildSenePayRequest(payment, payerPhone, customerName: GuardianName()), ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex,
-                    "[payment/initiate] SenePay error pour Payment {PaymentId}", payment.Id);
-                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "SenePay temporairement indisponible. Réessayez dans quelques secondes."));
-            }
-
-            // Stocke les IDs SenePay sur le Payment (cf. commentaire d'origine :
-            // token court pour GET /status, internalId pour rapprochement).
-            payment.SenePayInternalId = senepayResponse.InternalId;
-            payment.SenePayTransactionId = senepayResponse.Token;
-            await _context.SaveChangesAsync(ct);
-
-            if (string.Equals(senepayResponse.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(senepayResponse.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = string.Equals(senepayResponse.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                    ? PaymentStatus.Cancelled
-                    : PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = senepayResponse.FailedReason ?? senepayResponse.ErrorCode;
-                await _context.SaveChangesAsync(ct);
+                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(outcome.ErrorMessage ?? "SenePay indisponible."));
             }
 
             return Ok(ApiResponse<InitiatePaymentResponseDto>.Ok(new InitiatePaymentResponseDto
             {
                 PaymentId = payment.Id,
-                Status = senepayResponse.Status ?? "Pending",
-                NextAction = senepayResponse.NextAction ?? "NONE",
-                RedirectUrl = senepayResponse.RedirectUrl,
-                OtpRequired = senepayResponse.OtpRequired,
-                ErrorCode = senepayResponse.ErrorCode,
-                FailureReason = senepayResponse.FailedReason,
+                Status = outcome.Status,
+                NextAction = outcome.RedirectUrl != null ? "REDIRECT" : "NONE",
+                RedirectUrl = outcome.RedirectUrl,
+                OtpRequired = false,
+                ErrorCode = outcome.ErrorCode,
+                FailureReason = outcome.Ok ? null : outcome.ErrorMessage,
                 AmountChargedFcfa = payment.AmountFcfa
             }));
         }
@@ -494,33 +394,6 @@ namespace Idara.API.Controllers
         // ====================================================================
         // ===== Helpers =====
         // ====================================================================
-
-        private SenePayInitiatePaymentRequest BuildSenePayRequest(
-            Payment payment,
-            string payerPhone,
-            string? customerName)
-        {
-            // URLs page HTML résultat (servies par PaymentPublicController).
-            // Ne PAS oublier le token : sinon la page accepte n'importe quel
-            // PaymentId énuméré.
-            var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
-            var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
-
-            return new SenePayInitiatePaymentRequest
-            {
-                Amount = payment.AmountFcfa,
-                Currency = "XOF",
-                CountryCode = "SN",
-                Operator = "wave", // Wave uniquement (2026-07-07)
-                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                OtpCode = null,
-                OrderId = payment.Id.ToString(),
-                CustomerName = customerName,
-                WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                ReturnUrl = $"{resultBase}?status=success",
-                CancelUrl = $"{resultBase}?status=cancel"
-            };
-        }
 
         /// <summary>
         /// Génère un token public opaque pour la page HTML de résultat.

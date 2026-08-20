@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="theme-color" content="#0B744D" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Idara — Paiement des frais de scolarité</title>
+  <meta property="og:title" content="Idara — Payer les frais de scolarité" />
+  <meta property="og:description" content="Réglez la scolarité de vos enfants avec Wave, en un clic, sans créer de compte." />
+  <meta property="og:site_name" content="Idara" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://idara.sn/og-image.png" />
+  <style>
+    :root {
+      --primary: #0B744D; --primary-dark: #064A31;
+      --bg: #F7F9FC; --surface: #FFFFFF; --border: #E3E8EF;
+      --text-primary: #1A2233; --text-secondary: #5B6478; --text-tertiary: #8A93A6;
+      --success: #1E9E5C; --success-soft: #E7F6EE;
+      --warning: #E8830C; --warning-soft: #FDF1DF;
+      --danger: #D83B3B; --danger-soft: #FAE5E5;
+      --wave: #1DC3F2;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text-primary); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.5; min-height: 100vh; }
+    .container { max-width: 560px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 14px; }
+    .header { display: flex; align-items: center; gap: 12px; padding: 8px 4px; }
+    .logo { width: 36px; height: 36px; background: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px; }
+    .brand { font-size: 18px; font-weight: 800; color: var(--primary); }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px rgba(11,116,77,.06); }
+    .school { display: flex; align-items: center; gap: 12px; }
+    .school img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); background: #fff; }
+    .school .ph { width: 52px; height: 52px; border-radius: 50%; background: var(--success-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; }
+    .school-name { font-weight: 800; font-size: 17px; line-height: 1.25; }
+    .school-name-ar { font-size: 15px; color: var(--text-secondary); direction: rtl; text-align: right; }
+    .hello { color: var(--text-secondary); font-size: 14px; margin-top: 10px; }
+
+    h2 { font-size: 15px; margin: 0 0 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .4px; }
+    .child { padding: 10px 0; border-top: 1px solid var(--border); }
+    .child:first-of-type { border-top: none; padding-top: 0; }
+    .child-name { font-weight: 700; font-size: 16px; }
+    .line { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--text-secondary); padding: 2px 0 2px 12px; }
+    .line b { color: var(--text-primary); white-space: nowrap; }
+    .child-sub { display: flex; justify-content: space-between; font-weight: 700; padding: 6px 0 0 12px; font-size: 15px; }
+    .total { display: flex; justify-content: space-between; align-items: baseline; border-top: 2px solid var(--border); margin-top: 12px; padding-top: 12px; }
+    .total .lbl { font-weight: 700; font-size: 16px; }
+    .total .amt { font-weight: 900; font-size: 26px; color: var(--primary); }
+    .fees { font-size: 12.5px; color: var(--text-tertiary); text-align: right; margin-top: 2px; }
+
+    .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 58px; border: none; border-radius: 14px; font-size: 18px; font-weight: 800; cursor: pointer; text-decoration: none; color: #fff; }
+    .btn-wave { background: var(--wave); color: #062A36; box-shadow: 0 6px 18px rgba(29,195,242,.35); }
+    .btn-wave:disabled { opacity: .55; cursor: default; box-shadow: none; }
+    .btn-primary { background: var(--primary); }
+    .btn-ghost { background: var(--surface); color: var(--primary); border: 1.5px solid var(--primary); min-height: 48px; font-size: 15px; }
+    .wave-mark { width: 28px; height: 28px; border-radius: 50%; background: #062A36; color: var(--wave); display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 15px; }
+
+    .notice { border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+    .notice.ok { background: var(--success-soft); color: #135F38; }
+    .notice.warn { background: var(--warning-soft); color: #7A4306; }
+    .notice.err { background: var(--danger-soft); color: #8F1F1F; }
+    .hint { font-size: 13px; color: var(--text-tertiary); text-align: center; }
+    .center { text-align: center; }
+    .big-icon { width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 12px; display: flex; align-items: center; justify-content: center; font-size: 34px; }
+    .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .amount-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); }
+    .amount-row:first-of-type { border-top: none; }
+    .amount-row input { width: 150px; font-size: 18px; font-weight: 700; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 10px; text-align: right; }
+    .amount-row input:focus { outline: none; border-color: var(--primary); }
+    .hidden { display: none !important; }
+    .footer { font-size: 12px; color: var(--text-tertiary); text-align: center; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header"><div class="logo">i</div><div class="brand">Idara</div></div>
+
+  <div id="loading" class="card center"><div class="spinner"></div><div>Chargement…</div></div>
+
+  <div id="school-card" class="card hidden">
+    <div class="school">
+      <img id="school-logo" class="hidden" alt="" />
+      <div id="school-ph" class="ph">D</div>
+      <div>
+        <div id="school-name" class="school-name"></div>
+        <div id="school-name-ar" class="school-name-ar"></div>
+      </div>
+    </div>
+    <div id="hello" class="hello"></div>
+  </div>
+
+  <div id="recent" class="notice ok hidden"></div>
+
+  <!-- DETTE (montant fixe) -->
+  <div id="due-card" class="card hidden">
+    <h2>À régler</h2>
+    <div id="children"></div>
+    <div class="total"><span class="lbl">Total</span><span id="total" class="amt"></span></div>
+    <div id="fees" class="fees hidden"></div>
+  </div>
+
+  <!-- MONTANT LIBRE -->
+  <div id="free-card" class="card hidden">
+    <h2>Montant à régler</h2>
+    <div class="hint" style="text-align:left;margin-bottom:8px">Indiquez le montant pour chaque enfant (en FCFA).</div>
+    <div id="free-rows"></div>
+    <div class="total"><span class="lbl">Total</span><span id="free-total" class="amt">0 FCFA</span></div>
+    <div id="free-fees" class="fees hidden"></div>
+  </div>
+
+  <!-- RIEN À PAYER -->
+  <div id="nothing-card" class="card center hidden">
+    <div class="big-icon" style="background:var(--success-soft);color:var(--success)">✓</div>
+    <div style="font-weight:800;font-size:18px">Tout est à jour</div>
+    <div class="hint" style="margin-top:6px">Aucune facture à régler pour l'instant. Gardez ce lien : il servira pour les prochaines mensualités.</div>
+  </div>
+
+  <!-- PAIEMENT EN COURS -->
+  <div id="pending-card" class="card center hidden">
+    <div class="spinner"></div>
+    <div style="font-weight:800;font-size:17px">Un paiement est en cours</div>
+    <div class="hint" style="margin-top:6px">Nous attendons la confirmation de Wave. Si vous avez annulé, ce message disparaîtra dans quelques instants.</div>
+    <a id="pending-link" class="btn btn-ghost" style="margin-top:14px" href="#">Voir ce paiement</a>
+  </div>
+
+  <!-- LIEN MORT -->
+  <div id="revoked-card" class="card center hidden">
+    <div class="big-icon" style="background:var(--danger-soft);color:var(--danger)">!</div>
+    <div style="font-weight:800;font-size:18px">Ce lien n'est plus valable</div>
+    <div class="hint" style="margin-top:6px">Demandez un nouveau lien de paiement à l'école.</div>
+  </div>
+
+  <div id="error" class="notice err hidden"></div>
+
+  <button id="pay-btn" class="btn btn-wave hidden" type="button">
+    <span class="wave-mark">W</span><span>Payer avec Wave</span>
+  </button>
+  <div id="inapp" class="notice warn hidden">Si Wave ne s'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).</div>
+  <div class="footer">Paiement sécurisé via Wave · Idara</div>
+</div>
+
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var base = location.pathname.replace(/\/$/, '');
+  var state = null;
+  var pollTimer = null;
+  var busy = false;
+
+  function $(id) { return document.getElementById(id); }
+  function show(id, on) { $(id).classList.toggle('hidden', !on); }
+  function fmt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' FCFA'; }
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+  function isInApp() { var ua = navigator.userAgent || ''; return /whatsapp|fban|fbav|fb_iab|instagram|messenger|line\//i.test(ua); }
+
+  function setError(msg) { $('error').textContent = msg || ''; show('error', !!msg); }
+
+  function render(s) {
+    state = s;
+    show('loading', false);
+    ['due-card','free-card','nothing-card','pending-card','revoked-card','pay-btn','recent','school-card'].forEach(function (id) { show(id, false); });
+    setError(null);
+
+    if (s.status === 'revoked' || s.status === 'not_found') { show('revoked-card', true); return; }
+
+    show('school-card', true);
+    $('school-name').textContent = s.schoolName || s.schoolNameAr || '';
+    $('school-name-ar').textContent = s.schoolName ? (s.schoolNameAr || '') : '';
+    if (s.schoolLogoUrl) { $('school-logo').src = s.schoolLogoUrl; show('school-logo', true); show('school-ph', false); }
+    $('hello').textContent = s.guardianName ? 'Bonjour ' + s.guardianName + ', voici votre situation.' : 'Voici votre situation.';
+
+    if (s.recentPaymentResultUrl) {
+      $('recent').innerHTML = 'Paiement de <b>' + esc(fmt(s.recentPaymentAmountFcfa || 0)) + '</b> confirmé. <a href="' + esc(s.recentPaymentResultUrl) + '">Voir le reçu</a>';
+      show('recent', true);
+    }
+
+    if (s.status === 'pending') {
+      show('pending-card', true);
+      $('pending-link').href = s.pendingResultUrl || '#';
+      pollTimer = setTimeout(load, 5000);
+      return;
+    }
+    if (s.status === 'nothing_due') { show('nothing-card', true); return; }
+
+    if (s.status === 'free_amount') {
+      var rows = $('free-rows'); rows.innerHTML = '';
+      (s.children || []).forEach(function (c) {
+        var r = document.createElement('div'); r.className = 'amount-row';
+        r.innerHTML = '<div><div class="child-name">' + esc(c.studentName) + '</div>' + (c.className ? '<div class="hint" style="text-align:left">' + esc(c.className) + '</div>' : '') + '</div>'
+          + '<input type="number" inputmode="numeric" min="0" step="100" placeholder="0" data-sid="' + c.studentId + '" />';
+        rows.appendChild(r);
+      });
+      rows.addEventListener('input', updateFreeTotal);
+      updateFreeTotal();
+      show('free-card', true);
+      show('pay-btn', true);
+      return;
+    }
+
+    // status === 'due' : lignes groupées par enfant
+    var byChild = {}; var order = [];
+    (s.lines || []).forEach(function (l) {
+      if (!byChild[l.studentId]) { byChild[l.studentId] = { name: l.studentName, lines: [], sum: 0 }; order.push(l.studentId); }
+      byChild[l.studentId].lines.push(l); byChild[l.studentId].sum += l.amountFcfa;
+    });
+    var html = '';
+    order.forEach(function (id) {
+      var c = byChild[id];
+      html += '<div class="child"><div class="child-name">' + esc(c.name) + '</div>';
+      c.lines.forEach(function (l) { html += '<div class="line"><span>' + esc(l.label) + '</span><b>' + esc(fmt(l.amountFcfa)) + '</b></div>'; });
+      if (c.lines.length > 1) html += '<div class="child-sub"><span>Sous-total</span><span>' + esc(fmt(c.sum)) + '</span></div>';
+      html += '</div>';
+    });
+    $('children').innerHTML = html;
+    $('total').textContent = fmt(s.amountToChargeFcfa);
+    if (s.feePercent > 0 && s.amountToChargeFcfa !== s.totalDueFcfa) {
+      $('fees').textContent = 'dont frais de service ' + s.feePercent + ' % (' + fmt(s.totalDueFcfa) + ' + ' + fmt(s.amountToChargeFcfa - s.totalDueFcfa) + ')';
+      show('fees', true);
+    } else { show('fees', false); }
+    show('due-card', true);
+    show('pay-btn', true);
+  }
+
+  function freeAmounts() {
+    var out = [];
+    document.querySelectorAll('#free-rows input').forEach(function (i) {
+      var v = parseInt(i.value, 10);
+      if (v > 0) out.push({ studentId: parseInt(i.getAttribute('data-sid'), 10), amountFcfa: v });
+    });
+    return out;
+  }
+  function updateFreeTotal() {
+    var sum = freeAmounts().reduce(function (a, b) { return a + b.amountFcfa; }, 0);
+    var charge = state && state.feePercent > 0 ? Math.ceil(sum * (1 + state.feePercent / 100)) : sum;
+    $('free-total').textContent = fmt(charge);
+    if (state && state.feePercent > 0 && sum > 0) { $('free-fees').textContent = 'dont frais de service ' + state.feePercent + ' %'; show('free-fees', true); } else { show('free-fees', false); }
+    $('pay-btn').disabled = sum < (state ? state.minAmountFcfa : 200);
+  }
+
+  function load() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    fetch(base + '/state', { cache: 'no-store' })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) { render(x.j || { status: 'not_found' }); })
+      .catch(function () { show('loading', false); setError('Impossible de charger. Vérifiez votre connexion puis rechargez la page.'); });
+  }
+
+  $('pay-btn').addEventListener('click', function () {
+    if (busy) return;
+    busy = true; setError(null);
+    var btn = $('pay-btn'); btn.disabled = true;
+    var body = state && state.status === 'free_amount' ? { amounts: freeAmounts() } : {};
+    fetch(base + '/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
+      .then(function (x) {
+        var j = x.j || {};
+        if (j.status === 'redirect' && j.redirectUrl) {
+          // Navigation de l'onglet courant (jamais window.open) : ni popup-
+          // blocker ni navigateur intégré WhatsApp ne peuvent la bloquer (§113).
+          // Le retour se fait par la page de résultat via le returnUrl SenePay.
+          window.location.href = j.redirectUrl;
+          return;
+        }
+        busy = false; btn.disabled = false;
+        if (j.status === 'pending') { load(); return; }
+        if (j.status === 'revoked') { render(j); return; }
+        setError(j.message || 'Le paiement n\'a pas pu être lancé. Réessayez.');
+      })
+      .catch(function () { busy = false; btn.disabled = false; setError('Connexion impossible. Réessayez.'); });
+  });
+
+  if (isInApp()) show('inapp', true);
+  load();
+})();
+</script>
+</body>
+</html>

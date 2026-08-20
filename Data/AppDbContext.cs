@@ -49,6 +49,8 @@ namespace Idara.API.Data
         public DbSet<Invoice> Invoices { get; set; }
         public DbSet<Payment> Payments { get; set; }
         public DbSet<PaymentInvoiceAllocation> PaymentInvoiceAllocations { get; set; }
+        public DbSet<PaymentStudentAllocation> PaymentStudentAllocations { get; set; }
+        public DbSet<PaymentLink> PaymentLinks { get; set; }
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
         public DbSet<Withdrawal> Withdrawals { get; set; }
@@ -851,6 +853,60 @@ namespace Idara.API.Data
             // Vue Guardian : "mes paiements".
             modelBuilder.Entity<Payment>()
                 .HasIndex(p => new { p.GuardianId, p.InitiatedAt });
+
+            // --- PaymentStudentAllocation (montant libre via lien → N enfants) ---
+            modelBuilder.Entity<PaymentStudentAllocation>()
+                .HasOne(a => a.Payment)
+                .WithMany(p => p.StudentAllocations)
+                .HasForeignKey(a => a.PaymentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<PaymentStudentAllocation>()
+                .HasOne(a => a.Student)
+                .WithMany()
+                .HasForeignKey(a => a.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<PaymentStudentAllocation>()
+                .HasIndex(a => new { a.PaymentId, a.StudentId })
+                .IsUnique();
+
+            // --- PaymentLink (lien de paiement permanent par responsable) ---
+            modelBuilder.Entity<PaymentLink>()
+                .Property(l => l.Token)
+                .HasMaxLength(64)
+                .IsRequired();
+
+            modelBuilder.Entity<PaymentLink>()
+                .HasIndex(l => l.Token)
+                .IsUnique();
+
+            // UN seul lien ACTIF par (école, responsable). Filtré sur RevokedAt :
+            // un lien révoqué doit pouvoir être remplacé par un neuf.
+            modelBuilder.Entity<PaymentLink>()
+                .HasIndex(l => new { l.SchoolId, l.GuardianId })
+                .IsUnique()
+                .HasFilter("\"RevokedAt\" IS NULL");
+
+            modelBuilder.Entity<PaymentLink>()
+                .HasOne(l => l.School)
+                .WithMany()
+                .HasForeignKey(l => l.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<PaymentLink>()
+                .HasOne(l => l.Guardian)
+                .WithMany()
+                .HasForeignKey(l => l.GuardianId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Payment → PaymentLink : SetNull, un lien révoqué/supprimé ne doit
+            // jamais emporter un paiement (append-only financier, §55).
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.PaymentLink)
+                .WithMany()
+                .HasForeignKey(p => p.PaymentLinkId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             // --- PaymentInvoiceAllocation (paiement consolidé → N factures) ---
             // Cascade depuis Payment (jamais supprimé hors purge d'école) et

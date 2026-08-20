@@ -331,7 +331,9 @@ namespace Idara.API.Controllers
             await _context.Withdrawals.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);        // avant TransferBeneficiaries
             await _context.TransferBeneficiaries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.PaymentInvoiceAllocations.Where(a => a.Payment.SchoolId == id).ExecuteDeleteAsync(ct); // avant Payments/Invoices
+            await _context.PaymentStudentAllocations.Where(a => a.Payment.SchoolId == id).ExecuteDeleteAsync(ct); // avant Payments/Students
             await _context.Payments.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);           // avant Invoice/Student/Guardian
+            await _context.PaymentLinks.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);       // après Payments (FK SetNull), avant Users
             await _context.Invoices.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.StudentFeeOverrides.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.ClassFees.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);

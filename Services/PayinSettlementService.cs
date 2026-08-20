@@ -223,6 +223,7 @@ namespace Idara.API.Services
                 .Include(p => p.Donor)
                 .Include(p => p.Guardian)
                 .Include(p => p.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
+                .Include(p => p.StudentAllocations).ThenInclude(a => a.Student)
                 .FirstOrDefaultAsync(p => p.Id == paymentId, ct);
             if (payment == null || payment.Status != PaymentStatus.Completed)
                 return;
@@ -231,15 +232,11 @@ namespace Idara.API.Services
 
             // Paiement CONSOLIDÉ (« paiement global » d'un parent) : lignes reçu +
             // libellé « vos enfants » / nom de l'unique enfant réglé.
-            var isConsolidated = payment.InvoiceAllocations.Count > 0;
-            List<ReceiptConsolidatedLine>? consolidatedLines = isConsolidated
-                ? payment.InvoiceAllocations
-                    .OrderBy(a => a.Invoice.Student.FirstName)
-                    .Select(ReceiptConsolidatedLine.For)
-                    .ToList()
-                : null;
-            var singleChildName = isConsolidated && payment.InvoiceAllocations.Count == 1
-                ? consolidatedLines![0].StudentName
+            // Ventilé par facture (montant fixe) OU par enfant (montant libre via lien).
+            var consolidatedLines = ReceiptConsolidatedLine.LinesFor(payment);
+            var isConsolidated = consolidatedLines != null;
+            var singleChildName = isConsolidated && consolidatedLines!.Count == 1
+                ? consolidatedLines[0].StudentName
                 : null;
             // Libellé côté PARENT (« vos enfants ») et côté ÉCOLE (« plusieurs
             // élèves ») quand le paiement règle >1 enfant.

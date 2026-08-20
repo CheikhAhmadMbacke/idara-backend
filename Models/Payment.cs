@@ -39,6 +39,21 @@ namespace Idara.API.Models
         public List<PaymentInvoiceAllocation> InvoiceAllocations { get; set; } = new();
 
         /// <summary>
+        /// Ventilation par enfant d'un paiement en MONTANT LIBRE initié depuis un
+        /// lien de paiement (aucune facture → pas d'allocation par facture).
+        /// Vide partout ailleurs.
+        /// </summary>
+        public List<PaymentStudentAllocation> StudentAllocations { get; set; } = new();
+
+        /// <summary>
+        /// Lien de paiement (WhatsApp, sans connexion) à l'origine de ce paiement.
+        /// Null pour un paiement initié depuis l'app. Sert à mesurer « payé via
+        /// lien » et à afficher dans le roster que le lien a été utilisé.
+        /// </summary>
+        public int? PaymentLinkId { get; set; }
+        public PaymentLink? PaymentLink { get; set; }
+
+        /// <summary>
         /// Nature métier du paiement (mensualité / topup / don). Explicite depuis
         /// l'ajout du module Donateur : le webhook payin ne DEVINE plus le topup
         /// d'après les champs null (un don a AUSSI Student/Guardian null, il

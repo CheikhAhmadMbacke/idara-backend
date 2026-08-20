@@ -48,6 +48,42 @@ namespace Idara.API.Services
                 : $"{FrMonths[a.Invoice.PeriodStart.Month - 1]} {a.Invoice.PeriodStart.Year}",
             a.AmountFcfa);
 
+        /// <summary>
+        /// Ligne d'un paiement en MONTANT LIBRE ventilé par enfant (lien de
+        /// paiement, école hors montant fixe) : aucune facture, donc un libellé
+        /// neutre.
+        /// </summary>
+        public static ReceiptConsolidatedLine ForStudent(PaymentStudentAllocation a) => new(
+            $"{a.Student.FirstName} {a.Student.LastName}".Trim(),
+            "Paiement libre",
+            a.AmountFcfa);
+
+        /// <summary>
+        /// Lignes de reçu d'un paiement, quelle que soit sa ventilation (par
+        /// facture OU par enfant). Null si le paiement n'est pas ventilé (mono
+        /// facture, topup, don). Exige <c>InvoiceAllocations.Invoice.Student</c>
+        /// et <c>StudentAllocations.Student</c> chargés. Source UNIQUE des 3
+        /// sites qui génèrent un reçu (webhook, école, parent) — §118.
+        /// </summary>
+        public static List<ReceiptConsolidatedLine>? LinesFor(Payment p)
+        {
+            if (p.InvoiceAllocations.Count > 0)
+            {
+                return p.InvoiceAllocations
+                    .OrderBy(a => a.Invoice.Student.FirstName)
+                    .Select(For)
+                    .ToList();
+            }
+            if (p.StudentAllocations.Count > 0)
+            {
+                return p.StudentAllocations
+                    .OrderBy(a => a.Student.FirstName)
+                    .Select(ForStudent)
+                    .ToList();
+            }
+            return null;
+        }
+
         private static readonly string[] FrMonths =
         {
             "janvier", "fevrier", "mars", "avril", "mai", "juin",

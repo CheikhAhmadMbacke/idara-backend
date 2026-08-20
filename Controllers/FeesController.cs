@@ -222,6 +222,7 @@ namespace Idara.API.Controllers
                 .Include(x => x.Student)
                 .Include(x => x.Donor)
                 .Include(x => x.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
+                .Include(x => x.StudentAllocations).ThenInclude(a => a.Student)
                 .FirstOrDefaultAsync(x => x.Id == id && x.SchoolId == schoolId.Value, ct);
             if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
             if (p.Status != PaymentStatus.Completed)
@@ -243,12 +244,7 @@ namespace Idara.API.Controllers
                 var invoice = p.InvoiceId.HasValue
                     ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == p.InvoiceId.Value, ct)
                     : null;
-                List<ReceiptConsolidatedLine>? lines = p.InvoiceAllocations.Count > 0
-                    ? p.InvoiceAllocations
-                        .OrderBy(a => a.Invoice.Student.FirstName)
-                        .Select(ReceiptConsolidatedLine.For)
-                        .ToList()
-                    : null;
+                var lines = ReceiptConsolidatedLine.LinesFor(p);
 
                 var regenerated = await _receiptPdf.GenerateAsync(
                     p, school, p.Student, invoice, p.Donor, lines);
@@ -726,7 +722,7 @@ namespace Idara.API.Controllers
                         .Where(g => !g.Guardian.IsDeleted)
                         .OrderByDescending(g => g.IsPrimaryGuardian)
                         .ThenBy(g => g.GuardianId)
-                        .Select(g => new { g.Guardian.FullName, g.Guardian.PhoneNumber })
+                        .Select(g => new { g.GuardianId, g.Guardian.FullName, g.Guardian.PhoneNumber })
                         .FirstOrDefault(),
                     s.FatherFullName,
                     s.FatherPhone,
@@ -781,9 +777,24 @@ namespace Idara.API.Controllers
                 .GroupBy(x => x.InvoiceId)
                 .ToDictionary(g => g.Key, g => g.Max(x => x.PaidAt));
 
+            // Liens de paiement ACTIFS des responsables liés (lien = par
+            // responsable, donc partagé entre frères et sœurs) : « lien envoyé
+            // le… / ouvert » dans le roster, pour savoir qui relancer.
+            var linkedGuardianIds = students
+                .Where(s => s.LinkedGuardian != null)
+                .Select(s => s.LinkedGuardian!.GuardianId)
+                .Distinct()
+                .ToList();
+            var linksByGuardian = await _context.PaymentLinks
+                .Where(l => l.SchoolId == schoolId && l.RevokedAt == null && linkedGuardianIds.Contains(l.GuardianId))
+                .Select(l => new { l.GuardianId, l.CreatedAt, l.LastSharedAt, l.LastOpenedAt })
+                .ToDictionaryAsync(l => l.GuardianId, ct);
+
             var entries = new List<PaymentRosterEntryDto>(students.Count);
             foreach (var s in students)
             {
+                var link = s.LinkedGuardian != null && linksByGuardian.TryGetValue(s.LinkedGuardian.GuardianId, out var lk)
+                    ? lk : null;
                 byStudent.TryGetValue(s.Id, out var inv);
                 RosterPaymentStatus status;
                 if (inv == null)
@@ -819,7 +830,10 @@ namespace Idara.API.Controllers
                     DueDate = inv?.DueDate,
                     GuardianFullName = string.IsNullOrWhiteSpace(guardianName) ? null : guardianName.Trim(),
                     GuardianPhone = string.IsNullOrWhiteSpace(guardianPhone) ? null : guardianPhone.Trim(),
-                    PaidAt = inv != null && paidAtByInvoice.TryGetValue(inv.Id, out var pa) ? pa : null
+                    PaidAt = inv != null && paidAtByInvoice.TryGetValue(inv.Id, out var pa) ? pa : null,
+                    HasLinkedGuardian = s.LinkedGuardian != null,
+                    PaymentLinkSentAt = link?.LastSharedAt ?? link?.CreatedAt,
+                    PaymentLinkOpenedAt = link?.LastOpenedAt
                 });
             }
 

@@ -184,6 +184,9 @@ builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
 // partagée par le webhook ET le PayinVerificationJob (verrou pessimiste + garde
 // Status==Pending → idempotent, jamais de double crédit ni de perte).
 builder.Services.AddScoped<IPayinSettlementService, PayinSettlementService>();
+// Calcul de la dette d'un responsable + création/initiation du paiement consolidé :
+// SOURCE UNIQUE de « Tout payer » (app) et de la page du lien de paiement (WhatsApp).
+builder.Services.AddScoped<IGuardianPaymentService, GuardianPaymentService>();
 // Réconciliation financière plateforme (SuperAdmin) : R = D + P recalculé depuis
 // les tables sources, sans hook ni ledger de revenu (aucune dérive).
 builder.Services.AddScoped<IPlatformFinanceService, PlatformFinanceService>();

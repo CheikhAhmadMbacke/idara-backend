@@ -95,6 +95,40 @@ namespace Idara.API.Services
         /// Traite tous les payins Pending échus. Public pour rejeu manuel
         /// (endpoint admin / réconciliation). Retourne le nombre traité.
         /// </summary>
+        /// <summary>
+        /// Vérification LIVE d'un seul paiement Pending, à la demande (page du
+        /// lien de paiement : un parent qui a annulé sur Wave ne doit pas
+        /// attendre 45 min que SenePay passe l'abandon en Failed pour réessayer).
+        /// Mêmes règles de sûreté que le tick : transition UNIQUEMENT sur un
+        /// statut 200 explicite — 404/timeout/Pending laissent tout en l'état.
+        /// Ne lève jamais ; renvoie le statut du Payment après vérification.
+        /// </summary>
+        public async Task<PaymentStatus?> VerifyPaymentNowAsync(int paymentId, CancellationToken ct)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var senepay = scope.ServiceProvider.GetRequiredService<ISenePayClient>();
+            var settlement = scope.ServiceProvider.GetRequiredService<IPayinSettlementService>();
+
+            var p = await db.Payments
+                .Where(x => x.Id == paymentId)
+                .Select(x => new { x.Status, x.SenePayTransactionId, x.InitiatedAt })
+                .FirstOrDefaultAsync(ct);
+            if (p == null) return null;
+            if (p.Status != PaymentStatus.Pending) return p.Status;
+
+            try
+            {
+                await VerifyOneAsync(senepay, settlement, paymentId, p.SenePayTransactionId, p.InitiatedAt, DateTime.UtcNow, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[payin-verify] Échec vérification à la demande Payment {Id}", paymentId);
+            }
+
+            return await db.Payments.Where(x => x.Id == paymentId).Select(x => (PaymentStatus?)x.Status).FirstOrDefaultAsync(ct);
+        }
+
         public async Task<int> RunOnceAsync(CancellationToken ct)
         {
             using var scope = _scopeFactory.CreateScope();
