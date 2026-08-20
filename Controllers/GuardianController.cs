@@ -29,10 +29,19 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly IExportPdfService _exportPdf;
 
-        public GuardianController(AppDbContext context, IExportPdfService exportPdf)
+        private readonly IGuardianPaymentService _guardianPayments;
+        private readonly Idara.API.Options.SenePaySettings _senepaySettings;
+
+        public GuardianController(
+            AppDbContext context,
+            IExportPdfService exportPdf,
+            IGuardianPaymentService guardianPayments,
+            Microsoft.Extensions.Options.IOptions<Idara.API.Options.SenePaySettings> senepaySettings)
         {
             _context = context;
             _exportPdf = exportPdf;
+            _guardianPayments = guardianPayments;
+            _senepaySettings = senepaySettings.Value;
         }
 
         [HttpGet("my-children")]
@@ -694,6 +703,104 @@ namespace Idara.API.Controllers
                 counterpartyHeader: "Élève / Daara");
 
             return File(bytes, "application/pdf", "mes-paiements-idara.pdf");
+        }
+
+        /// <summary>
+        /// `POST /api/guardian/payment-link?schoolId=` — le PARENT demande son
+        /// propre lien de paiement pour le partager à un proche qui paiera à sa
+        /// place, sans compte (fin de mois difficile). C'est le MÊME lien que
+        /// celui que l'école peut lui envoyer (un seul actif par école ×
+        /// responsable) : créé ici s'il n'existe pas encore. Le paiement reste
+        /// attribué au parent (historique, reçu, notifications).
+        /// </summary>
+        [HttpPost("payment-link")]
+        public async Task<ActionResult<ApiResponse<PaymentLinkResponseDto>>> GetOrCreatePaymentLink(
+            [FromQuery] int schoolId, CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+
+            // Le parent doit avoir au moins un enfant (non supprimé) dans l'école.
+            var linked = await _context.StudentGuardians
+                .AnyAsync(sg => sg.GuardianId == userId.Value && sg.Student.SchoolId == schoolId && !sg.Student.IsDeleted, ct);
+            if (!linked)
+            {
+                return NotFound(ApiResponse<PaymentLinkResponseDto>.Fail("Aucun enfant dans cette école."));
+            }
+            var me = await _context.Users.Where(u => u.Id == userId.Value)
+                .Select(u => new { u.FullName, u.PhoneNumber }).FirstAsync(ct);
+            if (string.IsNullOrWhiteSpace(me.PhoneNumber))
+            {
+                return BadRequest(ApiResponse<PaymentLinkResponseDto>.Fail(
+                    "Aucun numéro de téléphone n'est associé à votre compte. Contactez votre école."));
+            }
+
+            var now = DateTime.UtcNow;
+            var link = await _context.PaymentLinks
+                .FirstOrDefaultAsync(l => l.SchoolId == schoolId && l.GuardianId == userId.Value && l.RevokedAt == null, ct);
+            if (link == null)
+            {
+                link = new PaymentLink
+                {
+                    Token = Guid.NewGuid().ToString("N"),
+                    SchoolId = schoolId,
+                    GuardianId = userId.Value,
+                    CreatedById = userId.Value,
+                    CreatedAt = now,
+                    LastSharedAt = now
+                };
+                _context.PaymentLinks.Add(link);
+                try { await _context.SaveChangesAsync(ct); }
+                catch (DbUpdateException)
+                {
+                    _context.Entry(link).State = EntityState.Detached;
+                    link = await _context.PaymentLinks
+                        .FirstAsync(l => l.SchoolId == schoolId && l.GuardianId == userId.Value && l.RevokedAt == null, ct);
+                }
+            }
+            else
+            {
+                link.LastSharedAt = now;
+                await _context.SaveChangesAsync(ct);
+            }
+
+            var outstanding = await _guardianPayments.GetOutstandingAsync(userId.Value, schoolId, ct);
+            var school = await _context.Schools.Where(s => s.Id == schoolId).Select(s => new { s.Name, s.NameAr }).FirstAsync(ct);
+            var schoolName = !string.IsNullOrWhiteSpace(school.Name) ? school.Name! : (school.NameAr ?? "l'école");
+            var url = $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/link/{link.Token}";
+            var lines = (outstanding?.Lines ?? new List<OutstandingLine>())
+                .Select(l => new PaymentLinkDueLineDto
+                {
+                    StudentId = l.StudentId, StudentName = l.StudentName,
+                    Label = InvoiceLabel.Fr(l.Type, l.PeriodStart), AmountFcfa = l.RemainingFcfa
+                }).ToList();
+            var total = outstanding?.TotalDueFcfa ?? 0;
+
+            // Message du PARENT à un proche (français, comme le message de l'école).
+            var children = lines.Select(l => l.StudentName).Distinct().ToList();
+            var msg = $"Salam, pouvez-vous m'aider à régler la scolarité de "
+                      + (children.Count == 0 ? "mes enfants" : string.Join(", ", children))
+                      + $" à {schoolName} ?"
+                      + (total > 0 ? $" Montant : {total.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", " ")} FCFA." : "")
+                      + $"\nIl suffit d'ouvrir ce lien et d'appuyer sur « Payer avec Wave » :\n{url}\n\nMerci beaucoup.";
+
+            return Ok(ApiResponse<PaymentLinkResponseDto>.Ok(new PaymentLinkResponseDto
+            {
+                LinkId = link.Id,
+                Url = url,
+                GuardianId = userId.Value,
+                GuardianFullName = me.FullName,
+                GuardianPhone = me.PhoneNumber,
+                Message = msg,
+                HasOutstanding = total > 0,
+                IsFreeAmount = outstanding?.IsFreeAmount == true,
+                TotalDueFcfa = total,
+                AmountToChargeFcfa = outstanding?.ChargeFor(total) ?? total,
+                Lines = lines,
+                CreatedAt = link.CreatedAt,
+                LastOpenedAt = link.LastOpenedAt,
+                OpenCount = link.OpenCount
+            }));
         }
 
         /// <summary>

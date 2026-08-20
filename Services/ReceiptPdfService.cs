@@ -51,6 +51,9 @@ namespace Idara.API.Services
         public string RelativePathFor(int paymentId) =>
             $"/uploads/receipts/{_namer.Build("receipt", paymentId.ToString())}";
 
+        /// <summary>Chemin de l'aperçu PNG dérivé du chemin du PDF (même nom, `.png`).</summary>
+        public static string PreviewPathOf(string pdfPath) => Path.ChangeExtension(pdfPath, ".png");
+
         public async Task<string> GenerateAsync(
             Payment payment, School school, Student? student, Invoice? invoice, User? donor = null,
             IReadOnlyList<ReceiptConsolidatedLine>? consolidatedLines = null, User? payer = null)
@@ -88,6 +91,29 @@ namespace Idara.API.Services
                 });
 
                 await Task.Run(() => doc.GeneratePdf(fullPath));
+
+                // Aperçu PNG (1ʳᵉ page) pour la page de résultat : Chrome Android
+                // ne rend PAS un PDF dans une <iframe> (il affiche un bloc noir
+                // « Ouvrir »). Best-effort : un échec d'image ne doit jamais faire
+                // perdre le PDF déjà écrit.
+                try
+                {
+                    var pngPath = PreviewPathOf(fullPath);
+                    await Task.Run(() =>
+                    {
+                        var images = doc.GenerateImages(new ImageGenerationSettings
+                        {
+                            ImageFormat = ImageFormat.Png,
+                            RasterDpi = 144,
+                        });
+                        var first = images.FirstOrDefault();
+                        if (first != null) File.WriteAllBytes(pngPath, first);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Aperçu PNG du reçu non généré pour {File} (PDF intact)", fullPath);
+                }
             }
             catch (Exception ex)
             {

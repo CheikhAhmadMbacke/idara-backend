@@ -130,37 +130,8 @@ namespace Idara.API.Controllers
                 return BadRequest("Reçu disponible uniquement pour les paiements complétés.");
             }
 
-            var relative = payment.ReceiptPdfPath ?? _receiptPdf.RelativePathFor(payment.Id);
-            var fullPath = Path.GetFullPath(Path.Combine(
-                _env.WebRootPath, relative.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
-            var webRootFull = Path.GetFullPath(_env.WebRootPath);
-            if (!fullPath.StartsWith(webRootFull, StringComparison.Ordinal))
-            {
-                return BadRequest("Chemin invalide.");
-            }
-
-            if (!System.IO.File.Exists(fullPath))
-            {
-                var student = payment.StudentId.HasValue
-                    ? await _context.Students.FirstOrDefaultAsync(s => s.Id == payment.StudentId.Value, ct)
-                    : null;
-                var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == payment.SchoolId, ct);
-                var invoice = payment.InvoiceId.HasValue
-                    ? await _context.Invoices.FirstOrDefaultAsync(i => i.Id == payment.InvoiceId.Value, ct)
-                    : null;
-                // Pour un DON : charger le donateur afin que le reçu régénéré porte
-                // son nom + type (sinon « Reçu de don » avec donateur vide/Particulier).
-                var donor = payment.Purpose == PaymentPurpose.Donation && payment.DonorId.HasValue
-                    ? await _context.Users.FirstOrDefaultAsync(u => u.Id == payment.DonorId.Value, ct)
-                    : null;
-                if (school == null) return NotFound();
-                var regenerated = await _receiptPdf.GenerateAsync(payment, school, student, invoice, donor);
-                await _context.Payments
-                    .Where(p => p.Id == payment.Id)
-                    .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReceiptPdfPath, regenerated), ct);
-                fullPath = Path.GetFullPath(Path.Combine(
-                    _env.WebRootPath, regenerated.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
-            }
+            var fullPath = await EnsureReceiptFilesAsync(payment, requirePng: false, ct);
+            if (fullPath == null) return BadRequest("Chemin invalide.");
 
             var bytes = await System.IO.File.ReadAllBytesAsync(fullPath, ct);
             var fileName = $"recu-idara-{payment.Id:D6}.pdf";
@@ -172,6 +143,71 @@ namespace Idara.API.Controllers
             }
             Response.Headers.Append("Content-Disposition", $"inline; filename=\"{fileName}\"");
             return File(bytes, "application/pdf");
+        }
+
+        /// <summary>
+        /// `GET /pay/{paymentId}/{token}/receipt.png` — APERÇU image du reçu
+        /// (1ʳᵉ page, 144 dpi). Chrome Android n'affiche pas un PDF dans une
+        /// iframe (bloc noir « Ouvrir ») : la page de résultat montre cette image
+        /// et garde le PDF derrière « Télécharger ». Régénéré si absent (reçus
+        /// antérieurs au 2026-08-20).
+        /// </summary>
+        [HttpGet("{paymentId:int}/{token}/receipt.png")]
+        public async Task<IActionResult> GetReceiptPreview(int paymentId, string token, CancellationToken ct = default)
+        {
+            var payment = await LookupAsync(paymentId, token, ct);
+            if (payment == null) return NotFound();
+            if (payment.Status != PaymentStatus.Completed) return NotFound();
+
+            var pdfPath = await EnsureReceiptFilesAsync(payment, requirePng: true, ct);
+            if (pdfPath == null) return NotFound();
+            var pngPath = ReceiptPdfService.PreviewPathOf(pdfPath);
+            if (!System.IO.File.Exists(pngPath)) return NotFound();
+
+            Response.Headers.CacheControl = "private, max-age=300";
+            return File(await System.IO.File.ReadAllBytesAsync(pngPath, ct), "image/png");
+        }
+
+        /// <summary>
+        /// Garantit la présence du PDF (et du PNG si demandé) sur disque, en
+        /// régénérant au besoin (recovery, gotcha §57). Renvoie le chemin complet
+        /// du PDF, ou null si le chemin en base est invalide (path traversal).
+        /// </summary>
+        private async Task<string?> EnsureReceiptFilesAsync(Payment payment, bool requirePng, CancellationToken ct)
+        {
+            var relative = payment.ReceiptPdfPath ?? _receiptPdf.RelativePathFor(payment.Id);
+            var webRootFull = Path.GetFullPath(_env.WebRootPath);
+            var fullPath = Path.GetFullPath(Path.Combine(
+                webRootFull, relative.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            if (!fullPath.StartsWith(webRootFull, StringComparison.Ordinal)) return null;
+
+            var missing = !System.IO.File.Exists(fullPath)
+                          || (requirePng && !System.IO.File.Exists(ReceiptPdfService.PreviewPathOf(fullPath)));
+            if (!missing) return fullPath;
+
+            var p = await _context.Payments
+                .Include(x => x.Student)
+                .Include(x => x.Guardian)
+                .Include(x => x.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
+                .Include(x => x.StudentAllocations).ThenInclude(a => a.Student)
+                .FirstAsync(x => x.Id == payment.Id, ct);
+            var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == p.SchoolId, ct);
+            if (school == null) return null;
+            var invoice = p.InvoiceId.HasValue
+                ? await _context.Invoices.FirstOrDefaultAsync(i => i.Id == p.InvoiceId.Value, ct)
+                : null;
+            // Pour un DON : charger le donateur afin que le reçu régénéré porte
+            // son nom + type (sinon « Reçu de don » avec donateur vide/Particulier).
+            var donor = p.Purpose == PaymentPurpose.Donation && p.DonorId.HasValue
+                ? await _context.Users.FirstOrDefaultAsync(u => u.Id == p.DonorId.Value, ct)
+                : null;
+            var regenerated = await _receiptPdf.GenerateAsync(
+                p, school, p.Student, invoice, donor, ReceiptConsolidatedLine.LinesFor(p), p.Guardian);
+            await _context.Payments
+                .Where(x => x.Id == p.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.ReceiptPdfPath, regenerated), ct);
+            return Path.GetFullPath(Path.Combine(
+                webRootFull, regenerated.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
         }
 
         // ===== Helpers =====

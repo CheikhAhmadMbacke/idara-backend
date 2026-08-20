@@ -143,16 +143,17 @@
     }
 
     /* Aperçu PDF dans iframe */
-    .pdf-frame {
+    /* Aperçu du reçu : IMAGE (PNG rendu serveur) et non iframe PDF — Chrome
+       Android ne rend pas un PDF dans une iframe (bloc noir « Ouvrir »). */
+    .receipt-preview {
+      display: block;
       width: 100%;
-      height: 540px;
+      height: auto;
       border: 1px solid var(--border);
       border-radius: 12px;
       margin-top: 16px;
       background: white;
-    }
-    @media (max-width: 480px) {
-      .pdf-frame { height: 420px; }
+      box-shadow: 0 4px 20px rgba(11, 116, 77, 0.08);
     }
 
     /* Boutons */
@@ -213,7 +214,7 @@
       <div id="summary" class="summary" style="display:none;"></div>
     </div>
 
-    <iframe id="pdf-frame" class="pdf-frame" style="display:none;" title="Reçu PDF"></iframe>
+    <a id="pdf-link" href="#" target="_blank" rel="noopener" style="display:none;"><img id="pdf-frame" class="receipt-preview" alt="Reçu" /></a>
 
     <div id="actions" class="actions" style="display:none;"></div>
 
@@ -356,8 +357,10 @@
                   ? 'Merci pour votre don. Le daara a bien reçu votre soutien. Le reçu est ci-dessous.'
                   : 'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
             // Affiche le PDF en iframe.
-            pdfFrame.src = `/pay/${paymentId}/${token}/receipt.pdf`;
-            pdfFrame.style.display = 'block';
+            // Aperçu image du reçu ; un appui ouvre le PDF complet.
+            pdfFrame.src = `/pay/${paymentId}/${token}/receipt.png`;
+            document.getElementById('pdf-link').href = `/pay/${paymentId}/${token}/receipt.pdf`;
+            document.getElementById('pdf-link').style.display = 'block';
             renderActions(data, true);
             return; // stop polling
           }
