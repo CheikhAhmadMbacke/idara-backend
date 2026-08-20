@@ -194,7 +194,7 @@
           + '<input type="number" inputmode="numeric" min="0" step="100" placeholder="0" data-sid="' + c.studentId + '" />';
         rows.appendChild(r);
       });
-      rows.addEventListener('input', updateFreeTotal);
+      rows.oninput = updateFreeTotal; // (pas addEventListener : render peut être rappelé, pas de doublon)
       updateFreeTotal();
       show('free-card', true);
       show('pay-btn', true);

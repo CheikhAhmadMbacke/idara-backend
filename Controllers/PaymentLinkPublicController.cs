@@ -44,6 +44,8 @@ namespace Idara.API.Controllers
         private static readonly TimeSpan PendingWindow = TimeSpan.FromHours(6);
         private const int MaxStartsPerWindow = 5;
         private static readonly TimeSpan StartWindow = TimeSpan.FromMinutes(15);
+        /// <summary>Un verrou par lien pour sérialiser /start (mono-instance, comme le rate-limit mémoire §92).</summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, SemaphoreSlim> StartGates = new();
 
         public PaymentLinkPublicController(
             AppDbContext context,
@@ -88,9 +90,25 @@ namespace Idara.API.Controllers
                 return Ok(new { status = "revoked" });
             }
 
-            link.LastOpenedAt = DateTime.UtcNow;
-            link.OpenCount++;
-            await _context.SaveChangesAsync(ct);
+            // Anti-martèlement : chaque lecture peut interroger SenePay (vérif
+            // live d'un Pending). 60 lectures / lien / minute couvrent largement
+            // le poll de 5 s de la page.
+            var stateKey = $"paylink:state:{link.Id}";
+            var reads = _cache.GetOrCreate(stateKey, e => { e.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1); return 0; });
+            if (reads >= 60)
+            {
+                return StatusCode(429, new { status = "rate_limited", message = "Trop de requêtes. Patientez une minute." });
+            }
+            _cache.Set(stateKey, reads + 1, TimeSpan.FromMinutes(1));
+
+            // Une « ouverture » = une visite, pas chaque poll de 5 s en attente
+            // d'un Pending : on ne compte qu'une fois par minute.
+            if (link.LastOpenedAt == null || link.LastOpenedAt < DateTime.UtcNow.AddMinutes(-1))
+            {
+                link.LastOpenedAt = DateTime.UtcNow;
+                link.OpenCount++;
+                await _context.SaveChangesAsync(ct);
+            }
 
             var pending = await ResolvePendingAsync(link, ct);
             var state = await BuildStateAsync(link, pending, ct);
@@ -133,6 +151,17 @@ namespace Idara.API.Controllers
             }
             _cache.Set(key, count + 1, StartWindow);
 
+            // Sérialise les démarrages d'un MÊME lien (deux onglets, double-clic
+            // réseau) : sans ce verrou, deux POST simultanés passeraient tous deux
+            // le contrôle « aucun Pending » et créeraient deux Payments identiques
+            // — le double paiement que la page veut précisément empêcher.
+            var gate = StartGates.GetOrAdd(link.Id, _ => new SemaphoreSlim(1, 1));
+            if (!await gate.WaitAsync(TimeSpan.FromSeconds(10), ct))
+            {
+                return StatusCode(429, new { status = "rate_limited", message = "Un démarrage est déjà en cours. Réessayez." });
+            }
+            try
+            {
             var pending = await ResolvePendingAsync(link, ct);
             if (pending != null)
             {
@@ -195,6 +224,11 @@ namespace Idara.API.Controllers
                 resultUrl = ResultUrl(payment),
                 amountChargedFcfa = payment.AmountFcfa
             });
+            }
+            finally
+            {
+                gate.Release();
+            }
         }
 
         // ===== Helpers =====
@@ -230,10 +264,18 @@ namespace Idara.API.Controllers
             foreach (var id in pendingIds)
             {
                 var status = await _payinVerification.VerifyPaymentNowAsync(id, ct);
-                if (status == PaymentStatus.Pending && stillPending == null)
-                {
-                    stillPending = await _context.Payments.AsNoTracking().FirstAsync(p => p.Id == id, ct);
-                }
+                if (status != PaymentStatus.Pending || stillPending != null) continue;
+                var p = await _context.Payments.AsNoTracking().FirstAsync(x => x.Id == id, ct);
+                // Un Pending SANS jeton SenePay = l'appel d'initiation a échoué
+                // (502/timeout) AVANT toute redirection : le parent n'a jamais vu
+                // Wave, aucun double paiement possible. Le bloquer 6 h sur une
+                // panne SenePay serait absurde → non bloquant passé 2 min (le
+                // webhook pourrait encore le compléter par OrderId, §108, mais
+                // sans redirection personne n'a pu payer).
+                if (string.IsNullOrWhiteSpace(p.SenePayTransactionId)
+                    && p.InitiatedAt < DateTime.UtcNow.AddMinutes(-2))
+                    continue;
+                stillPending = p;
             }
             return stillPending;
         }

@@ -37,9 +37,14 @@ namespace Idara.API.Services
 
         public long TotalDueFcfa => Lines.Sum(l => l.RemainingFcfa);
 
-        /// <summary>Montant libre possible : école hors montant fixe ET aucune mensualité due.</summary>
-        public bool IsFreeAmount => BillingMode != BillingMode.FixedAmount
-                                    && !Lines.Any(l => l.Type == InvoiceType.MonthlyFee);
+        /// <summary>
+        /// Montant libre possible : école hors montant fixe ET AUCUNE facture due.
+        /// Une facture d'inscription impayée (montant fixe par nature, §158) prime :
+        /// elle doit être réglée — et donc créditée — par le chemin consolidé, sinon
+        /// l'argent arriverait sans jamais solder la facture (roster « en retard »,
+        /// rappels SMS) alors que l'app, elle, la proposerait.
+        /// </summary>
+        public bool IsFreeAmount => BillingMode != BillingMode.FixedAmount && Lines.Count == 0;
 
         public long ChargeFor(long target) => FeesPayer == FeesPayer.Parent
             ? (long)Math.Ceiling(target * ParentFeeMultiplier)
@@ -89,6 +94,9 @@ namespace Idara.API.Services
 
     public class GuardianPaymentService : IGuardianPaymentService
     {
+        /// <summary>Plafond d'une part en montant libre (2 000 000 FCFA — au-delà d'une année de scolarité la plus chère connue).</summary>
+        public const long MaxFreeAmountPerChildFcfa = 2_000_000;
+
         private readonly AppDbContext _context;
         private readonly ISenePayClient _senepay;
         private readonly SenePaySettings _settings;
@@ -225,11 +233,19 @@ namespace Idara.API.Services
                 throw new InvalidOperationException(
                     "Cette école fonctionne en montant fixe : le montant est calculé automatiquement.");
             }
-            var allowed = o.Children.ToDictionary(c => c.StudentId);
+            // Enfants SORTIS exclus : la page ne les propose pas, un corps forgé ne doit pas pouvoir les viser.
+            var allowed = o.Children.Where(c => !c.IsExited).ToDictionary(c => c.StudentId);
             var parts = new List<PaymentStudentAllocation>();
             foreach (var (studentId, amount) in amountByStudent)
             {
                 if (amount <= 0) continue;
+                // Borne haute : un montant aberrant (faute de frappe, corps forgé)
+                // ne doit pas créer un Payment Pending absurde ni déborder le long.
+                if (amount > MaxFreeAmountPerChildFcfa)
+                {
+                    throw new InvalidOperationException(
+                        $"Le montant par enfant ne peut pas dépasser {MaxFreeAmountPerChildFcfa:N0} FCFA.");
+                }
                 if (!allowed.ContainsKey(studentId))
                 {
                     throw new InvalidOperationException("Un des enfants n'appartient pas à ce responsable.");
@@ -312,6 +328,19 @@ namespace Idara.API.Services
             catch (SenePayApiException ex)
             {
                 _logger.LogError(ex, "[payment/initiate] SenePay error pour Payment {PaymentId}", payment.Id);
+                // Rejet 4xx SYNCHRONE = SenePay n'a rien créé (validation avant
+                // exécution, même logique que le payout §78) : on clôt le Payment
+                // en Failed tout de suite. Sinon il resterait Pending SANS jeton,
+                // invérifiable par le poll, et bloquerait le lien de paiement.
+                // Timeout / 5xx (StatusCode null ou ≥ 500) : indéterminé → on ne
+                // touche à rien (le webhook peut encore arriver par OrderId, §108).
+                if (ex.StatusCode is >= 400 and < 500)
+                {
+                    payment.Status = PaymentStatus.Failed;
+                    payment.FailedAt = DateTime.UtcNow;
+                    payment.FailureReason = $"SenePay HTTP {ex.StatusCode}";
+                    await _context.SaveChangesAsync(ct);
+                }
                 return new SenePayInitiateOutcome(false, "Failed", null,
                     "SenePay temporairement indisponible. Réessayez dans quelques secondes.", 502, null);
             }
@@ -331,10 +360,20 @@ namespace Idara.API.Services
                 payment.FailureReason = response.FailedReason ?? response.ErrorCode;
                 await _context.SaveChangesAsync(ct);
                 return new SenePayInitiateOutcome(false, status, null,
-                    response.FailedReason ?? "Le paiement a été refusé.", 200, response.ErrorCode);
+                    response.FailedReason, 200, response.ErrorCode);
             }
 
-            return new SenePayInitiateOutcome(true, status, response.RedirectUrl, null, 200, response.ErrorCode);
+            // L'URL de redirection est renvoyée au navigateur qui la suit
+            // (window.location) : on n'accepte qu'un https:// absolu — jamais un
+            // schéma javascript: ou data: si la réponse du PSP était altérée.
+            var redirect = response.RedirectUrl;
+            if (!string.IsNullOrWhiteSpace(redirect)
+                && !(Uri.TryCreate(redirect, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps))
+            {
+                _logger.LogWarning("[payment/initiate] redirectUrl SenePay rejeté (schéma non https) pour Payment {Id}", payment.Id);
+                redirect = null;
+            }
+            return new SenePayInitiateOutcome(true, status, redirect, null, 200, response.ErrorCode);
         }
 
         private static string GeneratePublicToken() => Guid.NewGuid().ToString("N");
