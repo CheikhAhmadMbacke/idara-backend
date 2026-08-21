@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Common.Extensions;
 
 namespace Idara.API.DTOs.Operations
 {
@@ -17,6 +18,18 @@ namespace Idara.API.DTOs.Operations
         public int? EffortScore { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
+
+        /// <summary>
+        /// Ce rapport est-il encore modifiable par CELUI qui le consulte ?
+        /// Calculé par le serveur (§151) : le recalculer dans l'application
+        /// laisserait un téléphone à l'heure fausse verrouiller ou
+        /// déverrouiller à tort. Toujours vrai pour la direction.
+        /// </summary>
+        public bool Editable { get; set; } = true;
+
+        /// <summary>Durée du verrou, pour que l'application puisse l'expliquer
+        /// sans la coder en dur.</summary>
+        public int EditWindowHours { get; set; } = EditWindow.Hours;
     }
 
     public class DailyJournalEntryCreateDto

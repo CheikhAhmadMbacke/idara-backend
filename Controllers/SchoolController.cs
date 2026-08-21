@@ -428,8 +428,136 @@ namespace Idara.API.Controllers
             await tx.CommitAsync(ct);
         }
 
+        /// <summary>
+        /// Résumé actionnable de l'accueil : qui n'a pas payé, si la présence
+        /// du jour est faite, ce qu'il y a en caisse et sur le compte.
+        /// </summary>
+        /// <remarks>
+        /// UN seul appel plutôt que trois : sur un forfait sénégalais, trois
+        /// allers-retours coûtent plus d'une seconde, et trois réponses
+        /// arrivées séparément peuvent se contredire à l'écran.
+        ///
+        /// ⚠️ Réponse porteuse de SOLDES : jamais de mise en cache hors ligne
+        /// côté application.
+        /// </remarks>
+        [HttpGet("home-summary")]
+        // Ce résumé porte des SOLDES : réservé à la direction et au personnel.
+        // Le contrôleur n'exige que `[Authorize]`, or un enseignant ou un
+        // surveillant a lui aussi un SchoolId — sans cet attribut, il lirait la
+        // caisse et le compte du daara. Le SchoolViewer passe par ses claims de
+        // rôle secondaires (§150).
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<ActionResult<SchoolHomeSummaryDto>> GetHomeSummary(
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var now = DateTime.UtcNow;
+            var today = now.Date;
+            var periodStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            // Effectif du mois. EnrolledDuring et non Enrolled : un élève parti
+            // en cours de mois devait quand même sa mensualité — c'est la même
+            // règle que le suivi des paiements, et deux règles différentes pour
+            // le même chiffre finiraient par se contredire à l'écran.
+            var enrolledIds = await _context.Students
+                .Where(s => s.SchoolId == schoolId.Value)
+                .EnrolledDuring(periodStart)
+                .Select(s => s.Id)
+                .ToListAsync(ct);
+
+            // MENSUALITÉS seulement (comme le suivi des paiements, §158) : une
+            // facture d'inscription impayée ne doit pas faire apparaître un
+            // élève « en retard sur son mois ».
+            var invoices = await _context.Invoices
+                .Where(i => i.SchoolId == schoolId.Value
+                            && i.PeriodStart == periodStart
+                            && i.Type == InvoiceType.MonthlyFee
+                            && i.Status != InvoiceStatus.Cancelled)
+                .Select(i => new { i.StudentId, i.AmountDueFcfa, i.AmountPaidFcfa, i.DueDate })
+                .ToListAsync(ct);
+
+            var enrolled = enrolledIds.ToHashSet();
+            var overdue = 0;
+            var pending = 0;
+            foreach (var i in invoices)
+            {
+                if (!enrolled.Contains(i.StudentId)) continue;
+                if (i.AmountPaidFcfa >= i.AmountDueFcfa) continue;
+                if (i.DueDate.Date < today) overdue++;
+                else pending++;
+            }
+
+            // Pointage du jour : on compte les élèves pointés, pas les lignes —
+            // « 42 sur 87 » est ce qu'on veut pouvoir dire quand le pointage
+            // est commencé sans être fini.
+            var attendanceCount = await _context.Attendances
+                .Where(a => a.SchoolId == schoolId.Value && a.Date == today && !a.IsDeleted)
+                .Select(a => a.StudentId)
+                .Distinct()
+                .CountAsync(ct);
+
+            var cashIncome = await _context.CashLedgerEntries
+                .Where(e => e.SchoolId == schoolId.Value && !e.IsDeleted
+                            && e.Type == CashEntryType.Income)
+                .SumAsync(e => (long?)e.AmountFcfa, ct) ?? 0;
+            var cashExpense = await _context.CashLedgerEntries
+                .Where(e => e.SchoolId == schoolId.Value && !e.IsDeleted
+                            && e.Type == CashEntryType.Expense)
+                .SumAsync(e => (long?)e.AmountFcfa, ct) ?? 0;
+
+            var onlineBalance = await _context.SchoolWallets
+                .Where(w => w.SchoolId == schoolId.Value)
+                .Select(w => (long?)w.AvailableBalance)
+                .FirstOrDefaultAsync(ct) ?? 0;
+
+            // Parcours de démarrage : un daara qui vient d'être validé n'a rien,
+            // et c'est le pire moment de tout le parcours. Ces quatre drapeaux
+            // permettent de lui dire par où commencer.
+            var hasClasses = await _context.Classes
+                .AnyAsync(c => c.SchoolId == schoolId.Value && !c.IsDeleted, ct);
+            var settings = await _context.SchoolPaymentSettings
+                .Where(p => p.SchoolId == schoolId.Value)
+                .Select(p => new
+                {
+                    p.GeneralMonthlyFeeFcfa,
+                    p.BoardingMonthlyFeeFcfa,
+                    p.HalfBoardingMonthlyFeeFcfa,
+                    p.DayMonthlyFeeFcfa
+                })
+                .FirstOrDefaultAsync(ct);
+            var hasClassFee = await _context.ClassFees
+                .AnyAsync(f => f.SchoolId == schoolId.Value && f.AmountFcfa > 0, ct);
+            var hasFees = hasClassFee
+                || (settings != null && (
+                       settings.GeneralMonthlyFeeFcfa > 0
+                    || settings.BoardingMonthlyFeeFcfa > 0
+                    || settings.HalfBoardingMonthlyFeeFcfa > 0
+                    || settings.DayMonthlyFeeFcfa > 0));
+            var hasInvitedUsers = await _context.Users
+                .AnyAsync(u => u.SchoolId == schoolId.Value && !u.IsDeleted
+                               && u.Role != UserRoles.SchoolAdmin, ct);
+
+            return Ok(new SchoolHomeSummaryDto
+            {
+                PeriodStart = periodStart,
+                OverdueStudents = overdue,
+                PendingStudents = pending,
+                EnrolledStudents = enrolledIds.Count,
+                AttendanceTakenToday = attendanceCount > 0,
+                AttendanceCountToday = attendanceCount,
+                CashBalanceFcfa = cashIncome - cashExpense,
+                OnlineBalanceFcfa = onlineBalance,
+                HasClasses = hasClasses,
+                HasStudents = enrolledIds.Count > 0,
+                HasFees = hasFees,
+                HasInvitedUsers = hasInvitedUsers
+            });
+        }
+
         [HttpGet("stats")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<ActionResult<SchoolStatsDto>> GetStats()
         {
             var schoolId = User.GetSchoolId();

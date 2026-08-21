@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
@@ -92,7 +92,11 @@ namespace Idara.API.Controllers
             var items = await query
                 .OrderByDescending(j => j.Date).ThenByDescending(j => j.CreatedAt)
                 .ToListAsync();
-            return Ok(items.Select(Map));
+            // Le verrou dépend du rôle du LECTEUR : la direction voit tout
+            // comme modifiable, l'enseignant seulement ce qui est dans sa
+            // fenêtre de 48 h.
+            var readerRole = User.GetRole();
+            return Ok(items.Select(j => Map(j, readerRole)));
         }
 
         [HttpPost]
@@ -158,6 +162,7 @@ namespace Idara.API.Controllers
         {
             var schoolId = User.GetSchoolId();
             var userId = User.GetUserId();
+            var role = User.GetRole();
             if (schoolId == null || userId == null) return Unauthorized();
 
             if (dto.SubjectId.HasValue)
@@ -195,6 +200,10 @@ namespace Idara.API.Controllers
 
             var saved = 0;
             var deleted = 0;
+            // Entrées trop anciennes pour cet enseignant : on les compte pour
+            // le DIRE. Les passer en silence laisserait croire à une saisie
+            // enregistrée qui ne l'a pas été — le défaut du §146.
+            var locked = 0;
             var notifyStudents = new HashSet<int>();
             foreach (var entry in dto.Entries.Where(e => validIds.Contains(e.StudentId)))
             {
@@ -204,6 +213,19 @@ namespace Idara.API.Controllers
 
                 if (existing.TryGetValue(entry.StudentId, out var rec))
                 {
+                    // Verrou 48 h (D7). Le lot est le chemin PRINCIPAL de
+                    // saisie : ne le protéger que sur les endpoints unitaires
+                    // laisserait la feuille de classe tout réécrire. Une entrée
+                    // verrouillée est passée, jamais refusée en bloc — l'écran
+                    // ne propose la modification que de ce qui est modifiable,
+                    // et une saisie de vingt élèves ne doit pas échouer parce
+                    // qu'une seule ligne est trop ancienne.
+                    if (!EditWindow.CanEdit(role, rec.CreatedAt))
+                    {
+                        locked++;
+                        continue;
+                    }
+
                     if (!hasContent)
                     {
                         // Suppression uniquement si l'enseignant l'a explicitement demandé
@@ -262,6 +284,9 @@ namespace Idara.API.Controllers
             var msg = deleted > 0
                 ? $"{saved} rapport(s) enregistré(s), {deleted} supprimé(s)."
                 : $"{saved} rapport(s) enregistré(s).";
+            if (locked > 0)
+                msg += $" {locked} rapport(s) de plus de {EditWindow.Hours} h n'ont pas été "
+                     + "modifiés : demandez à la direction du daara.";
             return Ok(ApiResponse<bool>.Ok(true, msg));
         }
 
@@ -283,6 +308,12 @@ namespace Idara.API.Controllers
             // Un enseignant ne peut modifier que ses propres entrées ; admin/staff peuvent tout.
             var isAdminLevel = role == UserRoles.SchoolAdmin || role == UserRoles.SchoolStaff;
             if (!isAdminLevel && entity.TeacherId != userId.Value) return Forbid();
+
+            // Verrou 48 h, étendu du suivi coranique au journal (D7) : les deux
+            // relevés vivent désormais derrière le même écran, la règle ne peut
+            // pas s'appliquer à l'un seulement.
+            if (!EditWindow.CanEdit(role, entity.CreatedAt))
+                return BadRequest(ApiResponse<bool>.Fail(EditWindow.RefusalMessage()));
 
             entity.LearnedToday = dto.LearnedToday;
             entity.BehaviorScore = dto.BehaviorScore;
@@ -307,6 +338,11 @@ namespace Idara.API.Controllers
 
             var isAdminLevel = role == UserRoles.SchoolAdmin || role == UserRoles.SchoolStaff;
             if (!isAdminLevel && entity.TeacherId != userId.Value) return Forbid();
+
+            // ⚠️ MÊME verrou que la modification : sans lui, il suffirait de
+            // supprimer puis de re-saisir pour contourner le délai (§151).
+            if (!EditWindow.CanEdit(role, entity.CreatedAt))
+                return BadRequest(ApiResponse<bool>.Fail(EditWindow.RefusalMessage(deleting: true)));
 
             // Soft-delete + audit (traçabilité conformité).
             entity.IsDeleted = true;
@@ -336,7 +372,9 @@ namespace Idara.API.Controllers
             return true;
         }
 
-        private static DailyJournalEntryDto Map(DailyJournalEntry j) => new()
+        /// <param name="role">Rôle du LECTEUR : c'est de lui que dépend le
+        /// verrou, pas de l'auteur de la saisie.</param>
+        private static DailyJournalEntryDto Map(DailyJournalEntry j, string? role = null) => new()
         {
             Id = j.Id,
             StudentId = j.StudentId,
@@ -350,7 +388,9 @@ namespace Idara.API.Controllers
             BehaviorScore = j.BehaviorScore,
             EffortScore = j.EffortScore,
             CreatedAt = j.CreatedAt,
-            UpdatedAt = j.UpdatedAt
+            UpdatedAt = j.UpdatedAt,
+            Editable = EditWindow.CanEdit(role, j.CreatedAt),
+            EditWindowHours = EditWindow.Hours
         };
     }
 }

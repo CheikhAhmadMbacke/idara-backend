@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
@@ -279,11 +279,9 @@ namespace Idara.API.Controllers
             // Verrou 48 h (§151) : un enseignant ne peut plus REPRENDRE un suivi
             // saisi il y a plus de 48 h. La création d'une journée ancienne
             // reste permise — saisir en retard n'est pas modifier.
-            if (record != null && IsTeacherLocked(User.GetRole()) && !IsWithinEditWindow(record))
+            if (record != null && !EditWindow.CanEdit(User.GetRole(), record.CreatedAt))
             {
-                return BadRequest(ApiResponse<bool>.Fail(
-                    $"Ce suivi a été enregistré il y a plus de {EditWindowHours} heures : il n'est plus modifiable. " +
-                    "Demandez à la direction du daara de le corriger."));
+                return BadRequest(ApiResponse<bool>.Fail(EditWindow.RefusalMessage()));
             }
 
             if (record == null)
@@ -365,6 +363,185 @@ namespace Idara.API.Controllers
             return Ok(MapDaily(saved, dayIndex, IsTeacherLocked(User.GetRole())));
         }
 
+        /// <summary>
+        /// Saisie du suivi quotidien pour TOUTE UNE CLASSE, en un appel.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Même charpente que le pointage et le journal : la classe, la date,
+        /// la liste des élèves, un enregistrement. Le suivi coranique se
+        /// saisissait un élève à la fois alors que c'est le geste QUOTIDIEN du
+        /// maître — trente allers-retours complets pour une classe de trente.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>Pas de transaction englobante</b>, volontairement, et c'est le
+        /// motif déjà retenu pour le journal en lot. La création d'un cycle
+        /// s'appuie sur un <c>catch</c> de violation d'unicité suivi d'une
+        /// relecture (course entre deux saisies simultanées) : dans une
+        /// transaction PostgreSQL, cette violation avorte la transaction et la
+        /// relecture échouerait. `SaveChanges` reste atomique de lui-même.
+        /// </para>
+        /// <para>
+        /// ⚠️ Une journée <b>verrouillée</b> (48 h, §151) est <b>passée et
+        /// comptée</b>, jamais refusée en bloc : une saisie de trente élèves ne
+        /// doit pas échouer parce qu'une seule ligne est trop ancienne. Le
+        /// compte est renvoyé pour être DIT à l'utilisateur.
+        /// </para>
+        /// </remarks>
+        [HttpPut("daily/bulk")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
+        public async Task<IActionResult> BulkDaily([FromBody] CoranDailyBulkDto dto)
+        {
+            var schoolId = User.GetSchoolId();
+            var userId = User.GetUserId();
+            var role = User.GetRole();
+            if (schoolId == null || userId == null) return Unauthorized();
+
+            foreach (var e in dto.Entries)
+            {
+                var kinds = e.Portions.Select(p => p.Kind).ToList();
+                if (kinds.Count != kinds.Distinct().Count())
+                    return BadRequest(ApiResponse<bool>.Fail(
+                        "Chaque type de portion ne peut apparaître qu'une fois."));
+            }
+
+            var date = dto.Date.ToUtcDay();
+            var ids = dto.Entries.Select(e => e.StudentId).Distinct().ToList();
+
+            // Périmètre de l'appelant : un enseignant ne saisit que pour ses
+            // classes. Les élèves hors périmètre sont ignorés comme ceux d'une
+            // autre école (§16) ; les élèves sortis le sont aussi (D4).
+            var visible = await _context.VisibleClassIdsAsync(role, userId.Value, schoolId.Value);
+            var validIds = await _context.Students
+                .Where(s => ids.Contains(s.Id) && s.SchoolId == schoolId.Value)
+                .Enrolled()
+                .Where(s => visible == null
+                    || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
+                .Select(s => s.Id)
+                .ToListAsync();
+            var valid = validIds.ToHashSet();
+
+            var existing = await _context.CoranDailyRecords
+                .Include(r => r.Portions)
+                .Where(r => valid.Contains(r.StudentId) && r.Date == date)
+                .ToDictionaryAsync(r => r.StudentId);
+
+            var saved = 0;
+            var locked = 0;
+            var touchedCycles = new HashSet<int>();
+
+            foreach (var entry in dto.Entries.Where(e => valid.Contains(e.StudentId)))
+            {
+                // Une entrée entièrement vide n'écrit rien : l'écran envoie
+                // toute la classe, y compris les élèves qu'on n'a pas saisis.
+                var hasContent = entry.Portions.Any(p =>
+                        p.FromSurah != null || p.ToSurah != null
+                        || !string.IsNullOrWhiteSpace(p.FromWordText)
+                        || !string.IsNullOrWhiteSpace(p.ToWordText)
+                        || p.Status != CoranPortionStatus.NotSet)
+                    || !string.IsNullOrWhiteSpace(entry.Remarks);
+
+                existing.TryGetValue(entry.StudentId, out var record);
+
+                if (record == null && !hasContent) continue;
+
+                // Verrou 48 h : passé, jamais refusé en bloc.
+                if (record != null && !EditWindow.CanEdit(role, record.CreatedAt))
+                {
+                    locked++;
+                    continue;
+                }
+
+                if (record == null)
+                {
+                    var cycle = await GetOrCreateOpenCycleAsync(
+                        entry.StudentId, schoolId.Value, date);
+                    record = new CoranDailyRecord
+                    {
+                        SchoolId = schoolId.Value,
+                        StudentId = entry.StudentId,
+                        CycleId = cycle.Id,
+                        Date = date,
+                        RecordedById = userId.Value,
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _context.CoranDailyRecords.Add(record);
+                }
+
+                record.Remarks = string.IsNullOrWhiteSpace(entry.Remarks)
+                    ? null
+                    : entry.Remarks.Trim();
+                record.UpdatedAt = DateTime.UtcNow;
+
+                // Remplacement intégral des portions : l'écran envoie l'état
+                // complet du jour, comme la saisie unitaire.
+                if (record.Portions.Count > 0)
+                    _context.CoranDailyPortions.RemoveRange(record.Portions);
+                foreach (var p in entry.Portions)
+                {
+                    record.Portions.Add(new CoranDailyPortion
+                    {
+                        Kind = p.Kind,
+                        FromSurah = p.FromSurah,
+                        FromAyah = p.FromAyah,
+                        FromWordIndex = p.FromWordIndex,
+                        FromWordText = TrimOrNull(p.FromWordText),
+                        ToSurah = p.ToSurah,
+                        ToAyah = p.ToAyah,
+                        ToWordIndex = p.ToWordIndex,
+                        ToWordText = TrimOrNull(p.ToWordText),
+                        Status = p.Status
+                    });
+                }
+
+                touchedCycles.Add(record.CycleId);
+                saved++;
+            }
+
+            await _context.SaveChangesAsync();
+
+            // Clôture des cycles arrivés au 22ᵉ jour — même règle que la saisie
+            // unitaire : la transition est UNIQUE, et c'est elle qui prévient
+            // les parents.
+            var completed = new List<int>();
+            foreach (var cycleId in touchedCycles)
+            {
+                var cycle = await _context.CoranCycles.FirstOrDefaultAsync(c => c.Id == cycleId);
+                if (cycle == null || cycle.IsComplete) continue;
+                var count = await _context.CoranDailyRecords.CountAsync(r => r.CycleId == cycleId);
+                if (count < CycleLength) continue;
+                cycle.IsComplete = true;
+                cycle.CompletedDate = await _context.CoranDailyRecords
+                    .Where(r => r.CycleId == cycleId).MaxAsync(r => r.Date);
+                completed.Add(cycle.StudentId);
+            }
+            if (completed.Count > 0) await _context.SaveChangesAsync();
+
+            // Notifications POST-commit, best-effort (§42/§57).
+            foreach (var studentId in completed)
+            {
+                var st = await _context.Students
+                    .Where(s => s.Id == studentId && !s.IsDeleted)
+                    .Select(s => new { s.FirstName, s.LastName }).FirstOrDefaultAsync();
+                var eleve = st == null ? string.Empty : $"{st.FirstName} {st.LastName}".Trim();
+                await _notif.NotifyGuardiansOfStudentAsync(
+                    studentId, NotificationTemplates.ChildCoranCycleReady(eleve),
+                    "CHILD_CORAN_CYCLE", $"/guardian/children/{studentId}", oncePerDay: false);
+            }
+
+            return Ok(ApiResponse<CoranDailyBulkResultDto>.Ok(
+                new CoranDailyBulkResultDto
+                {
+                    Saved = saved,
+                    Locked = locked,
+                    CyclesCompleted = completed.Count
+                },
+                locked > 0
+                    ? $"{saved} suivi(s) enregistré(s). {locked} journée(s) de plus de "
+                      + $"{EditWindow.Hours} h n'ont pas été modifiées : demandez à la direction."
+                    : $"{saved} suivi(s) enregistré(s)."));
+        }
+
         /// <summary>Supprime le suivi d'une journée.</summary>
         [HttpDelete("daily/{id}")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
@@ -382,11 +559,9 @@ namespace Idara.API.Controllers
 
             // Même verrou que la modification (§151) — sans lui, il suffirait de
             // supprimer puis de re-saisir pour contourner le délai.
-            if (IsTeacherLocked(User.GetRole()) && !IsWithinEditWindow(record))
+            if (!EditWindow.CanEdit(User.GetRole(), record.CreatedAt))
             {
-                return BadRequest(ApiResponse<bool>.Fail(
-                    $"Ce suivi a été enregistré il y a plus de {EditWindowHours} heures : il n'est plus supprimable. " +
-                    "Demandez à la direction du daara."));
+                return BadRequest(ApiResponse<bool>.Fail(EditWindow.RefusalMessage(deleting: true)));
             }
 
             // Portions supprimées en cascade (FK Cascade). On ne réouvre PAS un
@@ -586,25 +761,18 @@ namespace Idara.API.Controllers
         // ===================================================================
 
         /// <summary>
-        /// Délai pendant lequel un enseignant peut encore corriger un suivi
-        /// qu'il a saisi. Au-delà, seule la direction (SchoolAdmin /
-        /// SchoolStaff) peut intervenir : un verrou absolu graverait la moindre
-        /// faute de frappe repérée trop tard.
+        /// La règle vit dans <see cref="EditWindow"/>, partagée avec le journal
+        /// de classe : depuis que les deux relevés sont réunis derrière l'écran
+        /// « Cahier de suivi », un cadenas sur l'un et pas sur l'autre serait
+        /// incompréhensible (D7 de la refonte du 2026-08-21).
         /// </summary>
-        public const int EditWindowHours = 48;
+        public const int EditWindowHours = EditWindow.Hours;
 
-        /// <summary>
-        /// Le délai part de la <b>saisie</b> (<c>CreatedAt</c>), pas de la date
-        /// de la journée : un maître qui reporte le jeudi la journée de lundi
-        /// doit garder ses 48 h pour se relire. Et surtout PAS de
-        /// <c>UpdatedAt</c> — chaque modification repousserait la fenêtre, le
-        /// verrou ne se fermerait jamais.
-        /// </summary>
         private static bool IsWithinEditWindow(CoranDailyRecord r) =>
-            DateTime.UtcNow - r.CreatedAt <= TimeSpan.FromHours(EditWindowHours);
+            EditWindow.IsOpen(r.CreatedAt);
 
-        /// <summary>Seul l'enseignant est soumis au délai.</summary>
-        private static bool IsTeacherLocked(string? role) => role == UserRoles.Teacher;
+        private static bool IsTeacherLocked(string? role) =>
+            EditWindow.IsTeacherLocked(role);
 
         /// <summary>Mappe une liste de records en calculant le DayIndex (1..22)
         /// par ordre de date au sein de chaque cycle.</summary>

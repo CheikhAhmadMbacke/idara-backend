@@ -91,4 +91,53 @@ namespace Idara.API.DTOs.Operations
         [StringLength(2000)] public string? Remarks { get; set; }
         public List<CoranDailyPortionInputDto> Portions { get; set; } = new();
     }
+
+    /// <summary>
+    /// Saisie du suivi coranique pour TOUTE UNE CLASSE en une fois.
+    /// </summary>
+    /// <remarks>
+    /// Le suivi coranique se saisissait un élève à la fois — alors que c'est le
+    /// geste quotidien du maître, et que le pointage comme le journal se
+    /// saisissent déjà par classe. Pour trente élèves, cela faisait trente
+    /// allers-retours complets, là où le tableau papier du daara
+    /// (« جدول المتابعة اليومية ») est justement une grille classe × jour.
+    /// </remarks>
+    public class CoranDailyBulkDto : IValidatableObject
+    {
+        [Required] public DateTime Date { get; set; } = DateTime.UtcNow;
+
+        /// <summary>Classe saisie — informative, le périmètre réel est celui
+        /// de l'appelant (§150).</summary>
+        public int? ClassId { get; set; }
+
+        [Required] public List<CoranDailyBulkEntryDto> Entries { get; set; } = new();
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext ctx)
+        {
+            if (Entries == null || Entries.Count == 0)
+                yield return new ValidationResult(
+                    "La liste 'Entries' ne peut pas être vide.", new[] { nameof(Entries) });
+        }
+    }
+
+    public class CoranDailyBulkEntryDto
+    {
+        [Required] public int StudentId { get; set; }
+        [StringLength(2000)] public string? Remarks { get; set; }
+        public List<CoranDailyPortionInputDto> Portions { get; set; } = new();
+    }
+
+    /// <summary>Compte rendu d'une saisie en lot.</summary>
+    public class CoranDailyBulkResultDto
+    {
+        public int Saved { get; set; }
+
+        /// <summary>Élèves dont la journée était déjà verrouillée (48 h, §151).
+        /// Comptés pour être DITS : un passage silencieux laisserait croire à
+        /// une saisie enregistrée qui ne l'a pas été.</summary>
+        public int Locked { get; set; }
+
+        /// <summary>Cycles de 22 jours clôturés par cette saisie.</summary>
+        public int CyclesCompleted { get; set; }
+    }
 }
