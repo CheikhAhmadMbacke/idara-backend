@@ -15,5 +15,13 @@ namespace Idara.API.Constants
         public const string SchoolAdminPassword = "DemoIdara2026!";
         public const string GuardianPhone = "+221770000000";
         public const string GuardianCode = "123456";
+
+        /// <summary>
+        /// Enseignant de démo — identité par téléphone, comme tout compte créé
+        /// par une école (§91). Numéro voisin de celui du parent pour rester
+        /// mémorisable, même code à 6 chiffres.
+        /// </summary>
+        public const string TeacherPhone = "+221770000001";
+        public const string TeacherCode = "123456";
     }
 }

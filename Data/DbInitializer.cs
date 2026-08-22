@@ -40,6 +40,7 @@ namespace Idara.API.Data
             await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
             await SeedDemoSchoolAsync();
+            await SeedDemoTeacherAsync();
             await PurgeStaleIdempotencyRecordsAsync();
             await PurgeStaleIncidentsAsync();
         }
@@ -114,6 +115,8 @@ namespace Idara.API.Data
         private const string DemoSchoolAdminPassword = DemoAccounts.SchoolAdminPassword;
         private const string DemoGuardianPhone = DemoAccounts.GuardianPhone;
         private const string DemoGuardianCode = DemoAccounts.GuardianCode;
+        private const string DemoTeacherPhone = DemoAccounts.TeacherPhone;
+        private const string DemoTeacherCode = DemoAccounts.TeacherCode;
 
         /// <summary>
         /// Seed d'une école de démonstration complète (école validée + SchoolAdmin
@@ -250,6 +253,111 @@ namespace Idara.API.Data
             _logger.LogInformation(
                 "Seed démo : école '{School}' (id {Id}) + SchoolAdmin {Email} + parent {Phone} créés pour la review Play Store.",
                 school.Name, school.Id, DemoSchoolAdminEmail, DemoGuardianPhone);
+        }
+
+        /// <summary>
+        /// Enseignant de démonstration, ajouté à l'école de démo.
+        ///
+        /// <para>⚠️ Méthode SÉPARÉE de <see cref="SeedDemoSchoolAsync"/>, et c'est
+        /// tout l'intérêt : cette dernière s'arrête net si le SchoolAdmin de démo
+        /// existe déjà — donc en production, où l'école a été créée en juin, un
+        /// ajout écrit à l'intérieur ne serait JAMAIS joué. Ici la garde porte sur
+        /// le compte enseignant lui-même : le seed rattrape une école existante
+        /// comme il équipe une base neuve.</para>
+        ///
+        /// <para>L'enseignant est affecté à <b>toutes</b> les classes de l'école
+        /// de démo. Sans affectation il ne verrait rien du tout — le cloisonnement
+        /// (§150) borne un enseignant à ses classes, et un compte sans classe
+        /// n'affiche qu'un « aucune classe ne vous est affectée » parfaitement
+        /// correct mais intestable.</para>
+        /// </summary>
+        /// <remarks>
+        /// <b>Publique à dessein</b> : un seed qu'on ne peut vérifier qu'en
+        /// démarrant l'API contre une vraie base est un seed qui n'est jamais
+        /// vérifié (même raisonnement qu'au §133 pour le rendu d'un e-mail).
+        /// Elle est exercée par un banc EF InMemory sur les deux cas qui
+        /// comptent : base neuve et école de démo DÉJÀ existante.
+        /// </remarks>
+        public async Task SeedDemoTeacherAsync()
+        {
+            var admin = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Email == DemoSchoolAdminEmail && !u.IsDeleted);
+            if (admin?.SchoolId == null) return; // pas d'école de démo : rien à faire
+
+            var schoolId = admin.SchoolId.Value;
+
+            // Garde d'idempotence : le numéro est l'identité d'un compte école.
+            var already = await _context.Users
+                .AnyAsync(u => u.PhoneNumber == DemoTeacherPhone && !u.IsDeleted);
+            if (already) return;
+
+            var now = DateTime.UtcNow;
+
+            var teacher = new User
+            {
+                FullName = "Enseignant Démo",
+                FirstName = "Enseignant",
+                LastName = "Démo",
+                PhoneNumber = DemoTeacherPhone,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(DemoTeacherCode),
+                Role = UserRoles.Teacher,
+                IsEmailVerified = false,
+                AccountStatus = AccountStatus.Active,
+                SchoolId = schoolId,
+                PreferredLanguage = "fr",
+                CreatedAt = now
+            };
+            _context.Users.Add(teacher);
+            await _context.SaveChangesAsync();
+
+            // Une matière est indispensable : une affectation, c'est un triplet
+            // (classe, matière, enseignant). On réutilise celle de l'école si
+            // elle en a déjà une, sinon on crée « Coran ».
+            var subject = await _context.Subjects
+                .Where(s => s.SchoolId == schoolId && !s.IsDeleted && s.IsActive)
+                .OrderBy(s => s.Id)
+                .FirstOrDefaultAsync();
+
+            if (subject == null)
+            {
+                subject = new Subject
+                {
+                    SchoolId = schoolId,
+                    Name = "Coran",
+                    NameAr = "القرآن",
+                    Kind = SubjectKind.Coran,
+                    DefaultCoefficient = 2.0,
+                    DefaultMaxValue = 20.0,
+                    OrderIndex = 0,
+                    IsActive = true,
+                    CreatedAt = now
+                };
+                _context.Subjects.Add(subject);
+                await _context.SaveChangesAsync();
+            }
+
+            var classIds = await _context.Classes
+                .Where(c => c.SchoolId == schoolId)
+                .Select(c => c.Id)
+                .ToListAsync();
+
+            foreach (var classId in classIds)
+            {
+                _context.ClassSubjectTeachers.Add(new ClassSubjectTeacher
+                {
+                    SchoolId = schoolId,
+                    ClassId = classId,
+                    SubjectId = subject.Id,
+                    TeacherId = teacher.Id,
+                    AssignedAt = now
+                });
+            }
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Seed démo : enseignant {Phone} ajouté à l'école {SchoolId}, affecté à {Count} classe(s) pour la matière « {Subject} ».",
+                DemoTeacherPhone, schoolId, classIds.Count, subject.Name);
         }
 
         /// <summary>

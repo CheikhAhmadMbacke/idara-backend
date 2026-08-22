@@ -16,5 +16,8 @@ namespace Idara.API.DTOs.Admin
 
         public string GuardianPhone { get; set; } = string.Empty;
         public string GuardianCode { get; set; } = string.Empty;
+
+        public string TeacherPhone { get; set; } = string.Empty;
+        public string TeacherCode { get; set; } = string.Empty;
     }
 }

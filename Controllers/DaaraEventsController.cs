@@ -75,6 +75,24 @@ namespace Idara.API.Controllers
             _ => EventVisibility.School,
         };
 
+        /// <summary>
+        /// Ramène une visibilité « Parents inclus » au niveau « Toute l'école ».
+        ///
+        /// <para>⚠️ Depuis le 2026-08-22, la vie du daara ne figure plus dans
+        /// l'espace parent (décision produit) : plus personne ne LIT le niveau
+        /// <see cref="EventVisibility.Guardians"/>. Le laisser s'enregistrer
+        /// ferait un <b>faux bouton</b> — une école cocherait « Parents inclus »
+        /// en croyant publier aux familles, et rien n'arriverait jamais, sans le
+        /// moindre message. Même traitement que le niveau « Parents » des
+        /// objectifs, qui n'a jamais eu d'écran (§144).</para>
+        ///
+        /// <para>Aucune reprise de données : les événements déjà enregistrés à ce
+        /// niveau restent lisibles par l'école (la lecture est un
+        /// <c>&gt;=</c>).</para>
+        /// </summary>
+        private static EventVisibility Storable(EventVisibility v) =>
+            v == EventVisibility.Guardians ? EventVisibility.School : v;
+
         // ========================================================
         // ===== Lecture =====
         // ========================================================
@@ -201,7 +219,7 @@ namespace Idara.API.Controllers
                 Title = dto.Title.Trim(),
                 Description = NullIfEmpty(dto.Description),
                 Category = dto.Category,
-                Visibility = dto.Visibility,
+                Visibility = Storable(dto.Visibility),
                 DaaraObjectiveId =
                     await ResolveObjectiveAsync(dto.DaaraObjectiveId, schoolId.Value, ct),
                 CreatedById = userId.Value,
@@ -259,7 +277,7 @@ namespace Idara.API.Controllers
             ev.Title = dto.Title.Trim();
             ev.Description = NullIfEmpty(dto.Description);
             ev.Category = dto.Category;
-            ev.Visibility = dto.Visibility;
+            ev.Visibility = Storable(dto.Visibility);
             ev.DaaraObjectiveId =
                 await ResolveObjectiveAsync(dto.DaaraObjectiveId, schoolId.Value, ct);
             ev.UpdatedAt = DateTime.UtcNow;

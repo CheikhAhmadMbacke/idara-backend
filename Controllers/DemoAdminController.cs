@@ -47,7 +47,9 @@ namespace Idara.API.Controllers
                 AdminEmail = DemoAccounts.SchoolAdminEmail,
                 AdminPassword = DemoAccounts.SchoolAdminPassword,
                 GuardianPhone = DemoAccounts.GuardianPhone,
-                GuardianCode = DemoAccounts.GuardianCode
+                GuardianCode = DemoAccounts.GuardianCode,
+                TeacherPhone = DemoAccounts.TeacherPhone,
+                TeacherCode = DemoAccounts.TeacherCode
             }));
         }
 
