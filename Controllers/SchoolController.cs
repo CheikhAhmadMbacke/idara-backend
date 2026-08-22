@@ -362,6 +362,12 @@ namespace Idara.API.Controllers
             await _context.CoranDailyRecords.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.CoranCycles.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.StaffAttendances.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Étapes de démarrage écartées. Sa clé étrangère est en cascade,
+            // donc PostgreSQL s'en chargerait — on la liste quand même : cette
+            // méthode est la liste de référence, et le jour où quelqu'un passe
+            // la FK en Restrict, l'oubli se paierait par un 500 au milieu d'une
+            // suppression déjà entamée (§77/§103).
+            await _context.SchoolSetupDismissals.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             // Journal du daara (photos avant événements). IgnoreQueryFilters :
             // sans lui, le filtre global !IsDeleted laisserait les événements
             // effacés en base, et la suppression de l'école échouerait sur la
@@ -539,8 +545,50 @@ namespace Idara.API.Controllers
                 .AnyAsync(u => u.SchoolId == schoolId.Value && !u.IsDeleted
                                && u.Role != UserRoles.SchoolAdmin, ct);
 
+            var hasSubjects = await _context.Subjects
+                .AnyAsync(s => s.SchoolId == schoolId.Value && !s.IsDeleted && s.IsActive, ct);
+
+            // ⚠️ Une année scolaire SANS période ne sert à rien : ni note ni
+            // bulletin ne peuvent s'y accrocher. L'étape n'est donc « faite »
+            // que quand l'année porte au moins une période — sinon le daara
+            // cocherait la ligne et resterait bloqué au même endroit.
+            var hasAcademicPeriod = await _context.AcademicPeriods
+                .AnyAsync(p => p.SchoolId == schoolId.Value, ct);
+
+            var hasAssignments = await _context.ClassSubjectTeachers
+                .AnyAsync(a => a.SchoolId == schoolId.Value, ct);
+
+            var hasTimetable = await _context.TimetableSlots
+                .AnyAsync(t => t.SchoolId == schoolId.Value, ct);
+
+            // Enseignants sans aucune classe : ils ouvrent leur espace sur un
+            // écran vide dont eux ne peuvent rien faire.
+            var teachersWithoutClass = await _context.Users
+                .CountAsync(u => u.SchoolId == schoolId.Value && !u.IsDeleted
+                                 && u.Role == UserRoles.Teacher
+                                 && !_context.ClassSubjectTeachers
+                                       .Any(a => a.TeacherId == u.Id), ct);
+
+            var dismissed = await _context.SchoolSetupDismissals
+                .Where(d => d.SchoolId == schoolId.Value)
+                .Select(d => d.Step)
+                .ToListAsync(ct);
+
+            var setupSteps = BuildSetupSteps(
+                hasClasses: hasClasses,
+                hasSubjects: hasSubjects,
+                hasAcademicPeriod: hasAcademicPeriod,
+                hasStudents: enrolledIds.Count > 0,
+                hasFees: hasFees,
+                hasInvitedUsers: hasInvitedUsers,
+                hasAssignments: hasAssignments,
+                hasTimetable: hasTimetable,
+                dismissed: dismissed);
+
             return Ok(new SchoolHomeSummaryDto
             {
+                SetupSteps = setupSteps,
+                TeachersWithoutClass = teachersWithoutClass,
                 PeriodStart = periodStart,
                 OverdueStudents = overdue,
                 PendingStudents = pending,
@@ -555,6 +603,151 @@ namespace Idara.API.Controllers
                 HasInvitedUsers = hasInvitedUsers
             });
         }
+
+        /// <summary>
+        /// Les étapes que l'application ne peut pas faire fonctionner sans
+        /// elles. Elles occupent l'accueil, et ne peuvent pas être écartées :
+        /// un daara sans classe, sans élève ou sans tarif n'a rien à faire
+        /// tourner, et l'écarter reviendrait à couper le guidage au moment où
+        /// il est le plus nécessaire.
+        /// </summary>
+        public static readonly IReadOnlySet<SchoolSetupStep> BlockingSetupSteps =
+            new HashSet<SchoolSetupStep>
+            {
+                SchoolSetupStep.Classes,
+                SchoolSetupStep.Students,
+                SchoolSetupStep.Fees,
+            };
+
+        /// <summary>
+        /// Assemble le parcours de démarrage : ordre, « fait », « écarté »,
+        /// « bloquant ».
+        /// </summary>
+        /// <remarks>
+        /// <b>Publique et PURE à dessein</b> : c'est ici que vivent les seules
+        /// règles qui comptent, et une règle qu'on ne peut vérifier qu'en
+        /// montant une base entière n'est jamais vérifiée (§133).
+        ///
+        /// <para>⚠️ Une étape bloquante n'est <b>jamais</b> rendue comme
+        /// écartée, même si une ligne traînait en base : le drapeau est calculé
+        /// ici, pas recopié. Sans cette garde, une ligne posée par erreur (ou
+        /// par une future migration) ferait disparaître en silence le guidage
+        /// d'un daara qui n'a pas encore de classe.</para>
+        /// </remarks>
+        public static List<SchoolSetupStepDto> BuildSetupSteps(
+            bool hasClasses,
+            bool hasSubjects,
+            bool hasAcademicPeriod,
+            bool hasStudents,
+            bool hasFees,
+            bool hasInvitedUsers,
+            bool hasAssignments,
+            bool hasTimetable,
+            IEnumerable<SchoolSetupStep> dismissed)
+        {
+            var skipped = dismissed.ToHashSet();
+
+            // L'ordre de cette table EST l'ordre affiché : il suit les
+            // dépendances réelles (pas d'affectation sans classe, sans matière
+            // et sans compte ; pas de note sans période).
+            var done = new (SchoolSetupStep Step, bool Done)[]
+            {
+                (SchoolSetupStep.Classes, hasClasses),
+                (SchoolSetupStep.Subjects, hasSubjects),
+                (SchoolSetupStep.AcademicYear, hasAcademicPeriod),
+                (SchoolSetupStep.Students, hasStudents),
+                (SchoolSetupStep.Fees, hasFees),
+                (SchoolSetupStep.Users, hasInvitedUsers),
+                (SchoolSetupStep.Assignments, hasAssignments),
+                (SchoolSetupStep.Timetable, hasTimetable),
+            };
+
+            return done.Select(d =>
+            {
+                var blocking = BlockingSetupSteps.Contains(d.Step);
+                return new SchoolSetupStepDto
+                {
+                    Step = d.Step,
+                    Done = d.Done,
+                    Blocking = blocking,
+                    Dismissed = !blocking && skipped.Contains(d.Step),
+                };
+            }).ToList();
+        }
+
+        /// <summary>
+        /// `POST /api/school/setup/{step}/dismiss` — « Pas pour mon daara ».
+        /// </summary>
+        /// <remarks>
+        /// Réservé au SchoolAdmin : c'est une décision sur la configuration de
+        /// l'établissement, pas un réglage d'écran.
+        /// </remarks>
+        [HttpPost("setup/{step}/dismiss")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> DismissSetupStep(
+            SchoolSetupStep step, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            if (!Enum.IsDefined(step))
+                return BadRequest(ApiResponse<object>.Fail("Étape inconnue."));
+
+            if (BlockingSetupSteps.Contains(step))
+                return BadRequest(ApiResponse<object>.Fail(
+                    "Cette étape est indispensable au fonctionnement du daara : "
+                    + "elle ne peut pas être écartée."));
+
+            var already = await _context.SchoolSetupDismissals
+                .AnyAsync(d => d.SchoolId == schoolId.Value && d.Step == step, ct);
+            if (already) return NoContent();
+
+            // Nom complet : `Idara.API.Models` n'est pas importé ici (le type
+            // `School` entrerait en collision avec le namespace des DTO).
+            _context.SchoolSetupDismissals.Add(new Idara.API.Models.SchoolSetupDismissal
+            {
+                SchoolId = schoolId.Value,
+                Step = step,
+                DismissedAt = DateTime.UtcNow,
+                DismissedById = User.GetUserId(),
+            });
+
+            try
+            {
+                await _context.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                // Deux appuis rapides : l'unique a fait son travail, l'étape
+                // est écartée. Rien à signaler à l'utilisateur.
+            }
+            return NoContent();
+        }
+
+        /// <summary>
+        /// `DELETE /api/school/setup/{step}/dismiss` — remettre l'étape dans la
+        /// liste. Écarter n'est jamais définitif.
+        /// </summary>
+        [HttpDelete("setup/{step}/dismiss")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> RestoreSetupStep(
+            SchoolSetupStep step, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var row = await _context.SchoolSetupDismissals
+                .FirstOrDefaultAsync(d => d.SchoolId == schoolId.Value && d.Step == step, ct);
+            if (row != null)
+            {
+                _context.SchoolSetupDismissals.Remove(row);
+                await _context.SaveChangesAsync(ct);
+            }
+            return NoContent();
+        }
+
+        private static bool IsUniqueViolation(DbUpdateException ex) =>
+            ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
 
         [HttpGet("stats")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]

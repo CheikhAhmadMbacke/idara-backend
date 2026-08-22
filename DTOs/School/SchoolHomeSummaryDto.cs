@@ -1,5 +1,36 @@
+using Idara.API.Enums;
+
 namespace Idara.API.DTOs.School
 {
+    /// <summary>
+    /// Une étape du parcours de démarrage, telle que le serveur la voit.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>Tout est décidé ici, rien côté application</b> : l'ordre, le
+    /// « c'est fait », le « c'est bloquant », le « c'est écarté ». Recalculer
+    /// l'un de ces quatre côté client ferait diverger l'écran d'accueil d'un
+    /// futur export ou d'un futur rappel — c'est la discipline déjà tenue pour
+    /// l'avancement d'un objectif (§144) et le verrou 48 h (§151).
+    /// </remarks>
+    public class SchoolSetupStepDto
+    {
+        public SchoolSetupStep Step { get; set; }
+
+        /// <summary>Le réglage est en place.</summary>
+        public bool Done { get; set; }
+
+        /// <summary>L'école a répondu « pas pour mon daara ».</summary>
+        public bool Dismissed { get; set; }
+
+        /// <summary>
+        /// Sans ce réglage, l'application n'a rien à montrer du quotidien —
+        /// parler d'impayés à un daara sans élèves n'aurait aucun sens. Les
+        /// étapes bloquantes occupent l'accueil ; les autres attendent sous les
+        /// alertes du jour. Une étape bloquante ne peut pas être écartée.
+        /// </summary>
+        public bool Blocking { get; set; }
+    }
+
     /// <summary>
     /// Ce que la direction d'un daara vient réellement chercher en ouvrant
     /// l'application : <b>qui n'a pas payé</b>, <b>si la présence du jour est
@@ -71,5 +102,26 @@ namespace Idara.API.DTOs.School
         /// <summary>Le daara a-t-il invité au moins un compte (enseignant,
         /// personnel, parent) ?</summary>
         public bool HasInvitedUsers { get; set; }
+
+        /// <summary>
+        /// Le parcours de démarrage complet, dans l'ordre où les réglages se
+        /// commandent les uns les autres.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ <b>Additif</b> : les quatre booléens ci-dessus restent exposés
+        /// pour les versions de l'application antérieures au 2026-08-22, qui
+        /// ignorent cette liste. Les retirer viderait leur carte de démarrage.
+        /// </remarks>
+        public List<SchoolSetupStepDto> SetupSteps { get; set; } = new();
+
+        /// <summary>
+        /// Enseignants du daara qui n'ont aucune classe affectée.
+        /// </summary>
+        /// <remarks>
+        /// Ils ouvrent leur espace sur « aucune classe ne vous est affectée »
+        /// (§150) : correct, et sans issue pour eux. C'est la <b>direction</b>
+        /// qui peut agir, d'où la remontée ici et non chez l'enseignant.
+        /// </remarks>
+        public int TeachersWithoutClass { get; set; }
     }
 }

@@ -19,6 +19,7 @@ namespace Idara.API.Data
         public DbSet<DaaraEvent> DaaraEvents { get; set; }
         public DbSet<DaaraEventPhoto> DaaraEventPhotos { get; set; }
         public DbSet<DaaraObjective> DaaraObjectives { get; set; }
+        public DbSet<SchoolSetupDismissal> SchoolSetupDismissals { get; set; }
         public DbSet<DaaraObjectiveStep> DaaraObjectiveSteps { get; set; }
 
         public DbSet<AcademicYear> AcademicYears { get; set; }
@@ -402,6 +403,19 @@ namespace Idara.API.Data
                 .HasQueryFilter(a => !a.IsDeleted);
 
             // ----- Journal du daara -----
+            modelBuilder.Entity<SchoolSetupDismissal>()
+                .HasOne(d => d.School)
+                .WithMany()
+                .HasForeignKey(d => d.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Une étape ne s'écarte qu'une fois. L'unique porte la garantie que
+            // deux appuis rapides sur « Pas pour mon daara » ne laissent pas
+            // deux lignes dont une seule serait retirée à la remise en liste.
+            modelBuilder.Entity<SchoolSetupDismissal>()
+                .HasIndex(d => new { d.SchoolId, d.Step })
+                .IsUnique();
+
             modelBuilder.Entity<DaaraEvent>()
                 .HasOne(e => e.School)
                 .WithMany()
