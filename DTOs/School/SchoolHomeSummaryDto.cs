@@ -123,5 +123,45 @@ namespace Idara.API.DTOs.School
         /// qui peut agir, d'où la remontée ici et non chez l'enseignant.
         /// </remarks>
         public int TeachersWithoutClass { get; set; }
+
+        /// <summary>
+        /// Noms des enseignants concernés, dans la limite de
+        /// <see cref="NameSampleSize"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Nommer plutôt que compter.</b> « Un enseignant n'a aucune classe »
+        /// oblige à ouvrir un écran pour savoir lequel ; « Ousmane Fall n'a
+        /// aucune classe » se règle sans quitter l'accueil. Une alerte qui ne
+        /// dit pas QUI n'est qu'un début d'alerte.
+        /// </para>
+        /// <para>
+        /// ⚠️ Un <b>échantillon</b>, pas la liste : c'est
+        /// <see cref="TeachersWithoutClass"/> qui porte le total. Envoyer trois
+        /// cents noms pour en afficher deux coûterait à chaque ouverture de
+        /// l'application, sur un forfait sénégalais.
+        /// </para>
+        /// </remarks>
+        public List<string> TeachersWithoutClassNames { get; set; } = new();
+
+        /// <summary>
+        /// Noms des élèves en retard de mensualité (échantillon). Le total est
+        /// <see cref="OverdueStudents"/>.
+        /// </summary>
+        public List<string> OverdueStudentNames { get; set; } = new();
+
+        /// <summary>
+        /// Classes dont au moins un élève n'est pas encore pointé aujourd'hui
+        /// (échantillon), pour dire <i>où</i> il reste à pointer.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Un élève sans classe ne fait apparaître aucun nom — il n'y en a
+        /// pas à donner. Le décompte « 42 sur 87 » reste, lui, complet : c'est
+        /// lui qui empêche cette liste de mentir par omission.
+        /// </remarks>
+        public List<string> ClassesWithoutAttendance { get; set; } = new();
+
+        /// <summary>Nombre de noms au plus renvoyés dans chaque échantillon.</summary>
+        public const int NameSampleSize = 5;
     }
 }

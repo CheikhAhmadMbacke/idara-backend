@@ -467,11 +467,20 @@ namespace Idara.API.Controllers
             // en cours de mois devait quand même sa mensualité — c'est la même
             // règle que le suivi des paiements, et deux règles différentes pour
             // le même chiffre finiraient par se contredire à l'écran.
-            var enrolledIds = await _context.Students
+            // Nom et classe remontés avec l'identifiant : ils servent à NOMMER
+            // les élèves concernés et les classes non pointées. Une seule
+            // requête au lieu de trois — c'est le principe de cet endpoint.
+            var enrolledRows = await _context.Students
                 .Where(s => s.SchoolId == schoolId.Value)
                 .EnrolledDuring(periodStart)
-                .Select(s => s.Id)
+                .Select(s => new
+                {
+                    s.Id,
+                    s.ClassId,
+                    Name = (s.FirstName + " " + s.LastName).Trim()
+                })
                 .ToListAsync(ct);
+            var enrolledIds = enrolledRows.Select(r => r.Id).ToList();
 
             // MENSUALITÉS seulement (comme le suivi des paiements, §158) : une
             // facture d'inscription impayée ne doit pas faire apparaître un
@@ -485,24 +494,57 @@ namespace Idara.API.Controllers
                 .ToListAsync(ct);
 
             var enrolled = enrolledIds.ToHashSet();
+            var nameById = enrolledRows.ToDictionary(r => r.Id, r => r.Name);
             var overdue = 0;
             var pending = 0;
+            var overdueNames = new List<string>();
             foreach (var i in invoices)
             {
                 if (!enrolled.Contains(i.StudentId)) continue;
                 if (i.AmountPaidFcfa >= i.AmountDueFcfa) continue;
-                if (i.DueDate.Date < today) overdue++;
+                if (i.DueDate.Date < today)
+                {
+                    overdue++;
+                    // Échantillon : le total, lui, continue de s'incrémenter.
+                    if (overdueNames.Count < SchoolHomeSummaryDto.NameSampleSize
+                        && nameById.TryGetValue(i.StudentId, out var n)
+                        && !string.IsNullOrWhiteSpace(n))
+                        overdueNames.Add(n);
+                }
                 else pending++;
             }
 
             // Pointage du jour : on compte les élèves pointés, pas les lignes —
             // « 42 sur 87 » est ce qu'on veut pouvoir dire quand le pointage
             // est commencé sans être fini.
-            var attendanceCount = await _context.Attendances
+            var attendedIds = await _context.Attendances
                 .Where(a => a.SchoolId == schoolId.Value && a.Date == today && !a.IsDeleted)
                 .Select(a => a.StudentId)
                 .Distinct()
-                .CountAsync(ct);
+                .ToListAsync(ct);
+            var attendanceCount = attendedIds.Count;
+
+            // OÙ reste-t-il à pointer ? « La présence n'est pas pointée » fait
+            // ouvrir l'écran pour découvrir quelle classe manque ; nommer la
+            // classe évite ce détour.
+            //
+            // ⚠️ Un élève SANS classe ne donne aucun nom (il n'y en a pas à
+            // donner) : c'est le décompte « 42 sur 87 » qui empêche cette liste
+            // de mentir par omission.
+            var attended = attendedIds.ToHashSet();
+            var pendingClassIds = enrolledRows
+                .Where(r => r.ClassId != null && !attended.Contains(r.Id))
+                .Select(r => r.ClassId!.Value)
+                .Distinct()
+                .ToList();
+            var classesWithoutAttendance = pendingClassIds.Count == 0
+                ? new List<string>()
+                : await _context.Classes
+                    .Where(c => pendingClassIds.Contains(c.Id))
+                    .OrderBy(c => c.Name)
+                    .Select(c => c.Name)
+                    .Take(SchoolHomeSummaryDto.NameSampleSize)
+                    .ToListAsync(ct);
 
             var cashIncome = await _context.CashLedgerEntries
                 .Where(e => e.SchoolId == schoolId.Value && !e.IsDeleted
@@ -563,11 +605,34 @@ namespace Idara.API.Controllers
 
             // Enseignants sans aucune classe : ils ouvrent leur espace sur un
             // écran vide dont eux ne peuvent rien faire.
-            var teachersWithoutClass = await _context.Users
-                .CountAsync(u => u.SchoolId == schoolId.Value && !u.IsDeleted
-                                 && u.Role == UserRoles.Teacher
-                                 && !_context.ClassSubjectTeachers
-                                       .Any(a => a.TeacherId == u.Id), ct);
+            var teachersWithoutClassQuery = _context.Users
+                .Where(u => u.SchoolId == schoolId.Value && !u.IsDeleted
+                            && u.Role == UserRoles.Teacher
+                            && !_context.ClassSubjectTeachers
+                                  .Any(a => a.TeacherId == u.Id));
+            var teachersWithoutClass = await teachersWithoutClassQuery.CountAsync(ct);
+            // Nommer plutôt que compter : « Ousmane Fall n'a aucune classe » se
+            // règle sans quitter l'accueil, « un enseignant » oblige à chercher.
+            var teachersWithoutClassNames = teachersWithoutClass == 0
+                ? new List<string>()
+                // Composé EN MÉMOIRE : un nom d'affichage se construit à partir
+                // de trois champs dont deux peuvent être vides, et le faire en
+                // SQL rendrait la nullabilité illisible pour un gain nul sur
+                // cinq lignes.
+                : (await teachersWithoutClassQuery
+                        .OrderBy(u => u.Id)
+                        .Select(u => new { u.FirstName, u.LastName, u.FullName })
+                        .Take(SchoolHomeSummaryDto.NameSampleSize)
+                        .ToListAsync(ct))
+                    .Select(u =>
+                    {
+                        var composed = $"{u.FirstName} {u.LastName}".Trim();
+                        return string.IsNullOrWhiteSpace(composed)
+                            ? (u.FullName ?? string.Empty)
+                            : composed;
+                    })
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .ToList();
 
             var dismissed = await _context.SchoolSetupDismissals
                 .Where(d => d.SchoolId == schoolId.Value)
@@ -589,6 +654,9 @@ namespace Idara.API.Controllers
             {
                 SetupSteps = setupSteps,
                 TeachersWithoutClass = teachersWithoutClass,
+                TeachersWithoutClassNames = teachersWithoutClassNames,
+                OverdueStudentNames = overdueNames,
+                ClassesWithoutAttendance = classesWithoutAttendance,
                 PeriodStart = periodStart,
                 OverdueStudents = overdue,
                 PendingStudents = pending,
