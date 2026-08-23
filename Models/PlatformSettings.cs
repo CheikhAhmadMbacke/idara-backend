@@ -60,6 +60,20 @@ namespace Idara.API.Models
         /// </summary>
         public string AndroidForcedUpdateRoles { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 📖 Quand la reprise du type des matières de Coran a été jouée.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Une reprise de données se joue UNE FOIS.</b> Sans ce marqueur,
+        /// elle tournerait à chaque démarrage de l'API : une école qui repasse
+        /// volontairement sa matière sur un autre type la verrait rebasculer au
+        /// déploiement suivant, sans jamais comprendre pourquoi — elle perdrait
+        /// toujours. C'est la discipline du §74, appliquée à une conversion que
+        /// PostgreSQL ne sait pas exprimer (la normalisation est en C#) et qui ne
+        /// pouvait donc pas vivre dans le <c>Up()</c> d'une migration.
+        /// </remarks>
+        public DateTime? QuranSubjectsRetypedAt { get; set; }
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>

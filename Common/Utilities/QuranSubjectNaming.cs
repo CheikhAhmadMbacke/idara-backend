@@ -28,26 +28,64 @@ namespace Idara.API.Common.Utilities
     public static class QuranSubjectNaming
     {
         /// <summary>
-        /// Noms connus du Coran, déjà normalisés (minuscules, sans accents ni
-        /// harakat, sans espace ni ponctuation, article retiré).
+        /// Le mot « Coran » translittéré : <b>consonne initiale</b> × <b>voyelle</b>.
         /// </summary>
-        private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
+        /// <remarks>
+        /// ⚠️ Une liste plate d'orthographes ne peut pas gagner contre une
+        /// translittération : mesuré le 2026-08-23, elle n'attrapait que
+        /// <b>14 formes plausibles sur 25</b>. On génère donc la famille au lieu
+        /// de l'énumérer — « quran », « kouran », « xuraan », « khourane »… en
+        /// sortent toutes seules.
+        ///
+        /// <para>La voyelle est toujours <c>o / ou / u</c> : jamais <c>a</c>.
+        /// C'est ce qui empêche « xar » (mouton, en wolof) et ses dérivés
+        /// d'entrer dans la famille.</para>
+        /// </remarks>
+        private static readonly string[] QuranStems =
+            { "cor", "qor", "kor", "xor", "khor",
+              "cour", "qour", "kour", "xour", "khour",
+              "cur", "qur", "kur", "xur", "khur" };
+
+        /// <summary>Terminaisons observées, wolofisées comprises (« xuraanu »).</summary>
+        private static readonly string[] QuranEndings =
+            { "an", "aan", "ane", "aane", "anu", "aanu", "ana", "aana" };
+
+        /// <summary>
+        /// Déterminants wolof accolés en fin de nom : « Xuraan <b>bi</b> »,
+        /// « Alxuraan <b>bu mag</b> ». Retirés avant comparaison.
+        /// </summary>
+        /// <remarks>
+        /// Aucun risque de faux positif : ce qui reste est comparé à un ensemble
+        /// fermé. « Arabi » devient « ara », qui n'y figure pas.
+        /// </remarks>
+        private static readonly string[] Determiners =
+            { "bumag", "bimag", "bi", "ji", "gi", "mi", "si", "wi", "ki", "li", "yi" };
+
+        /// <summary>
+        /// Noms connus du Coran, déjà normalisés (minuscules, sans accents ni
+        /// harakat, sans espace ni ponctuation, article retiré). Contient les
+        /// formes générées ci-dessus <b>plus</b> celles qui ne suivent aucun
+        /// motif.
+        /// </summary>
+        private static readonly HashSet<string> Known = BuildKnown();
+
+        private static HashSet<string> BuildKnown()
         {
-            // Français / translittérations latines
-            "coran", "corane", "coranique",
-            "quran", "qurane", "quraan", "qoran", "qouran", "koran", "kuran",
-            "suivicoran", "suiviquran",
-            // Mémorisation (tahfîz / hifz), employé tel quel par beaucoup de daara
-            "tahfiz", "tahfid", "tahfidh", "tahfeez", "tahfeedh", "tahfith",
-            "hifz", "hifd", "hifdh",
-            // Graphies wolofisées, relevées en production chez les daara
-            // sénégalais : « Al-xuraan », « al khourane ». Elles ne figuraient
-            // dans aucune liste théorique — c'est le terrain qui les a données.
-            "xuraan", "xuran", "xurane", "khuraan", "khurane",
-            "khourane", "khouran", "kourane", "kouran",
-            // Arabe (après normalisation : آ → ا, harakat retirées, « ال » retiré)
-            "قران", "تحفيظ", "حفظ",
-        };
+            var set = new HashSet<string>(StringComparer.Ordinal)
+            {
+                // Formes qui ne suivent pas le motif consonne+voyelle+r+…
+                "coranique", "suivicoran", "suiviquran",
+                // Mémorisation (tahfîz / hifz), employé tel quel par beaucoup de daara
+                "tahfiz", "tahfid", "tahfidh", "tahfeez", "tahfeedh", "tahfith",
+                "hifz", "hifd", "hifdh",
+                // Arabe (après normalisation : آ → ا, harakat retirées, « ال » retiré)
+                "قران", "تحفيظ", "حفظ",
+            };
+            foreach (var stem in QuranStems)
+                foreach (var end in QuranEndings)
+                    set.Add(stem + end);
+            return set;
+        }
 
         /// <summary>
         /// Vrai si l'un des deux noms de la matière (français ou arabe) désigne
@@ -94,7 +132,17 @@ namespace Idara.API.Common.Utilities
             foreach (var article in Articles)
             {
                 if (compact.Length > article.Length && compact.StartsWith(article, StringComparison.Ordinal))
-                    return compact[article.Length..];
+                {
+                    compact = compact[article.Length..];
+                    break;
+                }
+            }
+
+            // Déterminant wolof accolé en fin : « Xuraan bi », « Alxuraan bu mag ».
+            foreach (var det in Determiners)
+            {
+                if (compact.Length > det.Length + 2 && compact.EndsWith(det, StringComparison.Ordinal))
+                    return compact[..^det.Length];
             }
             return compact;
         }

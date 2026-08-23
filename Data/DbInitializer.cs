@@ -1,3 +1,4 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Enums;
@@ -66,8 +67,13 @@ namespace Idara.API.Data
         /// <see cref="QuranSubjectNaming"/>, publique et pure, donc vérifiable
         /// sans base.</para>
         ///
-        /// <para>Idempotente par construction : une matière déjà typée « Coran »
-        /// n'est pas relue au démarrage suivant.</para>
+        /// <para>🔴 <b>Jouée UNE SEULE FOIS</b>, marqueur en base à l'appui :
+        /// c'est une reprise de données, pas une règle permanente. Rejouée à
+        /// chaque démarrage, elle écraserait le choix d'une école qui repasse
+        /// volontairement sa matière sur un autre type — elle perdrait toujours,
+        /// sans jamais comprendre pourquoi (discipline du §74, transposée : la
+        /// normalisation étant en C#, la conversion ne pouvait pas vivre dans le
+        /// <c>Up()</c> d'une migration).</para>
         /// </summary>
         /// <remarks>Publique à dessein : une reprise de données qu'on ne peut
         /// vérifier qu'en production ne se vérifie jamais (§133/§178).</remarks>
@@ -75,6 +81,13 @@ namespace Idara.API.Data
         {
             try
             {
+                // 🔴 UNE SEULE FOIS, jamais à chaque démarrage. Sans ce marqueur,
+                // une école qui repasse volontairement sa matière sur un autre
+                // type la verrait rebasculer au déploiement suivant : elle
+                // perdrait toujours, sans comprendre pourquoi.
+                var platform = await _context.GetPlatformSettingsAsync();
+                if (platform.QuranSubjectsRetypedAt != null) return;
+
                 // Volume minuscule (quelques dizaines de matières par école) :
                 // la détection se fait en mémoire, la normalisation Unicode
                 // n'étant pas traduisible en SQL.
@@ -85,7 +98,10 @@ namespace Idara.API.Data
                 var fixedSubjects = candidates
                     .Where(s => QuranSubjectNaming.LooksLikeQuran(s.Name, s.NameAr))
                     .ToList();
-                if (fixedSubjects.Count == 0) return;
+
+                // Le marqueur est posé même sans rien à corriger : la reprise a
+                // bel et bien eu lieu, et une base neuve n'a rien à rattraper.
+                platform.QuranSubjectsRetypedAt = DateTime.UtcNow;
 
                 foreach (var s in fixedSubjects)
                 {
@@ -97,7 +113,7 @@ namespace Idara.API.Data
                 await _context.SaveChangesAsync();
 
                 _logger.LogInformation(
-                    "[subjects] {Count} matière(s) de Coran remise(s) sur le bon type.",
+                    "[subjects] Reprise jouée : {Count} matière(s) de Coran remise(s) sur le bon type.",
                     fixedSubjects.Count);
             }
             catch (Exception ex)
