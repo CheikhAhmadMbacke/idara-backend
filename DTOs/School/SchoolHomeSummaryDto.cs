@@ -29,6 +29,21 @@ namespace Idara.API.DTOs.School
         /// alertes du jour. Une étape bloquante ne peut pas être écartée.
         /// </summary>
         public bool Blocking { get; set; }
+
+        /// <summary>
+        /// Le réglage est <b>commencé mais pas terminé</b>.
+        ///
+        /// <para>Cas vécu (daara Jazbul xuloob, 2026-08-23) : l'école avait créé
+        /// son année scolaire <b>sans aucune période</b>. L'étape restait donc
+        /// « à faire » — à juste titre, sans période ni note ni bulletin ne peut
+        /// s'accrocher — mais l'accueil continuait d'afficher « Ouvrir l'année
+        /// scolaire » alors qu'elle l'avait ouverte. Elle se croyait à jour et
+        /// ne pouvait pas deviner ce qui manquait.</para>
+        ///
+        /// <para>L'étape ne change pas d'état : elle reste à faire. C'est son
+        /// <b>libellé</b> qui doit dire ce qui manque encore.</para>
+        /// </summary>
+        public bool Started { get; set; }
     }
 
     /// <summary>

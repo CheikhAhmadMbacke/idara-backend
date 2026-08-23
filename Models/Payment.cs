@@ -100,6 +100,18 @@ namespace Idara.API.Models
         public DateTime? FailedAt { get; set; }
         public string? FailureReason { get; set; }
 
+        /// <summary>
+        /// 💵 Membre de l'école qui a encaissé les espèces au guichet. Null pour
+        /// un paiement en ligne — personne ne l'a « reçu », il est arrivé seul.
+        /// </summary>
+        /// <remarks>
+        /// De l'argent liquide passe de main en main : savoir qui l'a pris est
+        /// le minimum. C'est aussi ce qui permet à la direction de retrouver
+        /// l'auteur d'une saisie erronée.
+        /// </remarks>
+        public int? CollectedById { get; set; }
+        public User? CollectedBy { get; set; }
+
         public string? ReceiptPdfPath { get; set; }
 
         /// <summary>

@@ -49,8 +49,14 @@ namespace Idara.API.Services
             // et la réserve reçoit le net SenePay (> cible) ; l'écart est le gain
             // plateforme. En mode School, l'école est créditée du net → 0 (le
             // filtre FeesPayer=Parent l'exclut donc du calcul).
+            // 🔴 Les encaissements en ESPÈCES sont exclus : cet argent n'est jamais
+            // passé par la réserve du prestataire, il est dans la caisse du daara.
+            // Leur écart net−cible vaut 0 aujourd'hui, donc l'exclusion ne change
+            // aucun chiffre — mais elle rend la règle vraie par construction plutôt
+            // que par coïncidence, et protège R = D + P d'une évolution future.
             var surplus8 = await _db.Payments
                 .Where(p => p.Status == PaymentStatus.Completed
+                            && p.Operator != PaymentOperator.Cash
                             && p.FeesPayer == FeesPayer.Parent
                             && p.TargetAmountFcfa > 0)
                 .SumAsync(p => p.NetCreditedFcfa - p.TargetAmountFcfa, ct);

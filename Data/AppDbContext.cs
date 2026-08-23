@@ -1063,6 +1063,18 @@ namespace Idara.API.Data
                 .WithMany()
                 .HasForeignKey(e => e.CategoryId)
                 .OnDelete(DeleteBehavior.Restrict); // catégorie archivée, jamais supprimée
+            // Encaissement d'élève à l'origine de l'écriture. Restrict : un
+            // Payment est append-only (§55), il n'est jamais supprimé — et une
+            // écriture de caisse ne doit pas disparaître dans le dos de la
+            // facture qu'elle solde.
+            modelBuilder.Entity<CashLedgerEntry>()
+                .HasOne(e => e.Payment)
+                .WithMany()
+                .HasForeignKey(e => e.PaymentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            modelBuilder.Entity<CashLedgerEntry>()
+                .HasIndex(e => e.PaymentId)
+                .HasFilter("\"PaymentId\" IS NOT NULL");
             modelBuilder.Entity<CashCategory>()
                 .HasIndex(c => new { c.SchoolId, c.Type });
 

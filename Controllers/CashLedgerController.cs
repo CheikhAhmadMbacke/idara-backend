@@ -284,6 +284,15 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(e => e.Id == id && e.SchoolId == schoolId.Value && !e.IsDeleted, ct);
             if (entry == null) return NotFound(ApiResponse<bool>.Fail("Écriture introuvable."));
 
+            // 🔴 Une écriture née d'un encaissement en espèces est le REFLET d'une
+            // facture. La modifier seule ferait diverger la caisse et la dette de
+            // la famille, sans que rien ne le signale : on renvoie vers
+            // l'annulation de l'encaissement, qui défait les deux d'un même geste.
+            if (entry.PaymentId != null)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Cette écriture vient d'un paiement encaissé en espèces. "
+                    + "Pour la corriger, annulez l'encaissement depuis la fiche de l'élève."));
+
             var (catId, catName) = await ResolveCategoryAsync(dto, schoolId.Value, ct);
             entry.Type = dto.Type;
             entry.AmountFcfa = dto.AmountFcfa;
@@ -303,6 +312,16 @@ namespace Idara.API.Controllers
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Unauthorized();
+
+            // Même garde qu'à la modification : supprimer cette écriture laisserait
+            // la facture soldée alors que l'argent aurait disparu du journal.
+            var linked = await _context.CashLedgerEntries
+                .AnyAsync(e => e.Id == id && e.SchoolId == schoolId.Value
+                               && !e.IsDeleted && e.PaymentId != null, ct);
+            if (linked)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Cette écriture vient d'un paiement encaissé en espèces. "
+                    + "Pour la retirer, annulez l'encaissement depuis la fiche de l'élève."));
 
             var n = await _context.CashLedgerEntries
                 .Where(e => e.Id == id && e.SchoolId == schoolId.Value && !e.IsDeleted)

@@ -8,6 +8,7 @@ using Idara.API.DTOs.Payment;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Services;
+using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,8 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly MonthlyInvoiceGenerationJob _invoiceJob;
         private readonly IInvoiceRepricingService _repricing;
+        private readonly ICashPaymentService _cashPayments;
+        private readonly INotificationService _notif;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
@@ -41,6 +44,8 @@ namespace Idara.API.Controllers
             AppDbContext context,
             MonthlyInvoiceGenerationJob invoiceJob,
             IInvoiceRepricingService repricing,
+            ICashPaymentService cashPayments,
+            INotificationService notif,
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
             IWebHostEnvironment env,
@@ -49,6 +54,8 @@ namespace Idara.API.Controllers
             _context = context;
             _invoiceJob = invoiceJob;
             _repricing = repricing;
+            _cashPayments = cashPayments;
+            _notif = notif;
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
             _env = env;
@@ -80,6 +87,7 @@ namespace Idara.API.Controllers
                     FeesPayer = FeesPayer.Parent,
                     DonationFeesPayer = FeesPayer.School,
                     MonthlyDueDay = 5,
+                    PaymentDeadlineDay = 15,
                     BillingPeriod = BillingPeriod.Monthly,
                     CreatedAt = DateTime.UtcNow
                 };
@@ -115,6 +123,12 @@ namespace Idara.API.Controllers
             settings.FeesPayer = dto.FeesPayer;
             settings.DonationFeesPayer = dto.DonationFeesPayer;
             settings.MonthlyDueDay = dto.MonthlyDueDay;
+            // Jour limite : appliqué UNIQUEMENT s'il est fourni. Une version de
+            // l'application antérieure au 2026-08-23 ne l'envoie pas ; le
+            // recopier tel quel ramènerait la limite au 1er du mois et
+            // déclencherait une vague de rappels de retard (cf. le DTO).
+            if (dto.PaymentDeadlineDay is int deadline)
+                settings.PaymentDeadlineDay = deadline;
             settings.BillingPeriod = dto.BillingPeriod;
             // 0 est traité comme "pas de tarif général" → on normalise en null.
             settings.GeneralMonthlyFeeFcfa =
@@ -852,10 +866,29 @@ namespace Idara.API.Controllers
                 .ThenBy(e => e.StudentFirstName)
                 .ToList();
 
+            // Le calendrier du mois affiché : c'est lui qui dit au daara s'il
+            // doit encore attendre ou s'il peut relancer et clore son mois.
+            //
+            // ⚠️ UNIQUEMENT en montant fixe. Une école en montant libre n'a pas
+            // de mensualité générée, donc pas d'échéance : lui annoncer une date
+            // limite serait une promesse que rien ne tient — aucune facture ne
+            // basculera « en retard » ce jour-là, et personne ne sera relancé.
+            var schedule = await _context.SchoolPaymentSettings
+                .Where(s => s.SchoolId == schoolId)
+                .Select(s => new { s.BillingMode, s.MonthlyDueDay, s.PaymentDeadlineDay })
+                .FirstOrDefaultAsync(ct);
+            var hasSchedule = schedule?.BillingMode == BillingMode.FixedAmount;
+            var openingDay = schedule?.MonthlyDueDay ?? 5;
+            var deadlineDay = schedule?.PaymentDeadlineDay ?? 15;
+
             return new PaymentRosterResponseDto
             {
                 Year = year,
                 Month = month,
+                OpeningDay = hasSchedule ? openingDay : 0,
+                DeadlineDate = hasSchedule
+                    ? PaymentSchedule.DeadlineFor(periodStart, openingDay, deadlineDay)
+                    : null,
                 PaidCount = entries.Count(e => e.Status == RosterPaymentStatus.Paid),
                 PendingCount = entries.Count(e => e.Status == RosterPaymentStatus.Pending),
                 OverdueCount = entries.Count(e => e.Status == RosterPaymentStatus.Overdue),
@@ -1038,6 +1071,169 @@ namespace Idara.API.Controllers
                 CreatedAt = invoice.CreatedAt,
                 UpdatedAt = invoice.UpdatedAt
             }, "Facture annulée."));
+        }
+
+        // ========================================================
+        // ===== Encaissement en ESPÈCES au guichet =====
+        // ========================================================
+
+        /// <summary>
+        /// 💵 `POST /api/fees/invoices/{id}/cash` — la famille a payé en liquide.
+        /// </summary>
+        /// <remarks>
+        /// <para>La plupart des inscriptions se règlent sur place, le jour où
+        /// l'enfant arrive. Sans ce chemin, la facture restait impayée : l'élève
+        /// était affiché « en retard », compté dans les impayés de l'accueil et
+        /// <b>relancé par SMS alors que sa famille avait payé</b>.</para>
+        /// <para>Ouvert au <b>personnel</b> autant qu'à la direction : c'est
+        /// souvent lui qui tient l'accueil au moment de l'inscription. L'auteur de
+        /// l'encaissement est tracé sur le paiement.</para>
+        /// </remarks>
+        [HttpPost("invoices/{id:int}/cash")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<ActionResult<ApiResponse<PaymentDto>>> CollectCash(
+            int id, [FromBody] CollectCashDto dto, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var result = await _cashPayments.CollectAsync(
+                schoolId.Value, id, dto.AmountFcfa, dto.Note,
+                dto.OccurredAt?.ToUtcDay(), User.GetUserId(), ct);
+
+            if (!result.Ok || result.Payment == null)
+                return BadRequest(ApiResponse<PaymentDto>.Fail(result.Error ?? "Encaissement impossible."));
+
+            // Effets POST-COMMIT, best-effort : ni un reçu ni un SMS ne doivent
+            // faire échouer un encaissement déjà enregistré (§42/§57).
+            await RunCashPaymentEffectsAsync(result.Payment, ct);
+
+            return Ok(ApiResponse<PaymentDto>.Ok(
+                await LoadPaymentDtoAsync(result.Payment.Id, ct),
+                "Paiement en espèces enregistré."));
+        }
+
+        /// <summary>
+        /// `POST /api/fees/payments/{id}/cash/cancel` — encaissement saisi par erreur.
+        /// </summary>
+        /// <remarks>
+        /// Réservé au <b>SchoolAdmin</b> : encaisser fait partie du quotidien du
+        /// personnel, défaire un mouvement d'argent est une décision de direction.
+        /// Rien n'est supprimé — le paiement passe en « annulé », la facture est
+        /// décréditée et l'écriture de caisse retirée.
+        /// </remarks>
+        [HttpPost("payments/{id:int}/cash/cancel")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<bool>>> CancelCash(
+            int id, [FromBody] CancelCashDto? dto, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var result = await _cashPayments.CancelAsync(
+                schoolId.Value, id, dto?.Reason, User.GetUserId(), ct);
+
+            return result.Ok
+                ? Ok(ApiResponse<bool>.Ok(true, "Encaissement annulé."))
+                : BadRequest(ApiResponse<bool>.Fail(result.Error ?? "Annulation impossible."));
+        }
+
+        /// <summary>Recharge un paiement pour le renvoyer à l'appelant.</summary>
+        private async Task<PaymentDto> LoadPaymentDtoAsync(int paymentId, CancellationToken ct)
+        {
+            var p = await _context.Payments
+                .Include(x => x.Student)
+                .Include(x => x.Guardian)
+                .FirstAsync(x => x.Id == paymentId, ct);
+
+            return new PaymentDto
+            {
+                Id = p.Id,
+                Reference = IdaraReference.Payment(p.Id),
+                SchoolId = p.SchoolId,
+                StudentId = p.StudentId,
+                StudentFirstName = p.Student?.FirstName,
+                StudentLastName = p.Student?.LastName,
+                StudentNumber = p.Student?.StudentNumber,
+                GuardianId = p.GuardianId,
+                GuardianName = p.Guardian?.FullName,
+                InvoiceId = p.InvoiceId,
+                Purpose = p.Purpose,
+                AmountFcfa = p.AmountFcfa,
+                FeesFcfa = p.FeesFcfa,
+                NetCreditedFcfa = p.NetCreditedFcfa,
+                Operator = p.Operator,
+                FeesPayer = p.FeesPayer,
+                Status = p.Status,
+                InitiatedAt = p.InitiatedAt,
+                PaidAt = p.PaidAt,
+                ReceiptPdfUrl = p.ReceiptPdfPath
+            };
+        }
+
+        /// <summary>Reçu + information du responsable, aucun n'étant bloquant.</summary>
+        private async Task RunCashPaymentEffectsAsync(Payment payment, CancellationToken ct)
+        {
+            try
+            {
+                var school = await _context.Schools
+                    .FirstOrDefaultAsync(x => x.Id == payment.SchoolId, ct);
+                var student = payment.StudentId is int sid
+                    ? await _context.Students.FirstOrDefaultAsync(x => x.Id == sid, ct)
+                    : null;
+                var invoice = payment.InvoiceId is int iid
+                    ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == iid, ct)
+                    : null;
+                if (school != null)
+                {
+                    var path = await _receiptPdf.GenerateAsync(
+                        payment, school, student, invoice);
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        await _context.Payments
+                            .Where(p => p.Id == payment.Id)
+                            .ExecuteUpdateAsync(
+                                s => s.SetProperty(p => p.ReceiptPdfPath, path), ct);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[cash] Reçu non généré pour le paiement {Id} — pas bloquant", payment.Id);
+            }
+
+            if (payment.GuardianId is not int guardianId) return;
+            try
+            {
+                var guardian = await _context.Users
+                    .FirstOrDefaultAsync(u => u.Id == guardianId && !u.IsDeleted, ct);
+                if (guardian?.PhoneNumber == null) return;
+
+                var student = await _context.Students
+                    .Where(s => s.Id == payment.StudentId)
+                    .Select(s => new { s.FirstName, s.LastName })
+                    .FirstOrDefaultAsync(ct);
+                var eleve = student == null
+                    ? "votre enfant"
+                    : $"{student.FirstName} {student.LastName}".Trim();
+
+                var platform = await _context.GetPlatformSettingsAsync(ct);
+                await _notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: guardian.Id,
+                    RawPhone: guardian.PhoneNumber,
+                    PreferredLanguage: guardian.PreferredLanguage ?? "fr",
+                    Message: NotificationTemplates.PaymentReceived(eleve, payment.AmountFcfa),
+                    Bilingual: platform.SmsBilingual,
+                    TemplateCode: "PAYMENT_RECEIVED",
+                    RelatedEntityId: payment.Id,
+                    PushRoute: "/guardian/invoices"), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[cash] SMS « paiement reçu » non envoyé pour {Id} — pas bloquant", payment.Id);
+            }
         }
 
         // ========================================================
@@ -1677,6 +1873,7 @@ namespace Idara.API.Controllers
             FeesPayer = s.FeesPayer,
             DonationFeesPayer = s.DonationFeesPayer,
             MonthlyDueDay = s.MonthlyDueDay,
+            PaymentDeadlineDay = s.PaymentDeadlineDay,
             BillingPeriod = s.BillingPeriod,
             GeneralMonthlyFeeFcfa = s.GeneralMonthlyFeeFcfa,
             BoardingMonthlyFeeFcfa = s.BoardingMonthlyFeeFcfa,

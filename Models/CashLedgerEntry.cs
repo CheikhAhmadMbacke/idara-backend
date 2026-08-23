@@ -36,6 +36,22 @@ namespace Idara.API.Models
         public int? CategoryId { get; set; }
         public CashCategory? CategoryRef { get; set; }
 
+        /// <summary>
+        /// 💵 Encaissement d'élève à l'origine de cette écriture — renseigné
+        /// quand le daara a réglé une facture en espèces au guichet.
+        /// </summary>
+        /// <remarks>
+        /// <para>C'est le pont qui manquait entre la caisse et les factures :
+        /// sans lui, l'argent était dans le tiroir mais la famille restait
+        /// « en retard » et recevait un rappel.</para>
+        /// <para>⚠️ Une écriture liée <b>ne s'édite ni ne se supprime</b>
+        /// directement : elle est le reflet d'un paiement, et la modifier seule
+        /// ferait diverger la caisse de la facture. On annule l'encaissement,
+        /// qui retire les deux d'un même geste.</para>
+        /// </remarks>
+        public int? PaymentId { get; set; }
+        public Payment? Payment { get; set; }
+
         /// <summary>Date du mouvement (jour civil, tronqué UTC).</summary>
         public DateTime OccurredAt { get; set; }
 

@@ -330,6 +330,9 @@ namespace Idara.API.Controllers
             await _context.WalletTransactions.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.Withdrawals.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);        // avant TransferBeneficiaries
             await _context.TransferBeneficiaries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // ⚠️ AVANT les Payments : depuis l'encaissement en espèces, une écriture
+            // de caisse référence le paiement qui l'a produite (FK Restrict).
+            await _context.CashLedgerEntries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct); // avant Payments ET CashCategories (FK Restrict)
             await _context.PaymentInvoiceAllocations.Where(a => a.Payment.SchoolId == id).ExecuteDeleteAsync(ct); // avant Payments/Invoices
             await _context.PaymentStudentAllocations.Where(a => a.Payment.SchoolId == id).ExecuteDeleteAsync(ct); // avant Payments/Students
             await _context.Payments.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);           // avant Invoice/Student/Guardian
@@ -340,7 +343,6 @@ namespace Idara.API.Controllers
             await _context.SchoolWallets.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.SchoolPaymentSettings.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.PayoutAlerts.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
-            await _context.CashLedgerEntries.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct); // avant CashCategories (FK Restrict)
             await _context.CashCategories.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             // Abonnement plateforme (factures → abo → deals custom de l'école).
             await _context.SubscriptionInvoices.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
@@ -597,6 +599,16 @@ namespace Idara.API.Controllers
             var hasAcademicPeriod = await _context.AcademicPeriods
                 .AnyAsync(p => p.SchoolId == schoolId.Value, ct);
 
+            // ⚠️ Mais une année CRÉÉE sans période doit se voir. Le daara Jazbul
+            // xuloob avait fait exactement cela (vérifié en production le
+            // 2026-08-23 : 1 année, 0 période) : l'accueil lui répétait
+            // « Ouvrir l'année scolaire » alors qu'il l'avait ouverte, sans
+            // jamais lui dire que les périodes manquaient encore. L'étape reste
+            // à faire — c'est son libellé qui doit le dire.
+            var hasAcademicYear = hasAcademicPeriod
+                || await _context.AcademicYears
+                    .AnyAsync(y => y.SchoolId == schoolId.Value, ct);
+
             var hasAssignments = await _context.ClassSubjectTeachers
                 .AnyAsync(a => a.SchoolId == schoolId.Value, ct);
 
@@ -643,6 +655,7 @@ namespace Idara.API.Controllers
                 hasClasses: hasClasses,
                 hasSubjects: hasSubjects,
                 hasAcademicPeriod: hasAcademicPeriod,
+                hasAcademicYear: hasAcademicYear,
                 hasStudents: enrolledIds.Count > 0,
                 hasFees: hasFees,
                 hasInvitedUsers: hasInvitedUsers,
@@ -711,23 +724,30 @@ namespace Idara.API.Controllers
             bool hasInvitedUsers,
             bool hasAssignments,
             bool hasTimetable,
-            IEnumerable<SchoolSetupStep> dismissed)
+            IEnumerable<SchoolSetupStep> dismissed,
+            bool hasAcademicYear = false)
         {
             var skipped = dismissed.ToHashSet();
 
             // L'ordre de cette table EST l'ordre affiché : il suit les
             // dépendances réelles (pas d'affectation sans classe, sans matière
             // et sans compte ; pas de note sans période).
-            var done = new (SchoolSetupStep Step, bool Done)[]
+            //
+            // `Started` = « commencé, pas terminé ». Seule l'année scolaire en
+            // a besoin aujourd'hui : c'est la seule étape qui demande DEUX
+            // gestes (ouvrir l'année, puis y découper les périodes), et un daara
+            // qui n'avait fait que le premier lisait un accueil qui lui
+            // réclamait ce qu'il venait de faire.
+            var done = new (SchoolSetupStep Step, bool Done, bool Started)[]
             {
-                (SchoolSetupStep.Classes, hasClasses),
-                (SchoolSetupStep.Subjects, hasSubjects),
-                (SchoolSetupStep.AcademicYear, hasAcademicPeriod),
-                (SchoolSetupStep.Students, hasStudents),
-                (SchoolSetupStep.Fees, hasFees),
-                (SchoolSetupStep.Users, hasInvitedUsers),
-                (SchoolSetupStep.Assignments, hasAssignments),
-                (SchoolSetupStep.Timetable, hasTimetable),
+                (SchoolSetupStep.Classes, hasClasses, false),
+                (SchoolSetupStep.Subjects, hasSubjects, false),
+                (SchoolSetupStep.AcademicYear, hasAcademicPeriod, hasAcademicYear),
+                (SchoolSetupStep.Students, hasStudents, false),
+                (SchoolSetupStep.Fees, hasFees, false),
+                (SchoolSetupStep.Users, hasInvitedUsers, false),
+                (SchoolSetupStep.Assignments, hasAssignments, false),
+                (SchoolSetupStep.Timetable, hasTimetable, false),
             };
 
             return done.Select(d =>
@@ -739,6 +759,10 @@ namespace Idara.API.Controllers
                     Done = d.Done,
                     Blocking = blocking,
                     Dismissed = !blocking && skipped.Contains(d.Step),
+                    // Une étape terminée n'est pas « en cours » : sans cette
+                    // garde, l'année scolaire complète porterait les deux
+                    // drapeaux et un futur affichage pourrait s'y tromper.
+                    Started = !d.Done && d.Started,
                 };
             }).ToList();
         }

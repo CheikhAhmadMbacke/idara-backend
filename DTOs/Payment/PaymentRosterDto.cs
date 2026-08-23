@@ -64,6 +64,28 @@ namespace Idara.API.DTOs.Payment
         public int PendingCount { get; set; }
         public int OverdueCount { get; set; }
         public int NoInvoiceCount { get; set; }
+
+        /// <summary>
+        /// Jour d'ouverture du paiement pour ce mois — celui où les familles
+        /// ont été prévenues.
+        /// </summary>
+        public int OpeningDay { get; set; }
+
+        /// <summary>
+        /// Date limite de ce mois. Au-delà, les non-payés sont en retard : c'est
+        /// le signal que le daara attend pour relancer et clore son mois.
+        /// </summary>
+        /// <remarks>
+        /// <para>⚠️ Calculée par le SERVEUR et transportée telle quelle. La
+        /// recalculer dans l'application la ferait dépendre de l'horloge du
+        /// téléphone, et un appareil mal réglé annoncerait une limite qui n'est
+        /// pas celle qui déclenche les relances (§151).</para>
+        /// <para><c>null</c> en <b>montant libre</b> : sans mensualité générée,
+        /// il n'y a pas d'échéance, et aucune facture ne basculera « en retard »
+        /// ce jour-là.</para>
+        /// </remarks>
+        public DateTime? DeadlineDate { get; set; }
+
         public List<PaymentRosterEntryDto> Entries { get; set; } = new();
     }
 }

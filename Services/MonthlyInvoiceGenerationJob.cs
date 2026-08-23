@@ -1,4 +1,5 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -142,10 +143,15 @@ namespace Idara.API.Services
             // via l'UNIQUE (StudentId, PeriodStart).
             var periodStart = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc);
             var periodEnd = periodStart.AddMonths(1).AddDays(-1);
-            var dueDate = new DateTime(today.Year, today.Month, today.Day, 0, 0, 0, DateTimeKind.Utc);
 
             foreach (var settings in eligibleSettings)
             {
+                // ⚠️ L'échéance se calcule PAR ÉCOLE : chacune a son jour limite.
+                // Avant le 2026-08-23, `dueDate` valait « aujourd'hui » pour tout
+                // le monde — la facture naissait donc échue, et le cron de rappel
+                // relançait les familles dès le lendemain matin.
+                var dueDate = PaymentSchedule.DueDateFor(
+                    periodStart, settings.MonthlyDueDay, settings.PaymentDeadlineDay, today);
                 try
                 {
                     var perSchool = await GenerateForSchoolAsync(
@@ -216,13 +222,11 @@ namespace Idara.API.Services
 
             var periodStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
             var periodEnd = periodStart.AddMonths(1).AddDays(-1);
-            // Échéance = jour configuré, borné au dernier jour du mois, et jamais
-            // AVANT aujourd'hui (une facture générée à la demande ne naît pas
-            // « en retard » si l'échéance du mois est déjà passée).
-            var daysInMonth = DateTime.DaysInMonth(year, month);
-            var dueDay = Math.Min(Math.Max(settings.MonthlyDueDay, 1), daysInMonth);
-            var dueDate = new DateTime(year, month, dueDay, 0, 0, 0, DateTimeKind.Utc);
-            if (dueDate < today) dueDate = today;
+            // Échéance = le jour LIMITE réglé par l'école, et jamais avant
+            // aujourd'hui : une facture générée à la demande après la limite du
+            // mois reçoit un délai minimum plutôt que de naître « en retard ».
+            var dueDate = PaymentSchedule.DueDateFor(
+                periodStart, settings.MonthlyDueDay, settings.PaymentDeadlineDay, today);
             var periodeLabel = FrenchMonthYear(periodStart);
 
             _logger.LogInformation(

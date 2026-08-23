@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260823172403_PaymentDeadlineDay")]
+    partial class PaymentDeadlineDay
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -217,9 +220,6 @@ namespace Idara.API.Migrations
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<int?>("PaymentId")
-                        .HasColumnType("integer");
-
                     b.Property<int>("SchoolId")
                         .HasColumnType("integer");
 
@@ -232,9 +232,6 @@ namespace Idara.API.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CategoryId");
-
-                    b.HasIndex("PaymentId")
-                        .HasFilter("\"PaymentId\" IS NOT NULL");
 
                     b.HasIndex("SchoolId", "OccurredAt");
 
@@ -1326,9 +1323,6 @@ namespace Idara.API.Migrations
                     b.Property<long>("AmountFcfa")
                         .HasColumnType("bigint");
 
-                    b.Property<int?>("CollectedById")
-                        .HasColumnType("integer");
-
                     b.Property<int?>("DonorId")
                         .HasColumnType("integer");
 
@@ -1396,8 +1390,6 @@ namespace Idara.API.Migrations
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("CollectedById");
 
                     b.HasIndex("InvoiceId");
 
@@ -3155,11 +3147,6 @@ namespace Idara.API.Migrations
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.Restrict);
 
-                    b.HasOne("Idara.API.Models.Payment", "Payment")
-                        .WithMany()
-                        .HasForeignKey("PaymentId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("Idara.API.Models.School", "School")
                         .WithMany()
                         .HasForeignKey("SchoolId")
@@ -3167,8 +3154,6 @@ namespace Idara.API.Migrations
                         .IsRequired();
 
                     b.Navigation("CategoryRef");
-
-                    b.Navigation("Payment");
 
                     b.Navigation("School");
                 });
@@ -3462,10 +3447,6 @@ namespace Idara.API.Migrations
 
             modelBuilder.Entity("Idara.API.Models.Payment", b =>
                 {
-                    b.HasOne("Idara.API.Models.User", "CollectedBy")
-                        .WithMany()
-                        .HasForeignKey("CollectedById");
-
                     b.HasOne("Idara.API.Models.User", "Donor")
                         .WithMany()
                         .HasForeignKey("DonorId")
@@ -3490,8 +3471,6 @@ namespace Idara.API.Migrations
                         .WithMany()
                         .HasForeignKey("StudentId")
                         .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("CollectedBy");
 
                     b.Navigation("Donor");
 

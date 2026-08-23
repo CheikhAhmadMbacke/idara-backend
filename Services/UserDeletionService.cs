@@ -39,6 +39,11 @@ namespace Idara.API.Services
             if (await _context.StudentGuardians.AnyAsync(x => x.GuardianId == userId, ct)) return true;
             if (await _context.Payments.AnyAsync(x => x.GuardianId == userId, ct)) return true;
 
+            // Membre de l'école qui a encaissé des espèces au guichet : la FK
+            // Payment.CollectedById est Restrict, et l'historique d'un mouvement
+            // d'argent doit survivre au départ de celui qui l'a saisi.
+            if (await _context.Payments.AnyAsync(x => x.CollectedById == userId, ct)) return true;
+
             // Donateur : dons émis (FK Restrict Payment.DonorId → anonymiser, pas hard-delete).
             if (await _context.Payments.AnyAsync(x => x.DonorId == userId, ct)) return true;
 

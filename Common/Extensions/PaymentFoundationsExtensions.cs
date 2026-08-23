@@ -39,6 +39,7 @@ namespace Idara.API.Common.Extensions
                     BillingMode = BillingMode.FixedAmount,
                     FeesPayer = FeesPayer.Parent,
                     MonthlyDueDay = 5,
+                    PaymentDeadlineDay = 15,
                     BillingPeriod = BillingPeriod.Monthly,
                     CreatedAt = now
                 });

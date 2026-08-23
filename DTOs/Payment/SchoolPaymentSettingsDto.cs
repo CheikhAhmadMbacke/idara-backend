@@ -11,7 +11,12 @@ namespace Idara.API.DTOs.Payment
 
         /// <summary>Qui paie les frais sur les DONS (Parent=donateur, School=daara).</summary>
         public FeesPayer DonationFeesPayer { get; set; }
+        /// <summary>Jour d'OUVERTURE du paiement (émission + information des familles).</summary>
         public int MonthlyDueDay { get; set; }
+
+        /// <summary>Jour LIMITE : au-delà, la mensualité non réglée est en retard.</summary>
+        public int PaymentDeadlineDay { get; set; }
+
         public BillingPeriod BillingPeriod { get; set; }
 
         /// <summary>Tarif général appliqué aux élèves sans tarif plus spécifique. Null = non défini.</summary>
@@ -45,10 +50,25 @@ namespace Idara.API.DTOs.Payment
         [Required]
         public FeesPayer DonationFeesPayer { get; set; }
 
-        /// <summary>Jour du mois (1..28) où le cron génère les Invoices. Borné à 28 pour
-        /// éviter les mois courts (février) sans tarif.</summary>
-        [Range(1, 28, ErrorMessage = "MonthlyDueDay doit être entre 1 et 28.")]
+        /// <summary>Jour d'OUVERTURE (1..28) : le cron génère les mensualités et
+        /// prévient les familles. Borné à 28 pour éviter les mois courts.</summary>
+        [Range(1, 28, ErrorMessage = "Le jour d'ouverture doit être entre 1 et 28.")]
         public int MonthlyDueDay { get; set; } = 5;
+
+        /// <summary>
+        /// Jour LIMITE (1..28) : au-delà, la mensualité non réglée est en retard.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>NULLABLE, et ce n'est pas un détail.</b> Ce DTO est envoyé par
+        /// TOUTES les versions de l'application. Une version antérieure au
+        /// 2026-08-23 ne connaît pas ce champ : reçu à 0 sur un <c>int</c>, un
+        /// simple enregistrement des réglages depuis un vieux téléphone
+        /// ramènerait la limite au 1er du mois et déclencherait une vague de
+        /// rappels de retard. <c>null</c> = « ne pas toucher » (5ᵉ occurrence du
+        /// piège §137/§140/§152/§158).
+        /// </remarks>
+        [Range(1, 28, ErrorMessage = "Le jour limite doit être entre 1 et 28.")]
+        public int? PaymentDeadlineDay { get; set; }
 
         [Required]
         public BillingPeriod BillingPeriod { get; set; }

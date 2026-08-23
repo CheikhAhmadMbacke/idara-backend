@@ -39,11 +39,72 @@ namespace Idara.API.Data
             await SeedSubscriptionPlansAsync();
             await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
+            await RetypeQuranSubjectsAsync();
             await SeedDemoSchoolAsync();
             await SeedDemoTeacherAsync();
             await TrimDemoTeacherAssignmentsAsync();
             await PurgeStaleIdempotencyRecordsAsync();
             await PurgeStaleIncidentsAsync();
+        }
+
+        /// <summary>
+        /// 📖 Remet sur le bon type les matières de Coran créées en « Matière
+        /// générale ».
+        ///
+        /// <para><b>Le défaut réparé.</b> Le type d'une matière commande la forme
+        /// de la fiche du Cahier de suivi (relevé structuré pour le Coran, texte
+        /// libre sinon), mais le formulaire n'en disait rien et proposait
+        /// « Matière générale » par défaut. Un daara pilote a donc créé
+        /// « Al quran » en matière générale : ses enseignants tombaient sur la
+        /// saisie en texte libre au lieu de leur fiche « nouvelle leçon /
+        /// révision récente / ancienne révision ».</para>
+        ///
+        /// <para><b>Bornée et prouvable</b> (§178). On ne touche qu'aux matières
+        /// dont le nom EST un nom du Coran — égalité sur la forme normalisée,
+        /// jamais « contient » : « Histoire du Coran » et « Éducation coranique »
+        /// restent des matières classiques. La règle vit dans
+        /// <see cref="QuranSubjectNaming"/>, publique et pure, donc vérifiable
+        /// sans base.</para>
+        ///
+        /// <para>Idempotente par construction : une matière déjà typée « Coran »
+        /// n'est pas relue au démarrage suivant.</para>
+        /// </summary>
+        /// <remarks>Publique à dessein : une reprise de données qu'on ne peut
+        /// vérifier qu'en production ne se vérifie jamais (§133/§178).</remarks>
+        public async Task RetypeQuranSubjectsAsync()
+        {
+            try
+            {
+                // Volume minuscule (quelques dizaines de matières par école) :
+                // la détection se fait en mémoire, la normalisation Unicode
+                // n'étant pas traduisible en SQL.
+                var candidates = await _context.Subjects
+                    .Where(s => !s.IsDeleted && s.Kind != SubjectKind.Coran)
+                    .ToListAsync();
+
+                var fixedSubjects = candidates
+                    .Where(s => QuranSubjectNaming.LooksLikeQuran(s.Name, s.NameAr))
+                    .ToList();
+                if (fixedSubjects.Count == 0) return;
+
+                foreach (var s in fixedSubjects)
+                {
+                    _logger.LogInformation(
+                        "[subjects] Matière {Id} « {Name} » (école {SchoolId}) : {From} → Coran.",
+                        s.Id, s.Name, s.SchoolId, s.Kind);
+                    s.Kind = SubjectKind.Coran;
+                }
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "[subjects] {Count} matière(s) de Coran remise(s) sur le bon type.",
+                    fixedSubjects.Count);
+            }
+            catch (Exception ex)
+            {
+                // Un défaut de reprise ne doit jamais empêcher l'API de démarrer.
+                _logger.LogWarning(ex, "[subjects] Reprise du type des matières de Coran impossible.");
+            }
         }
 
         /// <summary>
@@ -175,6 +236,7 @@ namespace Idara.API.Data
                 BillingMode = BillingMode.FixedAmount,
                 FeesPayer = FeesPayer.Parent,
                 MonthlyDueDay = 5,
+                PaymentDeadlineDay = 15,
                 BillingPeriod = BillingPeriod.Monthly,
                 GeneralMonthlyFeeFcfa = 5000,
                 CreatedAt = now
@@ -625,6 +687,7 @@ namespace Idara.API.Data
                     BillingMode = BillingMode.FixedAmount,
                     FeesPayer = FeesPayer.Parent,
                     MonthlyDueDay = 5,
+                    PaymentDeadlineDay = 15,
                     BillingPeriod = BillingPeriod.Monthly,
                     CreatedAt = now
                 })

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Idara.API.Enums;
 
 namespace Idara.API.DTOs.Payment
@@ -40,5 +41,31 @@ namespace Idara.API.DTOs.Payment
 
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
+    }
+
+    /// <summary>💵 Encaissement en espèces au guichet du daara.</summary>
+    public class CollectCashDto
+    {
+        /// <summary>
+        /// Montant réellement remis, en FCFA. Peut être <b>inférieur</b> au reste
+        /// dû : un acompte est courant dans un daara, et refuser les paiements
+        /// partiels renverrait le personnel à son cahier.
+        /// </summary>
+        [Range(1, 100_000_000, ErrorMessage = "Le montant doit être compris entre 1 et 100 000 000 FCFA.")]
+        public long AmountFcfa { get; set; }
+
+        /// <summary>Précision libre (« versé par l'oncle », « acompte »…).</summary>
+        [StringLength(300)]
+        public string? Note { get; set; }
+
+        /// <summary>Jour de l'encaissement. Absent = aujourd'hui.</summary>
+        public DateTime? OccurredAt { get; set; }
+    }
+
+    /// <summary>Annulation d'un encaissement en espèces saisi par erreur.</summary>
+    public class CancelCashDto
+    {
+        [StringLength(300)]
+        public string? Reason { get; set; }
     }
 }

@@ -25,8 +25,31 @@ namespace Idara.API.Models
         /// (décision produit 2026-07-11 : le donateur ne doit pas payer les frais).</summary>
         public FeesPayer DonationFeesPayer { get; set; } = FeesPayer.School;
 
-        /// <summary>Jour du mois (1-15) où le cron MonthlyInvoiceGenerationJob génère les Invoices.</summary>
+        /// <summary>
+        /// <b>Jour d'OUVERTURE du paiement</b> : jour du mois (1-28) où le cron
+        /// génère les mensualités et prévient les familles.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Le nom de la colonne est historique — il date de l'époque où ce
+        /// jour servait AUSSI d'échéance. Ce n'est plus le cas depuis le
+        /// 2026-08-23 : l'échéance est <see cref="PaymentDeadlineDay"/>. Renommer
+        /// la colonne coûterait une migration et un DTO cassé pour zéro gain.
+        /// </remarks>
         public int MonthlyDueDay { get; set; } = 5;
+
+        /// <summary>
+        /// <b>Jour LIMITE de paiement</b> : jour du mois (1-28) au-delà duquel une
+        /// mensualité non réglée est en retard — la famille est relancée, et le
+        /// daara sort sa liste payés / non payés.
+        /// </summary>
+        /// <remarks>
+        /// <para>Avant ce réglage, l'échéance tombait le jour même de l'émission :
+        /// un parent prévenu le 5 recevait un SMS de retard le 6.</para>
+        /// <para>⚠️ Une valeur <b>inférieure</b> à <see cref="MonthlyDueDay"/>
+        /// désigne le mois SUIVANT (ouverture le 25, limite le 5). Toute la
+        /// résolution vit dans <see cref="Common.Utilities.PaymentSchedule"/>.</para>
+        /// </remarks>
+        public int PaymentDeadlineDay { get; set; } = 15;
 
         public BillingPeriod BillingPeriod { get; set; } = BillingPeriod.Monthly;
 
