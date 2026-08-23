@@ -40,6 +40,11 @@ namespace Idara.API.Common.Utilities
             // Mémorisation (tahfîz / hifz), employé tel quel par beaucoup de daara
             "tahfiz", "tahfid", "tahfidh", "tahfeez", "tahfeedh", "tahfith",
             "hifz", "hifd", "hifdh",
+            // Graphies wolofisées, relevées en production chez les daara
+            // sénégalais : « Al-xuraan », « al khourane ». Elles ne figuraient
+            // dans aucune liste théorique — c'est le terrain qui les a données.
+            "xuraan", "xuran", "xurane", "khuraan", "khurane",
+            "khourane", "khouran", "kourane", "kouran",
             // Arabe (après normalisation : آ → ا, harakat retirées, « ال » retiré)
             "قران", "تحفيظ", "حفظ",
         };
