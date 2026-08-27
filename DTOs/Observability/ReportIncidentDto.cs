@@ -22,8 +22,9 @@ namespace Idara.API.DTOs.Observability
         [StringLength(20)]
         public string? Code { get; set; }
 
-        /// <summary>0 = plantage, 1 = signalement, 2 = erreur d'API.</summary>
-        [Range(0, 2)]
+        /// <summary>0 = plantage, 1 = signalement, 2 = erreur d'API,
+        /// 3 = redémarrage inattendu.</summary>
+        [Range(0, 3)]
         public int Kind { get; set; }
 
         [StringLength(20)]

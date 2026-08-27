@@ -211,6 +211,7 @@ namespace Idara.API.Services.Observability
             Enums.IncidentKind.FlutterError => "L'écran a planté",
             Enums.IncidentKind.UserReport => "Signalé par l'utilisateur",
             Enums.IncidentKind.ApiError => "Le service n'a pas répondu",
+            Enums.IncidentKind.UnexpectedRestart => "L'application a redémarré toute seule",
             _ => kind.ToString(),
         };
 

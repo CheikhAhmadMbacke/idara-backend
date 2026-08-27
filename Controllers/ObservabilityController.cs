@@ -291,6 +291,7 @@ namespace Idara.API.Controllers
             IncidentKind.FlutterError => "Plantage de l'application",
             IncidentKind.UserReport => "Signalé par l'utilisateur",
             IncidentKind.ApiError => "Erreur du service",
+            IncidentKind.UnexpectedRestart => "Redémarrage inattendu",
             _ => kind.ToString(),
         };
     }
