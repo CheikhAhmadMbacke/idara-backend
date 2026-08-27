@@ -607,6 +607,48 @@ namespace Idara.API.Controllers
                 "[fees] Facture d'inscription {InvoiceId} créée après coup SchoolId={SchoolId} StudentId={StudentId} Montant={Amount}",
                 invoice.Id, schoolId, studentId, amount.Value);
 
+            // SMS aux responsables joignables — post-commit, best-effort, même
+            // motif que la facture d'inscription créée à l'inscription de
+            // l'élève (StudentService) : les deux chemins doivent prévenir.
+            try
+            {
+                var guardians = await _context.StudentGuardians
+                    .Where(sg => sg.StudentId == studentId
+                                 && !sg.Guardian.IsDeleted
+                                 && sg.Guardian.PhoneNumber != null)
+                    .Select(sg => new
+                    {
+                        sg.GuardianId,
+                        sg.Guardian.PhoneNumber,
+                        sg.Guardian.PreferredLanguage
+                    })
+                    .ToListAsync(ct);
+                if (guardians.Count > 0)
+                {
+                    var platform = await _context.GetPlatformSettingsAsync(ct);
+                    var eleve = $"{student.FirstName} {student.LastName}".Trim();
+                    var msg = NotificationTemplates.RegistrationFeeDue(eleve, amount.Value);
+                    foreach (var g in guardians)
+                    {
+                        await _notif.SendSmsAsync(new NotificationSmsRequest(
+                            UserId: g.GuardianId,
+                            RawPhone: g.PhoneNumber,
+                            PreferredLanguage: g.PreferredLanguage ?? "fr",
+                            Message: msg,
+                            Bilingual: platform.SmsBilingual,
+                            TemplateCode: "REGISTRATION_DUE",
+                            RelatedEntityId: invoice.Id,
+                            PushRoute: "/guardian/invoices"), ct);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[fees] SMS frais d'inscription non envoyé (facture {InvoiceId}) — pas bloquant",
+                    invoice.Id);
+            }
+
             return Ok(ApiResponse<InvoiceDto>.Ok(new InvoiceDto
             {
                 Id = invoice.Id,
@@ -1133,9 +1175,49 @@ namespace Idara.API.Controllers
             var result = await _cashPayments.CancelAsync(
                 schoolId.Value, id, dto?.Reason, User.GetUserId(), ct);
 
-            return result.Ok
-                ? Ok(ApiResponse<bool>.Ok(true, "Encaissement annulé."))
-                : BadRequest(ApiResponse<bool>.Fail(result.Error ?? "Annulation impossible."));
+            if (!result.Ok)
+                return BadRequest(ApiResponse<bool>.Fail(result.Error ?? "Annulation impossible."));
+
+            // SMS au responsable — post-commit, best-effort. Sans lui, la
+            // famille recevait « Paiement recu » puis, si la direction annulait,
+            // n'apprenait le retour de sa dette qu'au rappel de retard.
+            if (result.Payment?.GuardianId is int guardianId)
+            {
+                try
+                {
+                    var guardian = await _context.Users
+                        .FirstOrDefaultAsync(u => u.Id == guardianId && !u.IsDeleted, ct);
+                    if (guardian?.PhoneNumber != null)
+                    {
+                        var student = await _context.Students
+                            .Where(s => s.Id == result.Payment.StudentId)
+                            .Select(s => new { s.FirstName, s.LastName })
+                            .FirstOrDefaultAsync(ct);
+                        var eleve = student == null
+                            ? "votre enfant"
+                            : $"{student.FirstName} {student.LastName}".Trim();
+
+                        var platform = await _context.GetPlatformSettingsAsync(ct);
+                        await _notif.SendSmsAsync(new NotificationSmsRequest(
+                            UserId: guardian.Id,
+                            RawPhone: guardian.PhoneNumber,
+                            PreferredLanguage: guardian.PreferredLanguage ?? "fr",
+                            Message: NotificationTemplates.CashPaymentCancelled(
+                                eleve, result.Payment.AmountFcfa),
+                            Bilingual: platform.SmsBilingual,
+                            TemplateCode: "CASH_PAYMENT_CANCELLED",
+                            RelatedEntityId: result.Payment.Id,
+                            PushRoute: "/guardian/invoices"), ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[cash] SMS d'annulation non envoyé (paiement {Id}) — pas bloquant", id);
+                }
+            }
+
+            return Ok(ApiResponse<bool>.Ok(true, "Encaissement annulé."));
         }
 
         /// <summary>Recharge un paiement pour le renvoyer à l'appelant.</summary>

@@ -20,6 +20,7 @@ namespace Idara.API.Services
         private readonly IEmailService _emailService;
         private readonly IInvoiceRepricingService _repricing;
         private readonly UploadSettings _uploads;
+        private readonly Notifications.INotificationService _notif;
 
         public StudentService(
             AppDbContext context,
@@ -27,7 +28,8 @@ namespace Idara.API.Services
             ILogger<StudentService> logger,
             IEmailService emailService,
             IInvoiceRepricingService repricing,
-            IOptions<UploadSettings> uploads)
+            IOptions<UploadSettings> uploads,
+            Notifications.INotificationService notif)
         {
             _context = context;
             _env = env;
@@ -35,6 +37,7 @@ namespace Idara.API.Services
             _emailService = emailService;
             _repricing = repricing;
             _uploads = uploads.Value;
+            _notif = notif;
         }
 
         public async Task<StudentListResponseDto> GetStudentsAsync(
@@ -297,10 +300,11 @@ namespace Idara.API.Services
                         .Where(ps => ps.SchoolId == schoolId)
                         .Select(ps => ps.RegistrationFeeFcfa)
                         .FirstOrDefaultAsync());
+            Invoice? registrationInvoice = null;
             if (registrationFee is > 0)
             {
                 var enrollDay = student.EnrollmentDate.ToUtcDay();
-                _context.Invoices.Add(new Invoice
+                registrationInvoice = new Invoice
                 {
                     SchoolId = schoolId,
                     StudentId = student.Id,
@@ -312,16 +316,22 @@ namespace Idara.API.Services
                     AmountPaidFcfa = 0,
                     Status = InvoiceStatus.Pending,
                     CreatedAt = now
-                });
+                };
+                _context.Invoices.Add(registrationInvoice);
             }
 
             // Liens responsables. On collecte les NOUVEAUX responsables (leur
-            // code) pour l'affichage à l'école dans le modal récap.
+            // code) pour l'affichage à l'école dans le modal récap — et les
+            // coordonnées de TOUS les responsables joignables, pour le SMS des
+            // frais d'inscription envoyé post-commit.
             var newGuardians = new List<NewGuardianResult>();
+            var smsTargets = new List<(int Id, string Phone, string? Lang)>();
             foreach (var guardianDto in dto.Guardians)
             {
                 var (guardian, newG) = await GetOrCreateGuardianAsync(guardianDto, schoolId);
                 if (newG != null) newGuardians.Add(newG);
+                if (guardian.PhoneNumber != null)
+                    smsTargets.Add((guardian.Id, guardian.PhoneNumber, guardian.PreferredLanguage));
                 _context.StudentGuardians.Add(new StudentGuardian
                 {
                     StudentId = student.Id,
@@ -352,6 +362,41 @@ namespace Idara.API.Services
 
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
+
+            // SMS « frais d'inscription à payer » aux responsables joignables —
+            // POST-commit, best-effort (§42/§57 : un échec d'envoi ne doit jamais
+            // faire échouer une inscription déjà enregistrée). Avant le
+            // 2026-08-27, la facture d'inscription ne déclenchait AUCUN SMS : la
+            // famille n'apprenait son existence qu'au rappel de retard 7 jours
+            // plus tard.
+            if (registrationInvoice != null && smsTargets.Count > 0)
+            {
+                try
+                {
+                    var platform = await _context.GetPlatformSettingsAsync();
+                    var eleve = $"{student.FirstName} {student.LastName}".Trim();
+                    var msg = Notifications.NotificationTemplates.RegistrationFeeDue(
+                        eleve, registrationInvoice.AmountDueFcfa);
+                    foreach (var t in smsTargets)
+                    {
+                        await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
+                            UserId: t.Id,
+                            RawPhone: t.Phone,
+                            PreferredLanguage: t.Lang ?? "fr",
+                            Message: msg,
+                            Bilingual: platform.SmsBilingual,
+                            TemplateCode: "REGISTRATION_DUE",
+                            RelatedEntityId: registrationInvoice.Id,
+                            PushRoute: "/guardian/invoices"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[students] SMS frais d'inscription non envoyé pour StudentId={Id} — pas bloquant",
+                        student.Id);
+                }
+            }
 
             // Pas de re-tarification ici : un élève qui vient d'être créé ne peut
             // pas encore avoir de facture. Sa première facture sera générée par

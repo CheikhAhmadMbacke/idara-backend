@@ -76,13 +76,34 @@ namespace Idara.API.Services
                             && (i.AmountDueFcfa - i.AmountPaidFcfa) >= minPayin)
                 .Select(i => new
                 {
-                    i.Id, i.StudentId,
+                    i.Id, i.StudentId, i.Type,
                     Remaining = i.AmountDueFcfa - i.AmountPaidFcfa,
                     i.Status
                 })
                 .ToListAsync(ct);
 
-            if (overdue.Count == 0) return 0;
+            // ===== Rappel AVANT la limite (2026-08-27, décision utilisateur) =====
+            // La famille était prévenue à l'émission puis relancée APRÈS la
+            // limite — rien entre les deux. Ce rappel part entre J-2 et le jour J
+            // (fenêtre de 3 jours : un tick raté ne fait pas perdre le rappel),
+            // une seule fois par facture (dédup INVOICE_DUE_SOON).
+            // ⚠️ UNIQUEMENT si la fenêtre émission → limite fait au moins 5
+            // jours : sur une fenêtre courte, le SMS d'émission vient de partir,
+            // un deuxième serait du harcèlement facturé.
+            var dueSoonMax = today.AddDays(2);
+            var dueSoon = await db.Invoices
+                .Where(i => i.Status == InvoiceStatus.Pending
+                            && i.DueDate >= today && i.DueDate <= dueSoonMax
+                            && (i.AmountDueFcfa - i.AmountPaidFcfa) >= minPayin
+                            && i.CreatedAt <= i.DueDate.AddDays(-5))
+                .Select(i => new
+                {
+                    i.Id, i.StudentId, i.Type, i.DueDate,
+                    Remaining = i.AmountDueFcfa - i.AmountPaidFcfa
+                })
+                .ToListAsync(ct);
+
+            if (overdue.Count == 0 && dueSoon.Count == 0) return 0;
 
             // Responsables joignables, groupés par élève. Enrolled() (2026-08-17) :
             // le recouvrement d'une famille partie se fait par téléphone, pas par
@@ -90,7 +111,9 @@ namespace Idara.API.Services
             // préexistant, un rappel pouvait partir pour lui) sort du dictionnaire,
             // et la boucle plus bas saute sa facture. Sa dette reste visible côté
             // école et payable côté parent.
-            var studentIds = overdue.Select(o => o.StudentId).Distinct().ToList();
+            var studentIds = overdue.Select(o => o.StudentId)
+                .Concat(dueSoon.Select(d => d.StudentId))
+                .Distinct().ToList();
             var students = await db.Students
                 .Where(s => studentIds.Contains(s.Id))
                 .Enrolled()
@@ -129,7 +152,12 @@ namespace Idara.API.Services
                 // SMS partait quand même.
                 if (!students.TryGetValue(inv.StudentId, out var eleve))
                     continue;
-                var msg = NotificationTemplates.InvoiceOverdue(eleve, inv.Remaining);
+                // Libellé dérivé du TYPE (§158) : avant le 2026-08-27, une
+                // facture d'inscription en retard était rappelée avec le mot
+                // « mensualite » — un mot faux sur un SMS d'argent.
+                var msg = inv.Type == InvoiceType.Registration
+                    ? NotificationTemplates.RegistrationOverdue(eleve, inv.Remaining)
+                    : NotificationTemplates.InvoiceOverdue(eleve, inv.Remaining);
                 foreach (var g in guardians)
                 {
                     await notif.SendSmsAsync(new NotificationSmsRequest(
@@ -145,10 +173,37 @@ namespace Idara.API.Services
                 }
             }
 
+            // ----- Passe « échéance proche » (une seule fois par facture) -----
+            int dueSoonSent = 0;
+            foreach (var inv in dueSoon)
+            {
+                if (await notif.HasAttemptedAsync("INVOICE_DUE_SOON", inv.Id, ct))
+                    continue;
+                if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians))
+                    continue;
+                if (!students.TryGetValue(inv.StudentId, out var eleve))
+                    continue;
+                var msg = NotificationTemplates.PaymentDueSoon(
+                    eleve, inv.Remaining, inv.DueDate, inv.Type);
+                foreach (var g in guardians)
+                {
+                    await notif.SendSmsAsync(new NotificationSmsRequest(
+                        UserId: g.GuardianId,
+                        RawPhone: g.PhoneNumber,
+                        PreferredLanguage: g.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        Bilingual: bilingual,
+                        TemplateCode: "INVOICE_DUE_SOON",
+                        RelatedEntityId: inv.Id,
+                        PushRoute: "/guardian/invoices"), ct);
+                    dueSoonSent++;
+                }
+            }
+
             _logger.LogInformation(
-                "[overdue-cron] Tick {Date:yyyy-MM-dd} : {Overdue} facture(s) en retard, {Sent} rappel(s) envoyé(s)",
-                today, overdue.Count, sent);
-            return sent;
+                "[overdue-cron] Tick {Date:yyyy-MM-dd} : {Overdue} facture(s) en retard ({Sent} rappel(s)), {DueSoon} limite(s) proche(s) ({DueSoonSent} rappel(s))",
+                today, overdue.Count, sent, dueSoon.Count, dueSoonSent);
+            return sent + dueSoonSent;
         }
 
         private static DateTime NextFireUtc(DateTime nowUtc)

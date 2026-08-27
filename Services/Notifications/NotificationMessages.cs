@@ -57,6 +57,59 @@ namespace Idara.API.Services.Notifications
             Fr: $"Rappel : la mensualite de {eleve} ({montantFcfa} FCFA) reste a regler. Reglez sur idara.sn ou sur l'application.",
             Ar: $"تذكير: قسط {eleve} ({montantFcfa} FCFA) ما زال غير مدفوع. ادفع عبر idara.sn أو عبر التطبيق.");
 
+        // ===== Frais d'inscription (2026-08-27) =====
+        // La facture d'inscription ne passait par AUCUN SMS : la famille
+        // n'apprenait son existence qu'au rappel de retard 7 jours plus tard —
+        // avec le mot « mensualite » en plus. Le libellé est dérivé du TYPE de
+        // facture (§158), comme partout ailleurs.
+        public static BilingualMessage RegistrationFeeDue(string eleve, long montantFcfa) => new(
+            Fr: $"Les frais d'inscription de {eleve} ({montantFcfa} FCFA) sont a payer. Reglez sur idara.sn ou sur l'application.",
+            Ar: $"رسوم تسجيل {eleve} ({montantFcfa} FCFA) مستحقة الدفع. ادفع عبر idara.sn أو عبر التطبيق.");
+
+        public static BilingualMessage RegistrationOverdue(string eleve, long montantFcfa) => new(
+            Fr: $"Rappel : les frais d'inscription de {eleve} ({montantFcfa} FCFA) restent a regler. Reglez sur idara.sn ou sur l'application.",
+            Ar: $"تذكير: رسوم تسجيل {eleve} ({montantFcfa} FCFA) ما زالت غير مدفوعة. ادفع عبر idara.sn أو عبر التطبيق.");
+
+        // ===== Rappel AVANT la date limite (2026-08-27) =====
+        // Part entre J-2 et le jour J, UNIQUEMENT si la fenêtre de paiement est
+        // assez longue (cf. OverdueInvoiceReminderJob) — sinon il doublerait le
+        // SMS d'émission parti la veille. La date est celle du serveur (§151).
+        public static BilingualMessage PaymentDueSoon(
+            string eleve, long montantFcfa, DateTime limite, InvoiceType type)
+        {
+            var date = $"{limite:dd/MM}";
+            return type == InvoiceType.Registration
+                ? new(
+                    Fr: $"Les frais d'inscription de {eleve} ({montantFcfa} FCFA) sont a regler avant le {date}. Reglez sur idara.sn ou sur l'application.",
+                    Ar: $"رسوم تسجيل {eleve} ({montantFcfa} FCFA) يجب دفعها قبل {date}. ادفع عبر idara.sn أو عبر التطبيق.")
+                : new(
+                    Fr: $"La mensualite de {eleve} ({montantFcfa} FCFA) est a regler avant le {date}. Reglez sur idara.sn ou sur l'application.",
+                    Ar: $"قسط {eleve} ({montantFcfa} FCFA) يجب دفعه قبل {date}. ادفع عبر idara.sn أو عبر التطبيق.");
+        }
+
+        // ===== Écoles en montant LIBRE (2026-08-27) =====
+        // Ce mode ne génère AUCUNE facture : sans ce rappel mensuel, les
+        // familles de ces daara ne recevaient jamais rien. Pas de montant (il
+        // est au choix de la famille), pas de notion de retard. `eleve` null =
+        // plusieurs enfants → la formule générique DANS chaque langue (jamais
+        // du français inséré dans le corps arabe).
+        public static BilingualMessage FreePaymentDue(string? eleve, string periode)
+        {
+            var fr = string.IsNullOrWhiteSpace(eleve) ? "vos enfants" : eleve;
+            var ar = string.IsNullOrWhiteSpace(eleve) ? "أبنائكم" : eleve;
+            return new(
+                Fr: $"Le paiement de {periode} pour {fr} est attendu. Payez le montant de votre choix sur idara.sn ou sur l'application.",
+                Ar: $"دفعة {periode} لفائدة {ar} في انتظار السداد. ادفع المبلغ الذي تختاره عبر idara.sn أو عبر التطبيق.");
+        }
+
+        // ===== Annulation d'un encaissement en especes (2026-08-27) =====
+        // Sans ce SMS, la famille recevait « Paiement recu » puis, si la
+        // direction annulait (erreur de saisie), n'apprenait le retour de sa
+        // dette qu'au rappel de retard — incomprehensible pour elle.
+        public static BilingualMessage CashPaymentCancelled(string eleve, long montantFcfa) => new(
+            Fr: $"Le paiement de {montantFcfa} FCFA enregistre pour {eleve} a ete annule par votre ecole. Le montant reste a payer. Contactez l'ecole en cas de question.",
+            Ar: $"تم الغاء دفعة {montantFcfa} FCFA المسجلة لفائدة {eleve} من طرف المدرسة. المبلغ ما زال مستحقا. تواصلوا مع المدرسة عند الحاجة.");
+
         // ===== Envoi des identifiants par SMS (déclenché par le MODAL, jamais
         // automatique) =====
         // Le SMS ne part QUE quand l'école appuie sur le bouton « SMS » du modal

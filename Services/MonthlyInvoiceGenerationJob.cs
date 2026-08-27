@@ -126,14 +126,10 @@ namespace Idara.API.Services
                 : settingsQuery.Where(s => s.MonthlyDueDay == dayOfMonth);
             var eligibleSettings = await settingsQuery.ToListAsync(ct);
 
-            if (eligibleSettings.Count == 0)
-            {
-                _logger.LogInformation(
-                    "[invoice-cron] Tick {Date:yyyy-MM-dd}, aucune école avec MonthlyDueDay={Day}",
-                    today, dayOfMonth);
-                return report;
-            }
-
+            // ⚠️ PAS de retour anticipé quand cette liste est vide : la passe
+            // « montant libre » plus bas doit tourner même un jour où aucune
+            // école en montant FIXE n'est éligible (bug attrapé au banc le
+            // 2026-08-27 — le return court-circuitait les rappels libres).
             _logger.LogInformation(
                 "[invoice-cron] Tick {Date:yyyy-MM-dd}, {Count} école(s) éligible(s) (MonthlyDueDay={Day})",
                 today, eligibleSettings.Count, dayOfMonth);
@@ -175,13 +171,122 @@ namespace Idara.API.Services
                 }
             }
 
+            // ===== Écoles en montant LIBRE (2026-08-27, décision utilisateur) =====
+            // Ce mode ne génère AUCUNE facture : sans cette passe, les familles
+            // de ces daara ne recevaient JAMAIS de SMS — ni émission, ni rappel.
+            // Un rappel mensuel part au jour d'ouverture (MonthlyDueDay), avec le
+            // même auto-rattrapage que les factures, et UNE seule fois par mois
+            // et par responsable (dédup en base via NotificationLogs — un
+            // compteur mémoire serait remis à zéro à chaque déploiement, §92).
+            var freeQuery = db.SchoolPaymentSettings
+                .Where(s =>
+                    s.BillingMode == BillingMode.FreeAmount &&
+                    s.BillingPeriod == BillingPeriod.Monthly);
+            freeQuery = catchUp
+                ? freeQuery.Where(s => s.MonthlyDueDay <= dayOfMonth)
+                : freeQuery.Where(s => s.MonthlyDueDay == dayOfMonth);
+            var freeSchoolIds = await freeQuery.Select(s => s.SchoolId).ToListAsync(ct);
+
+            foreach (var freeSchoolId in freeSchoolIds)
+            {
+                try
+                {
+                    report.FreeReminderSmsSent += await SendFreeMonthlyRemindersAsync(
+                        db, notif, freeSchoolId, periodStart, periodeLabel, bilingual, ct);
+                }
+                catch (Exception ex)
+                {
+                    report.SchoolsFailed++;
+                    _logger.LogError(ex,
+                        "[invoice-cron] Échec rappels montant libre SchoolId={SchoolId}", freeSchoolId);
+                }
+            }
+
             _logger.LogInformation(
-                "[invoice-cron] Terminé. Écoles OK={Ok} ÉchecsÉcoles={Fail} Factures créées={Created} déjà existantes={Existing} skipped={Skipped} sansTarif={NoFee}",
+                "[invoice-cron] Terminé. Écoles OK={Ok} ÉchecsÉcoles={Fail} Factures créées={Created} déjà existantes={Existing} skipped={Skipped} sansTarif={NoFee} rappelsMontantLibre={Free}",
                 report.SchoolsProcessed, report.SchoolsFailed,
                 report.InvoicesCreated, report.InvoicesAlreadyExisting,
-                report.InvoicesSkipped, report.StudentsWithoutFee);
+                report.InvoicesSkipped, report.StudentsWithoutFee,
+                report.FreeReminderSmsSent);
 
             return report;
+        }
+
+        /// <summary>
+        /// Rappel mensuel des écoles en montant LIBRE : un SMS par RESPONSABLE
+        /// (pas par enfant — trois enfants ne valent pas trois SMS facturés),
+        /// nommant l'enfant s'il n'y en a qu'un. Dédup mensuelle par
+        /// (responsable, école) via NotificationLogs : le cron quotidien
+        /// auto-rattrapant repasse ici chaque jour après le MonthlyDueDay, seul
+        /// le premier passage envoie. Un envoi ÉCHOUÉ compte comme tenté (même
+        /// règle que le rappel de retard : jamais de re-tentative quotidienne
+        /// sans plafond).
+        /// </summary>
+        private async Task<int> SendFreeMonthlyRemindersAsync(
+            AppDbContext db,
+            INotificationService notif,
+            int schoolId,
+            DateTime periodStart,
+            string periodeLabel,
+            bool bilingual,
+            CancellationToken ct)
+        {
+            // Périmètre = l'effectif (source unique StudentScopeExtensions, §159).
+            var studentIds = await db.Students
+                .Where(s => s.SchoolId == schoolId)
+                .Enrolled()
+                .Select(s => s.Id)
+                .ToListAsync(ct);
+            if (studentIds.Count == 0) return 0;
+
+            var links = await db.StudentGuardians
+                .Where(sg => studentIds.Contains(sg.StudentId)
+                             && !sg.Guardian.IsDeleted
+                             && sg.Guardian.PhoneNumber != null)
+                .Select(sg => new
+                {
+                    sg.GuardianId,
+                    sg.Guardian.PhoneNumber,
+                    sg.Guardian.PreferredLanguage,
+                    sg.Student.FirstName,
+                    sg.Student.LastName
+                })
+                .ToListAsync(ct);
+
+            int sent = 0;
+            foreach (var group in links.GroupBy(l => l.GuardianId))
+            {
+                // Dédup mensuelle : une tentative par (responsable, école, mois).
+                var already = await db.NotificationLogs.AnyAsync(l =>
+                    l.TemplateCode == "FREE_PAYMENT_DUE"
+                    && l.UserId == group.Key
+                    && l.RelatedEntityId == schoolId
+                    && l.CreatedAt >= periodStart, ct);
+                if (already) continue;
+
+                var names = group
+                    .Select(x => $"{x.FirstName} {x.LastName}".Trim())
+                    .Where(n => n.Length > 0)
+                    .Distinct()
+                    .ToList();
+                // Un seul enfant → son nom ; plusieurs → formule générique DANS
+                // chaque langue (le template gère le null).
+                var eleve = names.Count == 1 ? names[0] : null;
+
+                var first = group.First();
+                await notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: group.Key,
+                    RawPhone: first.PhoneNumber,
+                    PreferredLanguage: first.PreferredLanguage ?? "fr",
+                    Message: NotificationTemplates.FreePaymentDue(eleve, periodeLabel),
+                    Bilingual: bilingual,
+                    TemplateCode: "FREE_PAYMENT_DUE",
+                    RelatedEntityId: schoolId,
+                    PushRoute: "/guardian/invoices"), ct);
+                sent++;
+            }
+
+            return sent;
         }
 
         /// <summary>
@@ -453,5 +558,9 @@ namespace Idara.API.Services
         public int InvoicesAlreadyExisting { get; set; }
         public int InvoicesSkipped { get; set; }
         public int StudentsWithoutFee { get; set; }
+
+        /// <summary>Rappels mensuels envoyés aux familles des écoles en montant
+        /// libre (aucune facture dans ce mode). Champ additif.</summary>
+        public int FreeReminderSmsSent { get; set; }
     }
 }
