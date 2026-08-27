@@ -1,3 +1,6 @@
+using Idara.API.Common.Utilities;
+using Idara.API.Enums;
+
 namespace Idara.API.Services.Notifications
 {
     /// <summary>
@@ -156,6 +159,29 @@ namespace Idara.API.Services.Notifications
         public static BilingualMessage WithdrawalDone(long montantFcfa) => new(
             Fr: $"Votre retrait de {montantFcfa} FCFA a ete effectue avec succes.",
             Ar: $"تم تنفيذ سحبك بمبلغ {montantFcfa} FCFA بنجاح.");
+
+        // ===== Notification BÉNÉFICIAIRE d'un transfert (SMS, + push si compte) =====
+        // Envoyée au DESTINATAIRE d'un virement du daara (salaire enseignant,
+        // loyer, fournisseur…) quand le décaissement est confirmé `completed`.
+        // Chaque corps porte le nom du daara dans SA langue quand il existe
+        // (règle R4 §135 : un seul nom renseigné occupe les deux). Les marques
+        // (Wave / Orange Money) restent en latin, même en arabe.
+        public static BilingualMessage TransferReceived(
+            long montantFcfa, PaymentOperator operateur, string? daaraFr, string? daaraAr)
+        {
+            var name = SchoolDisplayName.From(daaraFr, daaraAr);
+            var op = operateur switch
+            {
+                PaymentOperator.Wave => "Wave",
+                PaymentOperator.Orange => "Orange Money",
+                _ => "Mobile Money"
+            };
+            var fr = name.Fr ?? name.Ar ?? "votre daara";
+            var ar = name.Ar ?? name.Fr ?? "داراكم";
+            return new(
+                Fr: $"Vous avez recu un transfert de {montantFcfa} FCFA par {op} de la part de {fr}.",
+                Ar: $"لقد استلمت تحويلا بمبلغ {montantFcfa} FCFA عبر {op} من طرف {ar}.");
+        }
 
         // Retrait échoué (fonds restitués) : prévient l'admin uniquement.
         public static BilingualMessage WithdrawalFailed(long montantFcfa) => new(

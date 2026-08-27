@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
@@ -52,6 +53,63 @@ namespace Idara.API.Services
             {
                 _logger.LogError(ex,
                     "[payout-settle] Échec notif admins withdrawal {Id} — pas bloquant", withdrawalId);
+            }
+        }
+
+        /// <summary>
+        /// Prévient le BÉNÉFICIAIRE du transfert (SMS, + push s'il a un compte)
+        /// que l'argent est arrivé sur son Mobile Money : « Vous avez recu un
+        /// transfert de X FCFA par {opérateur} de la part de {daara}. »
+        /// Best-effort, POST-commit, ne lève jamais. Appelée uniquement sur les
+        /// transitions réelles vers Completed (la garde de statut sous verrou de
+        /// SettleCompletedAsync rend un rejeu webhook+poll NoOp → jamais de
+        /// double SMS). Jamais pour un retrait plateforme (chemin isolé en amont).
+        ///
+        /// Langue : si le numéro correspond à un compte Idara (même règle de
+        /// rattachement que l'espace bénéficiaire : User.PhoneNumber E.164 ==
+        /// Normalize(RecipientPhone)), la règle d'or §160 s'applique dans
+        /// NotificationService (langue FRAÎCHE du récepteur, bilingue si jamais
+        /// connecté). Sans compte → BILINGUE forcé : la langue d'un numéro
+        /// inconnu ne se devine pas.
+        ///
+        /// PUBLIQUE EXPRÈS (motif §133) : le chemin complet SettleCompletedAsync
+        /// passe par un verrou FOR UPDATE intraduisible en EF InMemory (§143) —
+        /// cette méthode, sans verrou, reste vérifiable sur un banc.
+        /// </summary>
+        public async Task NotifyBeneficiaryAsync(Withdrawal withdrawal, CancellationToken ct = default)
+        {
+            try
+            {
+                var phone = SenegalPhone.Normalize(withdrawal.RecipientPhone);
+                if (phone == null || withdrawal.SchoolId == null) return;
+
+                var school = await _context.Schools.AsNoTracking()
+                    .Where(s => s.Id == withdrawal.SchoolId.Value)
+                    .Select(s => new { s.Name, s.NameAr })
+                    .FirstOrDefaultAsync(ct);
+
+                var user = await _context.Users.AsNoTracking()
+                    .Where(u => !u.IsDeleted && u.PhoneNumber == phone)
+                    .OrderBy(u => u.Id) // numéro = identité : ordre déterministe (§95)
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .FirstOrDefaultAsync(ct);
+
+                var platform = await _context.GetPlatformSettingsAsync(ct);
+                await _notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: user?.Id,
+                    RawPhone: phone,
+                    PreferredLanguage: user?.PreferredLanguage ?? "fr",
+                    Message: NotificationTemplates.TransferReceived(
+                        withdrawal.AmountFcfa, withdrawal.Operator, school?.Name, school?.NameAr),
+                    Bilingual: user == null || platform.SmsBilingual,
+                    TemplateCode: "TRANSFER_RECEIVED",
+                    RelatedEntityId: withdrawal.Id,
+                    PushRoute: "/my-transfers"), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[payout-settle] Échec notif bénéficiaire withdrawal {Id} — pas bloquant", withdrawal.Id);
             }
         }
 
@@ -114,6 +172,7 @@ namespace Idara.API.Services
                     await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
                         "WITHDRAWAL_DONE", withdrawal.Id);
+                    await NotifyBeneficiaryAsync(withdrawal, ct);
                     return PayoutSettlementOutcome.SettledCompleted;
                 }
 
@@ -200,6 +259,9 @@ namespace Idara.API.Services
                     await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalDone(withdrawal.AmountFcfa),
                         "WITHDRAWAL_DONE", withdrawal.Id);
+                    // L'argent EST sorti (completed authentique) : le bénéficiaire
+                    // l'a reçu, il est prévenu comme sur le chemin nominal.
+                    await NotifyBeneficiaryAsync(withdrawal, ct);
                     return PayoutSettlementOutcome.Corrected;
                 }
 
