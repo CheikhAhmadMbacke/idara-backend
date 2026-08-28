@@ -74,6 +74,19 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>
+        /// Suivi financier PAR ÉCOLE : abonnement dû + prochaine échéance, payé /
+        /// pas payé ce mois civil, CA scolarité (mois courant + moyenne 3 mois,
+        /// en ligne + espèces), couverture du prochain prélèvement par le wallet,
+        /// palier d'effectif, revenus Idara cumulés. Impayés d'abord.
+        /// </summary>
+        [HttpGet("finance/schools")]
+        public async Task<ActionResult<ApiResponse<List<SchoolFinanceDto>>>> GetSchoolsFinance(CancellationToken ct)
+        {
+            var list = await _finance.GetSchoolsFinanceAsync(DateTime.UtcNow, ct);
+            return Ok(ApiResponse<List<SchoolFinanceDto>>.Ok(list));
+        }
+
+        /// <summary>
         /// Rapproche les payouts SenePay avec les retraits Idara : liste les retraits
         /// effectués HORS Idara (dashboard) + les anomalies. Lecture seule.
         /// </summary>
