@@ -52,6 +52,30 @@ namespace Idara.API.Services.Observability
             _logger = logger;
         }
 
+        /// <summary>
+        /// Marqueur que l'application pose dans le message d'un redémarrage
+        /// provoqué par la mise à jour du service worker (§79). ⚠️ Doit rester
+        /// IDENTIQUE au littéral de <c>restart_detector.dart</c> côté Flutter.
+        /// </summary>
+        public const string SwReloadMarker = "cause=mise a jour service worker";
+
+        /// <summary>
+        /// Un redémarrage « cause=mise a jour service worker » est NOTRE propre
+        /// geste : chaque déploiement web en produit un par utilisateur actif, à
+        /// mesure que les navigateurs découvrent le nouveau service worker
+        /// (jusqu'à 24 h+ après le push). L'alerter par e-mail noierait les vrais
+        /// incidents — constaté le 2026-08-28, première vague après le
+        /// déploiement du détecteur. L'incident reste ENREGISTRÉ (chip
+        /// « Redémarrages », page SuperAdmin) : seul l'e-mail est retenu.
+        ///
+        /// Publique et pure exprès (§133) : c'est elle qui décide qu'un e-mail ne
+        /// part pas, elle doit se vérifier sans SMTP ni base.
+        /// </summary>
+        public static bool IsSelfInflictedRestart(Enums.IncidentKind kind, string? message) =>
+            kind == Enums.IncidentKind.UnexpectedRestart &&
+            message != null &&
+            message.Contains(SwReloadMarker, StringComparison.Ordinal);
+
         public void QueueAlert(int incidentId)
         {
             if (!_settings.AlertsEnabled) return;
@@ -76,7 +100,11 @@ namespace Idara.API.Services.Observability
             });
         }
 
-        private async Task SendAsync(int incidentId)
+        /// <summary>
+        /// Publique pour être vérifiable sur banc (QueueAlert part en tâche de
+        /// fond, inattendable) — même motif que <c>EmailService.BuildIncidentAlert</c>.
+        /// </summary>
+        public async Task SendAsync(int incidentId)
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -90,6 +118,18 @@ namespace Idara.API.Services.Observability
                 .Include(i => i.School)
                 .FirstOrDefaultAsync(i => i.Id == incidentId);
             if (incident == null) return;
+
+            // Reload du service worker : notre propre geste, jamais un e-mail.
+            // L'incident est déjà en base (chip « Redémarrages ») ; `AlertedAt`
+            // reste vide, donc il ne « consomme » ni le regroupement ni le
+            // plafond journalier des vrais incidents.
+            if (IsSelfInflictedRestart(incident.Kind, incident.Message))
+            {
+                _logger.LogInformation(
+                    "[observability] Redémarrage dû à la mise à jour du service worker — " +
+                    "incident {Code:l} compté sans e-mail.", incident.Code);
+                return;
+            }
 
             var now = DateTime.UtcNow;
 
@@ -138,13 +178,17 @@ namespace Idara.API.Services.Observability
             }
 
             // Combien de personnes DISTINCTES touchées par le même défaut en 24 h :
-            // « 1 » et « 14 » n'appellent pas la même réaction.
+            // « 1 » et « 14 » n'appellent pas la même réaction. Les redémarrages
+            // dus au service worker en sont EXCLUS : ils partagent l'écran et le
+            // type des vrais redémarrages et gonfleraient le « ×N » d'un e-mail
+            // qui, lui, parle d'autre chose.
             var dayAgo = now.AddHours(-24);
             var similar = await db.ClientIncidents
                 .Where(i => i.CreatedAt >= dayAgo &&
                             i.Kind == incident.Kind &&
                             i.Route == incident.Route &&
-                            i.ExceptionType == incident.ExceptionType)
+                            i.ExceptionType == incident.ExceptionType &&
+                            !i.Message.Contains(SwReloadMarker))
                 .Select(i => i.UserId)
                 .Distinct()
                 .CountAsync();
@@ -175,11 +219,17 @@ namespace Idara.API.Services.Observability
             await email.SendIncidentAlertEmailAsync(to, alert);
 
             // Marqué APRÈS l'envoi réussi : si l'e-mail échoue, le prochain
-            // incident du même défaut pourra retenter. `ExecuteUpdateAsync` pour
-            // ne rien réécrire d'autre sur la ligne.
-            await db.ClientIncidents
-                .Where(i => i.Id == incident.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(i => i.AlertedAt, now));
+            // incident du même défaut pourra retenter. Mise à jour SUIVIE et non
+            // `ExecuteUpdateAsync` : le change tracker n'écrit que `AlertedAt`
+            // (même effet), et la version relationnelle est intraduisible sur le
+            // banc InMemory (§143) — ce chemin serait alors invérifiable.
+            var row = await db.ClientIncidents
+                .FirstOrDefaultAsync(i => i.Id == incident.Id);
+            if (row != null)
+            {
+                row.AlertedAt = now;
+                await db.SaveChangesAsync();
+            }
 
             _logger.LogInformation(
                 "[observability] Alerte envoyée à {To:l} pour l'incident {Code:l} ({Similar} personne(s) touchée(s)).",
