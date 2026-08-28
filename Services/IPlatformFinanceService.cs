@@ -24,6 +24,16 @@ namespace Idara.API.Services
             DateTime nowUtc, CancellationToken ct = default);
 
         /// <summary>
+        /// Espace « Investisseurs » : KPIs du moment (MRR, ARPU, parc) + série
+        /// MENSUELLE depuis le premier mois d'activité (CA plateforme, volume
+        /// traité, croissance écoles/élèves/parents). Tout recalculé des tables
+        /// sources — les chiffres montrés à un investisseur doivent être
+        /// re-dérivables de la comptabilité, jamais d'un compteur.
+        /// </summary>
+        Task<InvestorMetricsDto> GetInvestorMetricsAsync(
+            DateTime nowUtc, CancellationToken ct = default);
+
+        /// <summary>
         /// Calcule (dette écoles D, gains plateforme P) depuis la DB uniquement
         /// (sans appel SenePay). Utilisé sous le verrou plateforme pour le garde-fou
         /// du retrait des gains. Le détail P est fourni pour l'affichage éventuel.

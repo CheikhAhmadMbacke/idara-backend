@@ -1,5 +1,6 @@
 using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
 using Idara.API.DTOs.Senepay;
@@ -396,6 +397,162 @@ namespace Idara.API.Services
                 .ThenBy(d => d.NextBillingAt)
                 .ThenBy(d => d.SchoolId)
                 .ToList();
+        }
+
+        /// <summary>Fenêtre maximale de la série mensuelle investisseur (3 ans).</summary>
+        public const int InvestorMaxMonths = 36;
+
+        /// <inheritdoc/>
+        public async Task<InvestorMetricsDto> GetInvestorMetricsAsync(
+            DateTime nowUtc, CancellationToken ct = default)
+        {
+            var currentMonth = new DateTime(nowUtc.Year, nowUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            // --- Projections minimales, groupage en mémoire (volumes faibles à
+            // l'échelle actuelle ; à repenser au-delà de ~100k paiements) ---
+            var payments = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Completed)
+                .Select(p => new
+                {
+                    When = p.PaidAt ?? p.InitiatedAt,
+                    p.Operator,
+                    p.AmountFcfa,
+                    p.FeesPayer,
+                    p.TargetAmountFcfa,
+                    p.NetCreditedFcfa
+                })
+                .ToListAsync(ct);
+
+            var subInvoices = await _db.SubscriptionInvoices
+                .Where(i => i.Status == SubscriptionInvoiceStatus.Paid && i.PaidAt != null)
+                .Select(i => new { When = i.PaidAt!.Value, i.AmountFcfa })
+                .ToListAsync(ct);
+
+            var payoutFees = await _db.Withdrawals
+                .Where(w => w.Status == WithdrawalStatus.Completed && !w.IsPlatform
+                            && w.CompletedAt != null)
+                .Select(w => new { When = w.CompletedAt!.Value, w.FeesFcfa })
+                .ToListAsync(ct);
+
+            // Croissance : la date qui compte pour une école est la VALIDATION
+            // (entrée réelle en service), pas l'inscription au KYC.
+            var schoolDates = await _db.Schools
+                .Where(s => s.KycStatus == KycStatus.Validated && s.ValidatedAt != null)
+                .Select(s => s.ValidatedAt!.Value)
+                .ToListAsync(ct);
+
+            var studentDates = await _db.Students
+                .Where(s => !s.IsDeleted)
+                .Select(s => s.CreatedAt)
+                .ToListAsync(ct);
+
+            var guardianDates = await _db.Users
+                .Where(u => !u.IsDeleted && u.Role == UserRoles.Guardian)
+                .Select(u => u.CreatedAt)
+                .ToListAsync(ct);
+
+            // --- Série mensuelle : du premier mois d'activité au mois courant ---
+            var starts = new List<DateTime>();
+            if (schoolDates.Count > 0) starts.Add(schoolDates.Min());
+            if (payments.Count > 0) starts.Add(payments.Min(p => p.When));
+            if (subInvoices.Count > 0) starts.Add(subInvoices.Min(i => i.When));
+            if (studentDates.Count > 0) starts.Add(studentDates.Min());
+
+            var months = new List<InvestorMonthDto>();
+            if (starts.Count > 0)
+            {
+                var first = starts.Min();
+                var startMonth = new DateTime(first.Year, first.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+                var floor = currentMonth.AddMonths(-(InvestorMaxMonths - 1));
+                if (startMonth < floor) startMonth = floor;
+
+                for (var m = startMonth; m <= currentMonth; m = m.AddMonths(1))
+                {
+                    var end = m.AddMonths(1);
+                    bool In(DateTime d) => d >= m && d < end;
+
+                    var online = payments
+                        .Where(p => p.Operator != PaymentOperator.Cash && In(p.When)).ToList();
+                    var cash = payments
+                        .Where(p => p.Operator == PaymentOperator.Cash && In(p.When)).ToList();
+                    // Marge sur paiements = excédent net − cible des payins en
+                    // mode FeesPayer=Parent — MÊME formule que P (§112).
+                    var margin = online
+                        .Where(p => p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0)
+                        .Sum(p => p.NetCreditedFcfa - p.TargetAmountFcfa);
+                    var subRev = subInvoices.Where(i => In(i.When)).Sum(i => i.AmountFcfa);
+                    var fees = payoutFees.Where(f => In(f.When)).Sum(f => f.FeesFcfa);
+
+                    months.Add(new InvestorMonthDto
+                    {
+                        Year = m.Year,
+                        Month = m.Month,
+                        IsCurrentPartialMonth = m == currentMonth,
+                        SubscriptionRevenueFcfa = subRev,
+                        PaymentMarginFcfa = margin,
+                        GrossRevenueFcfa = subRev + margin,
+                        PayoutFeesFcfa = fees,
+                        NetRevenueFcfa = subRev + margin - fees,
+                        GmvOnlineFcfa = online.Sum(p => p.AmountFcfa),
+                        PaymentsOnlineCount = online.Count,
+                        GmvCashFcfa = cash.Sum(p => p.AmountFcfa),
+                        PaymentsCashCount = cash.Count,
+                        NewSchools = schoolDates.Count(In),
+                        // Cumuls en « < fin de mois » : justes même quand la
+                        // fenêtre d'affichage est bornée à 36 mois.
+                        CumulativeSchools = schoolDates.Count(d => d < end),
+                        NewStudents = studentDates.Count(In),
+                        CumulativeStudents = studentDates.Count(d => d < end),
+                        NewGuardianAccounts = guardianDates.Count(In),
+                        CumulativeGuardianAccounts = guardianDates.Count(d => d < end),
+                    });
+                }
+            }
+
+            // --- KPIs du moment ---
+            var subsByStatus = await _db.Subscriptions
+                .Select(s => new { s.Status, s.AmountFcfa })
+                .ToListAsync(ct);
+
+            var onlineAll = payments.Where(p => p.Operator != PaymentOperator.Cash).ToList();
+            var kpis = new InvestorKpisDto
+            {
+                SchoolsValidatedTotal = schoolDates.Count,
+                SchoolsActivePaying = subsByStatus.Count(s => s.Status == SubscriptionStatus.Active),
+                SchoolsInTrial = subsByStatus.Count(s => s.Status == SubscriptionStatus.Trial),
+                SchoolsInArrears = subsByStatus.Count(s =>
+                    s.Status is SubscriptionStatus.PendingPayment or SubscriptionStatus.ReadOnly),
+                SchoolsSuspended = subsByStatus.Count(s => s.Status == SubscriptionStatus.Suspended),
+                StudentsActiveTotal = await _db.Students.Enrolled(nowUtc).CountAsync(ct),
+                GuardianAccountsTotal = guardianDates.Count,
+                TeacherStaffAccountsTotal = await _db.Users.CountAsync(
+                    u => !u.IsDeleted && (u.Role == UserRoles.Teacher
+                        || u.Role == UserRoles.SchoolStaff
+                        || u.Role == UserRoles.Surveillant), ct),
+                MrrActiveFcfa = subsByStatus
+                    .Where(s => s.Status == SubscriptionStatus.Active).Sum(s => s.AmountFcfa),
+                MrrPipelineFcfa = subsByStatus
+                    .Where(s => s.Status == SubscriptionStatus.Trial).Sum(s => s.AmountFcfa),
+                GmvOnlineTotalFcfa = onlineAll.Sum(p => p.AmountFcfa),
+                PaymentsOnlineCountTotal = onlineAll.Count,
+                GmvCashTotalFcfa = payments
+                    .Where(p => p.Operator == PaymentOperator.Cash).Sum(p => p.AmountFcfa),
+                SubscriptionRevenueTotalFcfa = subInvoices.Sum(i => i.AmountFcfa),
+                PaymentMarginTotalFcfa = onlineAll
+                    .Where(p => p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0)
+                    .Sum(p => p.NetCreditedFcfa - p.TargetAmountFcfa),
+            };
+            kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0
+                ? kpis.MrrActiveFcfa / kpis.SchoolsActivePaying : 0;
+            kpis.GrossRevenueTotalFcfa =
+                kpis.SubscriptionRevenueTotalFcfa + kpis.PaymentMarginTotalFcfa;
+
+            return new InvestorMetricsDto
+            {
+                GeneratedAt = nowUtc,
+                Kpis = kpis,
+                Months = months,
+            };
         }
 
         public async Task<UntrackedPayoutsResultDto> ScanUntrackedPayoutsAsync(CancellationToken ct = default)

@@ -153,6 +153,7 @@ builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();
 builder.Services.AddSingleton<IExportPdfService, ExportPdfService>();
+builder.Services.AddSingleton<IInvestorReportPdfService, InvestorReportPdfService>();
 builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<ICashPaymentService, CashPaymentService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();

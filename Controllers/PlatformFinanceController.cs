@@ -33,6 +33,7 @@ namespace Idara.API.Controllers
         private readonly ISenePayClient _senepay;
         private readonly IPayoutSettlementService _settlement;
         private readonly INotificationService _notif;
+        private readonly IInvestorReportPdfService _investorPdf;
         private readonly SenePaySettings _senepaySettings;
         private readonly IMemoryCache _cache;
         private readonly ILogger<PlatformFinanceController> _logger;
@@ -43,7 +44,7 @@ namespace Idara.API.Controllers
         public PlatformFinanceController(
             IPlatformFinanceService finance, AppDbContext context,
             ISenePayClient senepay, IPayoutSettlementService settlement,
-            INotificationService notif,
+            INotificationService notif, IInvestorReportPdfService investorPdf,
             IOptions<SenePaySettings> senepaySettings, IMemoryCache cache,
             ILogger<PlatformFinanceController> logger)
         {
@@ -52,6 +53,7 @@ namespace Idara.API.Controllers
             _senepay = senepay;
             _settlement = settlement;
             _notif = notif;
+            _investorPdf = investorPdf;
             _senepaySettings = senepaySettings.Value;
             _cache = cache;
             _logger = logger;
@@ -84,6 +86,31 @@ namespace Idara.API.Controllers
         {
             var list = await _finance.GetSchoolsFinanceAsync(DateTime.UtcNow, ct);
             return Ok(ApiResponse<List<SchoolFinanceDto>>.Ok(list));
+        }
+
+        /// <summary>
+        /// Espace « Investisseurs » : KPIs du moment (MRR, ARPU, parc) + série
+        /// mensuelle depuis le lancement (CA plateforme, volume traité,
+        /// croissance écoles / élèves / parents).
+        /// </summary>
+        [HttpGet("investor/metrics")]
+        public async Task<ActionResult<ApiResponse<InvestorMetricsDto>>> GetInvestorMetrics(CancellationToken ct)
+        {
+            var dto = await _finance.GetInvestorMetricsAsync(DateTime.UtcNow, ct);
+            return Ok(ApiResponse<InvestorMetricsDto>.Ok(dto));
+        }
+
+        /// <summary>
+        /// Rapport investisseur PDF (A4 paysage) : le document à remettre en
+        /// preuve — mêmes chiffres que /investor/metrics, générés au même instant.
+        /// </summary>
+        [HttpGet("investor/report.pdf")]
+        public async Task<IActionResult> GetInvestorReportPdf(CancellationToken ct)
+        {
+            var metrics = await _finance.GetInvestorMetricsAsync(DateTime.UtcNow, ct);
+            var bytes = _investorPdf.Build(metrics);
+            return File(bytes, "application/pdf",
+                $"idara-rapport-investisseur-{DateTime.UtcNow:yyyy-MM-dd}.pdf");
         }
 
         /// <summary>
