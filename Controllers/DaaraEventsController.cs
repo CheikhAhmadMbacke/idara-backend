@@ -219,6 +219,7 @@ namespace Idara.API.Controllers
                 Title = dto.Title.Trim(),
                 Description = NullIfEmpty(dto.Description),
                 Category = dto.Category,
+                CategoryLabel = StorableLabel(dto.Category, dto.CategoryLabel),
                 Visibility = Storable(dto.Visibility),
                 DaaraObjectiveId =
                     await ResolveObjectiveAsync(dto.DaaraObjectiveId, schoolId.Value, ct),
@@ -277,6 +278,8 @@ namespace Idara.API.Controllers
             ev.Title = dto.Title.Trim();
             ev.Description = NullIfEmpty(dto.Description);
             ev.Category = dto.Category;
+            ev.CategoryLabel = StorableLabel(
+                dto.Category, dto.CategoryLabel ?? ev.CategoryLabel);
             ev.Visibility = Storable(dto.Visibility);
             ev.DaaraObjectiveId =
                 await ResolveObjectiveAsync(dto.DaaraObjectiveId, schoolId.Value, ct);
@@ -395,6 +398,19 @@ namespace Idara.API.Controllers
             return rows.ToDictionary(r => r.Id, r => r.FullName!);
         }
 
+        /// <summary>
+        /// La précision n'a de sens que pour « Autre » : une catégorie standard
+        /// n'en garde jamais (sinon un événement repassé de « Autre » à « Visite »
+        /// traînerait une précision invisible, ressuscitée au retour sur « Autre »).
+        /// Publique et pure exprès (§133).
+        /// </summary>
+        public static string? StorableLabel(DaaraEventCategory category, string? label)
+        {
+            if (category != DaaraEventCategory.Other) return null;
+            var t = label?.Trim();
+            return string.IsNullOrEmpty(t) ? null : t;
+        }
+
         private static DaaraEventDto Map(DaaraEvent e, Dictionary<int, string> authors) => new()
         {
             Id = e.Id,
@@ -402,6 +418,7 @@ namespace Idara.API.Controllers
             Title = e.Title,
             Description = e.Description,
             Category = e.Category,
+            CategoryLabel = e.CategoryLabel,
             Visibility = e.Visibility,
             DaaraObjectiveId = e.DaaraObjectiveId,
             DaaraObjectiveTitle = e.DaaraObjective?.Title,

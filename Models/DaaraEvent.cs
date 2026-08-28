@@ -31,6 +31,13 @@ namespace Idara.API.Models
 
         public DaaraEventCategory Category { get; set; } = DaaraEventCategory.Other;
 
+        /// <summary>
+        /// Précision libre quand <see cref="Category"/> vaut <c>Other</c>
+        /// (« Sortie scolaire », « Inspection »…), facultative. Toujours nulle
+        /// pour une catégorie standard — c'est le contrôleur qui le garantit.
+        /// </summary>
+        public string? CategoryLabel { get; set; }
+
         /// <summary>Qui peut lire. Défaut : toute l'équipe de l'école.</summary>
         public EventVisibility Visibility { get; set; } = EventVisibility.School;
 

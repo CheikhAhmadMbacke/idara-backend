@@ -436,6 +436,10 @@ namespace Idara.API.Data
                 .HasMaxLength(4000);
 
             modelBuilder.Entity<DaaraEvent>()
+                .Property(e => e.CategoryLabel)
+                .HasMaxLength(60);
+
+            modelBuilder.Entity<DaaraEvent>()
                 .HasQueryFilter(e => !e.IsDeleted);
 
             // Cascade : supprimer un événement emporte ses photos. Le fichier

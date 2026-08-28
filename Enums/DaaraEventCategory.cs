@@ -38,6 +38,13 @@ namespace Idara.API.Enums
         /// <summary>Personnel (arrivée, départ, absence prolongée).</summary>
         Staff = 8,
 
-        Other = 9
+        Other = 9,
+
+        /// <summary>
+        /// Information générale (annonce, consigne, nouvelle). Ajoutée le
+        /// 2026-08-28 à la demande d'un daara. Valeur ≥ 10 : les valeurs sont
+        /// persistées en integer, ne jamais réordonner.
+        /// </summary>
+        Info = 10
     }
 }

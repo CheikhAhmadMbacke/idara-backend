@@ -19,6 +19,10 @@ namespace Idara.API.DTOs.Operations
         public string Title { get; set; } = string.Empty;
         public string? Description { get; set; }
         public DaaraEventCategory Category { get; set; }
+
+        /// <summary>Précision libre de la catégorie « Autre », s'il y en a une.</summary>
+        public string? CategoryLabel { get; set; }
+
         public EventVisibility Visibility { get; set; }
 
         /// <summary>Objectif que cet événement fait avancer, s'il y en a un.</summary>
@@ -69,6 +73,10 @@ namespace Idara.API.DTOs.Operations
 
         public DaaraEventCategory Category { get; set; } = DaaraEventCategory.Other;
 
+        /// <summary>Précision facultative de « Autre ». Ignorée pour toute autre catégorie.</summary>
+        [StringLength(60)]
+        public string? CategoryLabel { get; set; }
+
         public EventVisibility Visibility { get; set; } = EventVisibility.School;
 
         /// <summary>Objectif à rattacher. Null = aucun.</summary>
@@ -97,6 +105,15 @@ namespace Idara.API.DTOs.Operations
         public string? Description { get; set; }
 
         public DaaraEventCategory Category { get; set; }
+
+        /// <summary>
+        /// Précision facultative de « Autre ». Convention PATCH : <c>null</c> =
+        /// ne pas toucher (une application antérieure n'envoie pas le champ —
+        /// sans cette règle, chaque édition depuis un vieux téléphone
+        /// effacerait la précision, piège §140), <c>""</c> = vider.
+        /// </summary>
+        [StringLength(60)]
+        public string? CategoryLabel { get; set; }
 
         public EventVisibility Visibility { get; set; }
 
