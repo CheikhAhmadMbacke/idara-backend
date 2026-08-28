@@ -306,6 +306,7 @@ namespace Idara.API.Controllers
                     studentId = l.StudentId,
                     studentName = l.StudentName,
                     label = InvoiceLabel.Fr(l.Type, l.PeriodStart),
+                    labelAr = InvoiceLabel.Ar(l.Type, l.PeriodStart),
                     amountFcfa = l.RemainingFcfa
                 })
                 .ToList();

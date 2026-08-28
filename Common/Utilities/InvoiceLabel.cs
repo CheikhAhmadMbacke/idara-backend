@@ -19,5 +19,18 @@ namespace Idara.API.Common.Utilities
             type == InvoiceType.Registration
                 ? "Frais d'inscription"
                 : $"Mensualité {FrMonths[periodStart.Month - 1]} {periodStart.Year}";
+
+        // Mois grégoriens en arabe, forme usuelle au Sénégal (يناير…), pas les
+        // noms levantins (كانون…).
+        private static readonly string[] ArMonths =
+        {
+            "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+            "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"
+        };
+
+        public static string Ar(InvoiceType type, DateTime periodStart) =>
+            type == InvoiceType.Registration
+                ? "رسوم التسجيل"
+                : $"الاشتراك الشهري {ArMonths[periodStart.Month - 1]} {periodStart.Year}";
     }
 }
