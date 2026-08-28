@@ -60,6 +60,14 @@ namespace Idara.API.Services.Observability
         public const string SwReloadMarker = "cause=mise a jour service worker";
 
         /// <summary>
+        /// Marqueur d'un rechargement web provoqué par le RETOUR d'un paiement
+        /// Wave (le paiement web quitte l'onglet, revenir par « précédent » le
+        /// recharge — constaté le 2026-08-28, IDR-5GJG8A). ⚠️ Doit rester
+        /// IDENTIQUE au littéral de <c>payment_return.dart</c> côté Flutter.
+        /// </summary>
+        public const string PaymentReturnMarker = "cause=retour paiement";
+
+        /// <summary>
         /// Un redémarrage « cause=mise a jour service worker » est NOTRE propre
         /// geste : chaque déploiement web en produit un par utilisateur actif, à
         /// mesure que les navigateurs découvrent le nouveau service worker
@@ -74,7 +82,8 @@ namespace Idara.API.Services.Observability
         public static bool IsSelfInflictedRestart(Enums.IncidentKind kind, string? message) =>
             kind == Enums.IncidentKind.UnexpectedRestart &&
             message != null &&
-            message.Contains(SwReloadMarker, StringComparison.Ordinal);
+            (message.Contains(SwReloadMarker, StringComparison.Ordinal) ||
+             message.Contains(PaymentReturnMarker, StringComparison.Ordinal));
 
         public void QueueAlert(int incidentId)
         {
@@ -188,7 +197,8 @@ namespace Idara.API.Services.Observability
                             i.Kind == incident.Kind &&
                             i.Route == incident.Route &&
                             i.ExceptionType == incident.ExceptionType &&
-                            !i.Message.Contains(SwReloadMarker))
+                            !i.Message.Contains(SwReloadMarker) &&
+                            !i.Message.Contains(PaymentReturnMarker))
                 .Select(i => i.UserId)
                 .Distinct()
                 .CountAsync();
