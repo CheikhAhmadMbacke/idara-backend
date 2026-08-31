@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Common.Validation;
 using Idara.API.Enums;
 
 namespace Idara.API.DTOs.Payment
@@ -46,7 +47,7 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Bénéficiaire du carnet. Null = saisie manuelle ponctuelle.</summary>
         public int? BeneficiaryId { get; set; }
 
-        [StringLength(120, MinimumLength = 3, ErrorMessage = "Le nom doit faire au moins 3 caractères.")]
+        [OptionalStringLength(120, MinimumLength = 3, ErrorMessage = "Le nom doit faire au moins 3 caractères.")]
         public string? RecipientName { get; set; }
 
         /// <summary>Numéro national sénégalais : 9 chiffres commençant par 7.</summary>

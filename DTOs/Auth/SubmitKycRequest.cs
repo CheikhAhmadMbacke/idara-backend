@@ -13,11 +13,11 @@ namespace Idara.API.DTOs.Auth
         /// des deux noms » (cf. <see cref="SchoolNameRule"/>), certains daara
         /// n'ayant de nom officiel qu'en arabe.
         /// </summary>
-        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en français doit faire au moins 2 caractères.")]
+        [OptionalStringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en français doit faire au moins 2 caractères.")]
         public string? SchoolName { get; set; }
 
         /// <summary>Nom en arabe. Même règle que <see cref="SchoolName"/>.</summary>
-        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en arabe doit faire au moins 2 caractères.")]
+        [OptionalStringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en arabe doit faire au moins 2 caractères.")]
         public string? SchoolNameAr { get; set; }
 
         [Required(ErrorMessage = "L'adresse de l'école est requise.")]

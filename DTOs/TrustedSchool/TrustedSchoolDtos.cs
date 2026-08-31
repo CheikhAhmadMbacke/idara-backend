@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.Common.Validation;
 
 namespace Idara.API.DTOs.TrustedSchool
 {
@@ -43,10 +44,10 @@ namespace Idara.API.DTOs.TrustedSchool
         /// <summary>Daara Idara à rattacher. Renseigné = les autres champs d'identité sont ignorés.</summary>
         public int? SchoolId { get; set; }
 
-        [StringLength(150, MinimumLength = 2)]
+        [OptionalStringLength(150, MinimumLength = 2)]
         public string? Name { get; set; }
 
-        [StringLength(150, MinimumLength = 2)]
+        [OptionalStringLength(150, MinimumLength = 2)]
         public string? NameAr { get; set; }
 
         /// <summary>Logo en base64 (data URI ou brut). Facultatif, saisie manuelle uniquement.</summary>
@@ -76,11 +77,11 @@ namespace Idara.API.DTOs.TrustedSchool
     public class UpdateTrustedSchoolDto
     {
         /// <summary>Ignoré sur un partenaire rattaché (le nom vient de la fiche du daara).</summary>
-        [StringLength(150, MinimumLength = 2)]
+        [OptionalStringLength(150, MinimumLength = 2)]
         public string? Name { get; set; }
 
         /// <summary>Ignoré sur un partenaire rattaché.</summary>
-        [StringLength(150, MinimumLength = 2)]
+        [OptionalStringLength(150, MinimumLength = 2)]
         public string? NameAr { get; set; }
 
         /// <summary>Nouveau logo en base64. Null = inchangé. Ignoré si rattaché.</summary>

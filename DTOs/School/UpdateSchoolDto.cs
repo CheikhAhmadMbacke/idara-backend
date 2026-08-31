@@ -17,11 +17,11 @@ namespace Idara.API.DTOs.School
         /// <see cref="Validate"/>. Une école dont le nom n'existe qu'en arabe doit
         /// pouvoir laisser ce champ vide.
         /// </summary>
-        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en français doit faire au moins 2 caractères.")]
+        [OptionalStringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en français doit faire au moins 2 caractères.")]
         public string? Name { get; set; }
 
         /// <summary>Nom en arabe. Même règle que <see cref="Name"/>.</summary>
-        [StringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en arabe doit faire au moins 2 caractères.")]
+        [OptionalStringLength(200, MinimumLength = 2, ErrorMessage = "Le nom en arabe doit faire au moins 2 caractères.")]
         public string? NameAr { get; set; }
 
         [StringLength(300)]
