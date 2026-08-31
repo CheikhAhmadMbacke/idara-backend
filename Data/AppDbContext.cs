@@ -73,6 +73,12 @@ namespace Idara.API.Data
         public DbSet<PricingPageContent> PricingPageContents { get; set; }
         public DbSet<PricingFaq> PricingFaqs { get; set; }
 
+        // Outil de relecture des traductions (arabe, puis wolof). Copie de
+        // travail des JSON du frontend : cf. TranslationKey.
+        public DbSet<TranslationKey> TranslationKeys { get; set; }
+        public DbSet<TranslationProposal> TranslationProposals { get; set; }
+        public DbSet<TranslationReviewer> TranslationReviewers { get; set; }
+
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
@@ -100,6 +106,42 @@ namespace Idara.API.Data
 
             modelBuilder.Entity<PricingFaq>()
                 .HasIndex(f => f.DisplayOrder);
+
+            // ---------- Relecture des traductions ----------
+            modelBuilder.Entity<TranslationKey>()
+                .HasIndex(k => k.Key)
+                .IsUnique();
+            modelBuilder.Entity<TranslationKey>()
+                .HasIndex(k => k.Section);
+
+            modelBuilder.Entity<TranslationReviewer>()
+                .HasIndex(r => r.Token)
+                .IsUnique();
+
+            // UNE proposition par (clé, relecteur, langue) : le relecteur
+            // modifie la sienne, il n'empile pas de doublons et il n'écrase
+            // jamais celle d'un autre.
+            modelBuilder.Entity<TranslationProposal>()
+                .HasIndex(p => new { p.TranslationKeyId, p.ReviewerId, p.Lang })
+                .IsUnique();
+
+            // Supprimer une clé devenue inutile emporte ses propositions : sans
+            // la clé elles ne veulent plus rien dire. (Le cas courant reste la
+            // mise en obsolescence, qui ne supprime rien.)
+            modelBuilder.Entity<TranslationProposal>()
+                .HasOne(p => p.TranslationKey)
+                .WithMany(k => k.Proposals)
+                .HasForeignKey(p => p.TranslationKeyId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Retirer un relecteur ne doit PAS effacer son travail : on
+            // desactive (IsActive) plutot que de supprimer, et la FK protege
+            // contre une suppression qui emporterait ses propositions.
+            modelBuilder.Entity<TranslationProposal>()
+                .HasOne(p => p.Reviewer)
+                .WithMany(r => r.Proposals)
+                .HasForeignKey(p => p.ReviewerId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             // Avantages d'un plan : supprimer un plan emporte ses lignes (elles
             // n'ont aucun sens seules) ; l'ordre d'affichage est indexé car la

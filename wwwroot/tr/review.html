@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="robots" content="noindex, nofollow">
+<title>Relecture des traductions — Idara</title>
+<style>
+  :root{
+    --primary:#0B744D; --primary-soft:#E8F3EE; --bg:#F6F8F7; --surface:#fff;
+    --border:#E2E8E5; --text:#12211B; --text2:#5A6B64; --text3:#8A9A93;
+    --ok:#1E8E5A; --warn:#E8830C; --danger:#C6302B;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+       font-size:15px;line-height:1.5}
+  header{background:var(--primary);color:#fff;padding:14px 16px;position:sticky;top:0;z-index:10;
+         box-shadow:0 1px 3px rgba(0,0,0,.15)}
+  header h1{margin:0;font-size:17px;font-weight:700}
+  header .sub{opacity:.9;font-size:13px;margin-top:2px}
+  .wrap{max-width:900px;margin:0 auto;padding:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+        padding:14px;margin-bottom:12px}
+  .muted{color:var(--text2);font-size:13px}
+  .tiny{color:var(--text3);font-size:12px}
+  select,textarea,input{font:inherit;color:inherit;width:100%;padding:10px 12px;
+        border:1px solid var(--border);border-radius:10px;background:#fff}
+  textarea{resize:vertical;min-height:64px}
+  textarea:focus,select:focus{outline:2px solid var(--primary);outline-offset:-1px;border-color:var(--primary)}
+  .row{border:1px solid var(--border);border-radius:12px;background:var(--surface);
+       padding:14px;margin-bottom:10px}
+  .key{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--text3);
+       word-break:break-all;margin-bottom:6px}
+  .fr{font-weight:600;margin-bottom:8px}
+  .cur{background:var(--primary-soft);border-radius:8px;padding:8px 10px;margin-bottom:8px;
+       font-size:14px;word-wrap:break-word}
+  .cur.empty{background:#FDF3E7;color:#8A5A12}
+  .lbl{font-size:12px;color:var(--text2);margin-bottom:4px;font-weight:600}
+  .rtl{direction:rtl;text-align:right}
+  .status{font-size:12px;min-height:16px;margin-top:4px}
+  .status.saving{color:var(--text3)}
+  .status.saved{color:var(--ok)}
+  .status.error{color:var(--danger);font-weight:600}
+  .bar{height:8px;background:var(--border);border-radius:99px;overflow:hidden;margin-top:6px}
+  .bar>i{display:block;height:100%;background:var(--primary);width:0;transition:width .3s}
+  .pill{display:inline-block;padding:3px 9px;border-radius:99px;font-size:12px;
+        background:var(--primary-soft);color:var(--primary);font-weight:600}
+  .pill.warn{background:#FDF3E7;color:#8A5A12}
+  .banner{background:#FDF3E7;border:1px solid #F3D9B5;color:#8A5A12;border-radius:10px;
+          padding:10px 12px;font-size:13px;margin-bottom:12px}
+  .center{text-align:center;padding:36px 12px;color:var(--text2)}
+  .foot{padding:20px 16px 40px;text-align:center}
+  button{font:inherit;padding:10px 16px;border-radius:10px;border:1px solid var(--border);
+         background:#fff;cursor:pointer}
+  button.primary{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:600}
+  button:disabled{opacity:.5;cursor:default}
+  .nav{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>Relecture des traductions — Idara</h1>
+  <div class="sub" id="hdr">Chargement…</div>
+</header>
+
+<div class="wrap" id="app">
+  <div class="center" id="loading">Chargement…</div>
+</div>
+
+<div class="foot tiny" id="foot"></div>
+
+<script>
+(function(){
+  // Le jeton est dans l'URL : /tr/{token}
+  var parts = location.pathname.split('/').filter(Boolean);
+  var TOKEN = parts[parts.length - 1] || '';
+  var API = '/tr/' + encodeURIComponent(TOKEN);
+
+  var state = { lang:'ar', sections:[], section:null, rows:[] };
+  var timers = {};
+
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function el(id){ return document.getElementById(id); }
+
+  function fail(msg){
+    el('app').innerHTML = '<div class="card"><b>Impossible d\'ouvrir cet espace.</b><div class="muted" style="margin-top:6px">'
+      + esc(msg) + '</div></div>';
+    el('hdr').textContent = '';
+  }
+
+  function load(section){
+    var url = API + '/state' + (section ? ('?section=' + encodeURIComponent(section)) : '');
+    return fetch(url, {headers:{'Accept':'application/json'}})
+      .then(function(r){
+        if (r.status === 404) throw new Error('Ce lien est inconnu ou a été désactivé. Demandez-en un nouveau.');
+        if (!r.ok) throw new Error('Le serveur n\'a pas répondu correctement.');
+        return r.json();
+      })
+      .then(function(d){
+        state.lang = d.lang;
+        state.sections = d.sections || [];
+        state.section = section || null;
+        state.rows = d.rows || [];
+        el('hdr').textContent = d.reviewer + ' — vous relisez l\'' + d.langLabel;
+        render();
+      });
+  }
+
+  function totalDone(){
+    var t = 0, p = 0;
+    state.sections.forEach(function(s){ t += s.total; p += s.proposed; });
+    return {total:t, done:p};
+  }
+
+  function render(){
+    var s = totalDone();
+    var pct = s.total ? Math.round(s.done * 100 / s.total) : 0;
+    var h = '';
+
+    h += '<div class="card">'
+      + '<b>Avancement</b> <span class="pill">' + s.done + ' / ' + s.total + '</span>'
+      + '<div class="bar"><i style="width:' + pct + '%"></i></div>'
+      + '<div class="muted" style="margin-top:8px">Chaque correction est enregistrée automatiquement. '
+      + 'Vous pouvez fermer cette page et revenir plus tard : rien ne se perd.</div>'
+      + '</div>';
+
+    // Choix de la section
+    h += '<div class="card"><div class="lbl">Partie à relire</div><select id="sec">';
+    h += '<option value="">— Choisissez une partie —</option>';
+    state.sections.forEach(function(x){
+      var done = x.proposed >= x.total ? ' ✓' : '';
+      h += '<option value="' + esc(x.section) + '"' + (x.section === state.section ? ' selected' : '') + '>'
+         + esc(x.section) + ' (' + x.proposed + '/' + x.total + ')' + done + '</option>';
+    });
+    h += '</select>';
+    h += '<div class="muted" style="margin-top:8px">Les parties sont découpées pour être relues '
+       + 'en une fois. Prenez-les dans l\'ordre qui vous arrange.</div></div>';
+
+    if (!state.section){
+      h += '<div class="center">Choisissez une partie ci-dessus pour commencer.</div>';
+      el('app').innerHTML = h;
+      bindSection();
+      return;
+    }
+
+    if (state.lang === 'wo'){
+      h += '<div class="banner"><b>Traduction en wolof.</b> Le champ est vide : écrivez la phrase '
+         + 'telle que vous la diriez à un directeur d\'école. Si un mot n\'existe pas en wolof, '
+         + 'gardez le mot français — c\'est ce que font les gens à l\'oral.</div>';
+    } else {
+      h += '<div class="banner"><b>Relecture de l\'arabe.</b> Ne corrigez que ce qui sonne faux. '
+         + 'Laissez vide ce qui est déjà juste : un champ vide veut dire « rien à changer », '
+         + 'jamais « effacer le texte ».</div>';
+    }
+
+    state.rows.forEach(function(r){
+      var rtl = state.lang === 'ar' ? ' rtl' : '';
+      h += '<div class="row" data-id="' + r.id + '">';
+      h += '<div class="key">' + esc(r.key) + '</div>';
+      h += '<div class="fr">' + esc(r.fr) + '</div>';
+      if (r.current){
+        h += '<div class="lbl">Texte actuel</div>'
+           + '<div class="cur' + rtl + '">' + esc(r.current) + '</div>';
+      } else {
+        h += '<div class="cur empty">Aucune traduction pour l\'instant.</div>';
+      }
+      if (r.stale){
+        h += '<div class="tiny" style="margin-bottom:6px"><span class="pill warn">à revoir</span> '
+           + 'le texte français a changé depuis votre proposition.</div>';
+      }
+      h += '<div class="lbl">' + (state.lang === 'ar' ? 'Votre correction' : 'Votre traduction') + '</div>';
+      h += '<textarea class="prop' + rtl + '" data-id="' + r.id + '" rows="2" '
+         + 'placeholder="' + (state.lang === 'ar' ? 'Laissez vide si le texte est correct' : 'Écrivez ici en wolof')
+         + '">' + esc(r.proposal) + '</textarea>';
+      h += '<div class="status" id="st' + r.id + '"></div>';
+      h += '<div class="lbl" style="margin-top:6px">Remarque (facultatif)</div>';
+      h += '<input class="note" data-id="' + r.id + '" value="' + esc(r.note) + '" placeholder="Un doute, une question…">';
+      h += '</div>';
+    });
+
+    h += '<div class="nav"><button id="prev">← Partie précédente</button>'
+       + '<button id="next" class="primary">Partie suivante →</button></div>';
+
+    el('app').innerHTML = h;
+    bindSection();
+    bindRows();
+    bindNav();
+  }
+
+  function bindSection(){
+    var sel = el('sec');
+    if (sel) sel.addEventListener('change', function(){
+      load(sel.value || null).catch(function(e){ fail(e.message); });
+      window.scrollTo(0,0);
+    });
+  }
+
+  function bindNav(){
+    var idx = state.sections.findIndex(function(x){ return x.section === state.section; });
+    var prev = el('prev'), next = el('next');
+    if (prev){
+      prev.disabled = idx <= 0;
+      prev.addEventListener('click', function(){
+        load(state.sections[idx-1].section).then(function(){ window.scrollTo(0,0); });
+      });
+    }
+    if (next){
+      next.disabled = idx < 0 || idx >= state.sections.length - 1;
+      next.addEventListener('click', function(){
+        load(state.sections[idx+1].section).then(function(){ window.scrollTo(0,0); });
+      });
+    }
+  }
+
+  function rowOf(id){
+    for (var i=0;i<state.rows.length;i++) if (state.rows[i].id === id) return state.rows[i];
+    return null;
+  }
+
+  function save(id){
+    var r = rowOf(id); if (!r) return;
+    var st = el('st' + id);
+    if (st){ st.className = 'status saving'; st.textContent = 'Enregistrement…'; }
+    fetch(API + '/propose', {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keyId:id, text:r.proposal, note:r.note })
+    }).then(function(resp){
+      if (!resp.ok) throw new Error();
+      if (st){ st.className = 'status saved'; st.textContent = '✓ Enregistré'; }
+      // Rafraîchit le compteur de la partie courante sans recharger la page.
+      var sec = state.sections.find(function(x){ return x.section === state.section; });
+      if (sec){
+        var done = state.rows.filter(function(x){ return (x.proposal||'').trim() !== ''; }).length;
+        sec.proposed = done;
+      }
+    }).catch(function(){
+      if (st){
+        st.className = 'status error';
+        // On ne dit JAMAIS « enregistré » quand ça a échoué : le relecteur doit
+        // savoir qu'il doit réessayer, sinon il ferme l'onglet en confiance.
+        st.textContent = '⚠ Non enregistré — vérifiez votre connexion, votre texte est encore là.';
+      }
+    });
+  }
+
+  function schedule(id){
+    clearTimeout(timers[id]);
+    // Temporisation : enregistrer à chaque frappe ferait un appel par lettre,
+    // coûteux sur un forfait sénégalais.
+    timers[id] = setTimeout(function(){ save(id); }, 800);
+  }
+
+  function bindRows(){
+    Array.prototype.forEach.call(document.querySelectorAll('textarea.prop'), function(t){
+      var id = parseInt(t.getAttribute('data-id'), 10);
+      t.addEventListener('input', function(){
+        var r = rowOf(id); if (!r) return;
+        r.proposal = t.value;
+        schedule(id);
+      });
+      // Un départ de champ enregistre tout de suite : c'est le moment où
+      // l'utilisateur croit avoir fini.
+      t.addEventListener('blur', function(){ clearTimeout(timers[id]); save(id); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('input.note'), function(t){
+      var id = parseInt(t.getAttribute('data-id'), 10);
+      t.addEventListener('input', function(){
+        var r = rowOf(id); if (!r) return;
+        r.note = t.value;
+        schedule(id);
+      });
+      t.addEventListener('blur', function(){ clearTimeout(timers[id]); save(id); });
+    });
+  }
+
+  // Filet : prévenir avant de quitter s'il reste une frappe non partie.
+  window.addEventListener('beforeunload', function(e){
+    for (var k in timers){ if (timers[k]){ e.preventDefault(); e.returnValue = ''; return ''; } }
+  });
+
+  el('foot').textContent = 'Idara — merci pour votre relecture.';
+  load(null).catch(function(e){ fail(e.message); });
+})();
+</script>
+</body>
+</html>
