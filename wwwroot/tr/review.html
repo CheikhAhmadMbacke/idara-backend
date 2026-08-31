@@ -297,11 +297,11 @@
   // separees de celles des autres : personne n'ecrase le travail d'un autre.
   function askName(prefill){
     var titre = LANGUE === 'wolof' ? 'Traduire Idara en wolof'
-                                   : 'Relire la traduction arabe d'Idara';
+                                   : "Relire la traduction arabe d'Idara";
     var quoi = LANGUE === 'wolof'
-      ? 'Vous allez proposer des traductions en wolof pour les textes de l'application.'
-      : 'Vous allez relire les textes arabes de l'application et corriger ce qui sonne faux.';
-    el('hdr').textContent = LANGUE === 'wolof' ? 'Contribution en wolof' : 'Relecture de l'arabe';
+      ? "Vous allez proposer des traductions en wolof pour les textes de l'application."
+      : "Vous allez relire les textes arabes de l'application et corriger ce qui sonne faux.";
+    el('hdr').textContent = LANGUE === 'wolof' ? 'Contribution en wolof' : "Relecture de l'arabe";
     el('app').innerHTML =
       '<div class="card">'
       + '<b>' + esc(titre) + '</b>'
