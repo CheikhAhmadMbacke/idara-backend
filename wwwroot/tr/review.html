@@ -72,10 +72,17 @@
 
 <script>
 (function(){
-  // Le jeton est dans l'URL : /tr/{token}
+  // Deux entrees possibles :
+  //  - /tr/{jeton}          lien personnel envoye par l'ecole
+  //  - /traduction/arabe    adresse memorisable, partageable dans un groupe
   var parts = location.pathname.split('/').filter(Boolean);
-  var TOKEN = parts[parts.length - 1] || '';
-  var API = '/tr/' + encodeURIComponent(TOKEN);
+  var LANGUE = (parts[0] === 'traduction') ? (parts[1] || '') : null;
+  var TOKEN = LANGUE ? '' : (parts[parts.length - 1] || '');
+  var API = '';
+  var STORE = 'idara_trad_' + (LANGUE || '');
+
+  function setApi(t){ TOKEN = t; API = '/tr/' + encodeURIComponent(t); }
+  if (TOKEN) setApi(TOKEN);
 
   var state = { lang:'ar', sections:[], section:null, rows:[] };
   var timers = {};
@@ -134,8 +141,10 @@
     h += '<option value="">— Choisissez une partie —</option>';
     state.sections.forEach(function(x){
       var done = x.proposed >= x.total ? ' ✓' : '';
+      // On montre le nom FRANCAIS de la partie ; la valeur reste la cle
+      // technique, que le serveur attend.
       h += '<option value="' + esc(x.section) + '"' + (x.section === state.section ? ' selected' : '') + '>'
-         + esc(x.section) + ' (' + x.proposed + '/' + x.total + ')' + done + '</option>';
+         + esc(x.label || x.section) + ' (' + x.proposed + '/' + x.total + ')' + done + '</option>';
     });
     h += '</select>';
     h += '<div class="muted" style="margin-top:8px">Les parties sont découpées pour être relues '
@@ -284,8 +293,75 @@
     for (var k in timers){ if (timers[k]){ e.preventDefault(); e.returnValue = ''; return ''; } }
   });
 
-  el('foot').textContent = 'Idara — merci pour votre relecture.';
-  load(null).catch(function(e){ fail(e.message); });
+  // Formulaire « qui etes-vous ? ». Le nom sert a garder SES propositions
+  // separees de celles des autres : personne n'ecrase le travail d'un autre.
+  function askName(prefill){
+    var titre = LANGUE === 'wolof' ? 'Traduire Idara en wolof'
+                                   : 'Relire la traduction arabe d'Idara';
+    var quoi = LANGUE === 'wolof'
+      ? 'Vous allez proposer des traductions en wolof pour les textes de l'application.'
+      : 'Vous allez relire les textes arabes de l'application et corriger ce qui sonne faux.';
+    el('hdr').textContent = LANGUE === 'wolof' ? 'Contribution en wolof' : 'Relecture de l'arabe';
+    el('app').innerHTML =
+      '<div class="card">'
+      + '<b>' + esc(titre) + '</b>'
+      + '<div class="muted" style="margin:8px 0 14px">' + esc(quoi)
+      + ' Vos corrections sont enregistrées au fur et à mesure : vous pouvez fermer '
+      + 'cette page et revenir quand vous voulez.</div>'
+      + '<div class="lbl">Votre nom</div>'
+      + '<input id="who" value="' + esc(prefill || '') + '" placeholder="Ex. Ustaz Modou" '
+      + 'autocomplete="name">'
+      + '<div class="status" id="whoerr"></div>'
+      + '<div style="margin-top:12px"><button class="primary" id="go">Commencer</button></div>'
+      + '<div class="tiny" style="margin-top:10px">Votre nom sert seulement à retrouver '
+      + 'vos propositions si vous revenez plus tard.</div>'
+      + '</div>';
+    var input = el('who');
+    function go(){
+      var name = (input.value || '').trim();
+      var err = el('whoerr');
+      if (name.length < 2){
+        err.className = 'status error'; err.textContent = 'Indiquez votre nom.';
+        return;
+      }
+      err.className = 'status saving'; err.textContent = 'Un instant…';
+      fetch('/traduction/' + encodeURIComponent(LANGUE) + '/rejoindre', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name:name})
+      }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+        .then(function(res){
+          if (!res.ok) throw new Error(res.d && res.d.error ? res.d.error : 'Impossible de continuer.');
+          try { localStorage.setItem(STORE, res.d.token); } catch(e){}
+          setApi(res.d.token);
+          return load(null);
+        })
+        .catch(function(e){
+          err.className = 'status error'; err.textContent = e.message;
+        });
+    }
+    el('go').addEventListener('click', go);
+    input.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    input.focus();
+  }
+
+  el('foot').textContent = 'Idara — merci pour votre contribution.';
+
+  if (LANGUE){
+    var saved = null;
+    try { saved = localStorage.getItem(STORE); } catch(e){}
+    if (saved){
+      setApi(saved);
+      // Un jeton memorise peut avoir ete revoque : on retombe alors sur le
+      // formulaire plutot que d'afficher une erreur sans issue.
+      load(null).catch(function(){ askName(''); });
+    } else {
+      askName('');
+    }
+  } else if (TOKEN) {
+    load(null).catch(function(e){ fail(e.message); });
+  } else {
+    fail('Adresse incomplète.');
+  }
 })();
 </script>
 </body>

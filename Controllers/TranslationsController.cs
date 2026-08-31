@@ -48,6 +48,95 @@ namespace Idara.API.Controllers
             return PhysicalFile(path, "text/html; charset=utf-8");
         }
 
+        /// <summary>
+        /// Adresse MÉMORISABLE : <c>api.idara.sn/traduction/arabe</c> ou
+        /// <c>/traduction/wolof</c>.
+        ///
+        /// Elle sert le même écran que le lien à jeton. La différence est
+        /// qu'elle se partage dans un groupe WhatsApp ou se dicte au téléphone
+        /// — un jeton de 32 caractères, non.
+        ///
+        /// L'adresse est ouverte, et c'est assumé : le pire qu'un inconnu
+        /// puisse faire est de PROPOSER une traduction. Rien ne part en
+        /// production sans un export relu par le SuperAdmin et un déploiement.
+        /// Chaque contributeur donne son nom au premier accès et n'écrase donc
+        /// jamais le travail d'un autre.
+        /// </summary>
+        [HttpGet("/traduction/{langue}")]
+        public IActionResult LanguePage(string langue)
+        {
+            if (LangCodeOf(langue) == null) return NotFound();
+            var path = Path.Combine(_env.WebRootPath, "tr", "review.html");
+            if (!System.IO.File.Exists(path)) return NotFound();
+            Response.Headers["Cache-Control"] = "no-store";
+            Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
+            return PhysicalFile(path, "text/html; charset=utf-8");
+        }
+
+        /// <summary>Nom français d'une langue → code interne. Null si inconnue.</summary>
+        private static string? LangCodeOf(string? langue) => (langue ?? "").ToLowerInvariant() switch
+        {
+            "arabe" or "ar" => "ar",
+            "wolof" or "wo" => "wo",
+            _ => null,
+        };
+
+        public class JoinDto
+        {
+            public string Name { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        /// Un contributeur se présente et reçoit son espace de travail.
+        ///
+        /// Le MÊME nom retrouve le MÊME espace : quelqu'un qui change de
+        /// téléphone, ou qui revient une semaine plus tard, retrouve ses
+        /// propositions au lieu de tout refaire.
+        /// </summary>
+        [HttpPost("/traduction/{langue}/rejoindre")]
+        public async Task<IActionResult> Rejoindre(string langue, [FromBody] JoinDto dto, CancellationToken ct)
+        {
+            var lang = LangCodeOf(langue);
+            if (lang == null) return NotFound(new { error = "Langue inconnue." });
+
+            var name = (dto.Name ?? string.Empty).Trim();
+            if (name.Length is < 2 or > 60)
+                return BadRequest(new { error = "Indiquez votre nom (entre 2 et 60 caractères)." });
+
+            // Même nom, même langue = même espace. La comparaison ignore la
+            // casse : « Modou » et « modou » sont la même personne.
+            var existing = await _context.TranslationReviewers
+                .FirstOrDefaultAsync(r => r.Lang == lang && r.Name.ToLower() == name.ToLower(), ct);
+
+            if (existing != null)
+            {
+                if (!existing.IsActive)
+                    return StatusCode(403, new { error = "Cet accès a été désactivé." });
+                existing.LastSeenAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(ct);
+                return Ok(new { token = existing.Token, name = existing.Name });
+            }
+
+            // Garde-fou de volume : l'adresse est publique, on ne laisse pas
+            // fabriquer des milliers d'espaces vides.
+            var count = await _context.TranslationReviewers.CountAsync(r => r.Lang == lang, ct);
+            if (count >= 200)
+                return StatusCode(429, new { error = "Trop de contributeurs pour cette langue. Contactez Idara." });
+
+            var rev = new TranslationReviewer
+            {
+                Name = name,
+                Lang = lang,
+                Token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant(),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                LastSeenAt = DateTime.UtcNow,
+            };
+            _context.TranslationReviewers.Add(rev);
+            await _context.SaveChangesAsync(ct);
+            return Ok(new { token = rev.Token, name = rev.Name });
+        }
+
         private async Task<TranslationReviewer?> ReviewerAsync(string token, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(token) || token.Length > 64) return null;
@@ -88,8 +177,21 @@ namespace Idara.API.Controllers
                     total = g.Count(),
                     proposed = g.Count(k => mine.Any(p => p.TranslationKeyId == k.Id)),
                 })
-                .OrderBy(x => x.section)
                 .ToListAsync(ct);
+
+            // Nom FRANÇAIS de chaque partie : « cred » ou « kyc » ne veut rien
+            // dire pour un relecteur bénévole. Le tri se fait sur le libellé
+            // affiché, pour que la liste soit dans l'ordre qu'il LIT.
+            var sectionsLabeled = sections
+                .Select(x => new
+                {
+                    x.section,
+                    label = TranslationSections.Label(x.section),
+                    x.total,
+                    x.proposed,
+                })
+                .OrderBy(x => x.label, StringComparer.CurrentCulture)
+                .ToList();
 
             object? rows = null;
             if (!string.IsNullOrWhiteSpace(section))
@@ -133,7 +235,9 @@ namespace Idara.API.Controllers
                 reviewer = rev.Name,
                 lang = rev.Lang,
                 langLabel = rev.Lang == "ar" ? "arabe" : "wolof",
-                sections,
+                sections = sectionsLabeled,
+                sectionLabel = string.IsNullOrWhiteSpace(section)
+                    ? null : TranslationSections.Label(section!),
                 rows,
             });
         }
