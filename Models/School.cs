@@ -38,6 +38,13 @@ namespace Idara.API.Models
 
         /// <summary>Lecture (riwâya) du Coran utilisée par l'école pour
         /// l'autocomplétion du texte. Warsh par défaut.</summary>
+        /// <summary>
+        /// Nature de l'établissement (daara, franco-arabe, classique…).
+        /// NULL = non renseigné : les écoles créées avant ce champ n'en ont pas,
+        /// et on ne leur en invente pas (cf. <see cref="Enums.SchoolType"/>).
+        /// </summary>
+        public SchoolType? Type { get; set; }
+
         public QuranRiwaya QuranRiwaya { get; set; } = QuranRiwaya.Warsh;
 
         // ----- Personnalisation de l'espace (branding) -----

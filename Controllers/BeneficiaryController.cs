@@ -155,7 +155,7 @@ namespace Idara.API.Controllers
                 FinanceLabels.ExportTitle("Virements recus", rows.Count),
                 from, to, rows, summary,
                 // Export mono-type : la contrepartie est toujours le daara payeur.
-                counterpartyHeader: "Daara");
+                counterpartyHeader: "École");
 
             return File(bytes, "application/pdf", "mes-virements-idara.pdf");
         }

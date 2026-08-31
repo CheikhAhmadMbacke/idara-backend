@@ -1,5 +1,6 @@
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
+using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Operations;
@@ -167,7 +168,7 @@ namespace Idara.API.Controllers
                 .GroupBy(g => g.SubjectId)
                 .ToDictionary(
                     g => g.Key,
-                    g => new { g.First().Subject.Name, g.First().Subject.DefaultCoefficient });
+                    g => new { g.First().Subject.Name, g.First().Subject.DefaultCoefficient, g.First().Subject.Kind });
 
             // ----- 2) Lignes du bulletin pour CET élève + rang par matière -----
             var ourGrades = allGrades.Where(g => g.StudentId == student.Id).ToList();
@@ -203,6 +204,7 @@ namespace Idara.API.Controllers
                     SubjectName = meta.Name,
                     Average = avg,
                     Coefficient = meta.DefaultCoefficient,
+                    SubjectKind = meta.Kind,
                     MaxValue = 20.0,
                     RankInClass = subjectRank,
                     Appreciation = ComputeAppreciation(avg)
@@ -213,6 +215,13 @@ namespace Idara.API.Controllers
             var generalNum = bySubject.Sum(l => l.Average * l.Coefficient);
             var generalDen = bySubject.Sum(l => l.Coefficient);
             var general = generalDen > 0 ? Math.Round(generalNum / generalDen, 2) : 0;
+
+            // Moyennes par DOMAINE (franco-arabe : « arabe et religieux » vs
+            // « français et général »). Règle pure et testable, partagée avec
+            // l'affichage et le PDF pour qu'ils ne divergent pas.
+            var domainLines = bySubject.Select(l => (l.Average, l.Coefficient, l.SubjectKind));
+            var arabicAvg = ReportCardDomains.Average(domainLines, arabicDomain: true);
+            var generalSubjAvg = ReportCardDomains.Average(domainLines, arabicDomain: false);
 
             // ----- 4) Rang général dans la classe (recalculé sur les mêmes données) -----
             int? rank = null;
@@ -266,6 +275,8 @@ namespace Idara.API.Controllers
                 ClassId = student.ClassId,
                 GeneratedAt = DateTime.UtcNow,
                 GeneralAverage = general,
+                ArabicAverage = arabicAvg,
+                GeneralSubjectsAverage = generalSubjAvg,
                 Rank = rank,
                 TotalStudents = totalInClass,
                 Mention = ComputeMention(general),
@@ -436,6 +447,8 @@ namespace Idara.API.Controllers
             ClassName = r.Class?.Name,
             GeneratedAt = r.GeneratedAt,
             GeneralAverage = r.GeneralAverage,
+            ArabicAverage = r.ArabicAverage,
+            GeneralSubjectsAverage = r.GeneralSubjectsAverage,
             Rank = r.Rank,
             TotalStudents = r.TotalStudents,
             Mention = r.Mention,

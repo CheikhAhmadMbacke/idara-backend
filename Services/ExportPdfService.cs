@@ -448,7 +448,7 @@ namespace Idara.API.Services
                     });
                     c.Item().PaddingTop(4).Row(r =>
                     {
-                        r.RelativeItem().Text("Solde global du daara").Bold();
+                        r.RelativeItem().Text("Solde global de l'école").Bold();
                         r.ConstantItem(120).AlignRight().Text($"{globalBalanceFcfa:N0} FCFA").Bold().FontColor(PrimaryHex);
                     });
                 });

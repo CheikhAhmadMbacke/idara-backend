@@ -506,7 +506,7 @@ namespace Idara.API.Data
             // (code, nom, élèves min, élèves max, mensuel, annuel, quota notif)
             var defaults = new (string Code, string Name, int Min, int? Max, long Monthly, long Annual, int Quota)[]
             {
-                ("daara",    "Daara",    1,   30,   5000,  50000,  150),
+                ("daara",    "Essentiel", 1,  30,   5000,  50000,  150),
                 ("standard", "Standard", 31,  100,  12000, 120000, 500),
                 ("pro",      "Pro",      101, 300,  25000, 250000, 1500),
                 ("grand",    "Grand",    301, null, 50000, 500000, 3000),

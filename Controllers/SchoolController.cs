@@ -288,6 +288,9 @@ namespace Idara.API.Controllers
             school.RepresentativeLastName = string.IsNullOrWhiteSpace(dto.RepresentativeLastName) ? null : dto.RepresentativeLastName.Trim();
             school.RepresentativePhone = string.IsNullOrWhiteSpace(dto.RepresentativePhone) ? null : dto.RepresentativePhone.Trim();
             if (dto.QuranRiwaya.HasValue) school.QuranRiwaya = dto.QuranRiwaya.Value;
+            // NULL = inchangé : une app antérieure au champ ne doit rien effacer (§140).
+            if (dto.SchoolType.HasValue) school.Type = dto.SchoolType.Value;
+
         }
 
         /// <summary>
@@ -1127,6 +1130,7 @@ namespace Idara.API.Controllers
             RepresentativePhone = school.RepresentativePhone ?? string.Empty,
             RepresentativeIdDocumentUrls = school.RepresentativeIdDocumentUrl?
                 .Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
+            Type = school.Type,
             QuranRiwaya = school.QuranRiwaya,
             Users = school.Users.Where(u => !u.IsDeleted).Select(u => new UserInfoDto
             {

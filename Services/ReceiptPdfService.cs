@@ -248,7 +248,7 @@ namespace Idara.API.Services
                         c.Item().Text(t =>
                         {
                             t.Span("Objet : ").SemiBold().FontColor(TextSecondary);
-                            t.Span("Don au daara");
+                            t.Span("Don à l'école");
                         });
                     }
                     else if (student != null)

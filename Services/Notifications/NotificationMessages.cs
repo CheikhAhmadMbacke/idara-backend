@@ -229,7 +229,7 @@ namespace Idara.API.Services.Notifications
                 PaymentOperator.Orange => "Orange Money",
                 _ => "Mobile Money"
             };
-            var fr = name.Fr ?? name.Ar ?? "votre daara";
+            var fr = name.Fr ?? name.Ar ?? "votre école";
             var ar = name.Ar ?? name.Fr ?? "داراكم";
             return new(
                 Fr: $"Vous avez recu un transfert de {montantFcfa} FCFA par {op} de la part de {fr}.",

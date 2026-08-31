@@ -136,6 +136,23 @@ namespace Idara.API.Services
                             t.Span("Moyenne générale : ").SemiBold().FontColor(TextSecondary);
                             t.Span($"{card.GeneralAverage:0.00} / 20").Bold().FontColor(PrimaryHex);
                         });
+                        // Écoles franco-arabes : les deux cursus, chacun sa
+                        // moyenne. Affiché UNIQUEMENT si l'école enseigne
+                        // réellement les deux domaines — sur un daara, ce serait
+                        // répéter la moyenne générale sous un autre nom.
+                        if (ReportCardDomains.ShowBothDomains(card.ArabicAverage, card.GeneralSubjectsAverage))
+                        {
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Arabe / religieux : ").SemiBold().FontColor(TextSecondary);
+                                t.Span($"{card.ArabicAverage:0.00} / 20");
+                            });
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Français / général : ").SemiBold().FontColor(TextSecondary);
+                                t.Span($"{card.GeneralSubjectsAverage:0.00} / 20");
+                            });
+                        }
                         if (!string.IsNullOrWhiteSpace(card.Mention))
                         {
                             c.Item().Text(t =>

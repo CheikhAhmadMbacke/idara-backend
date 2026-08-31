@@ -39,6 +39,13 @@ namespace Idara.API.DTOs.School
         [StringLength(30)]
         public string? RepresentativePhone { get; set; }
 
+        /// <summary>
+        /// Nature de l'établissement. NULL = inchangé — jamais « effacer ».
+        /// Ce DTO est partagé par l'édition école ET l'édition SuperAdmin : un
+        /// formulaire qui n'envoie pas le champ ne doit rien écraser (§140).
+        /// </summary>
+        public SchoolType? SchoolType { get; set; }
+
         /// <summary>Lecture (riwâya) du Coran. Optionnel : si null, inchangé.</summary>
         public QuranRiwaya? QuranRiwaya { get; set; }
 

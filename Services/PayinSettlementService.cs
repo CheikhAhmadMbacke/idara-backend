@@ -274,7 +274,7 @@ namespace Idara.API.Services
                 var donorName = string.IsNullOrWhiteSpace(payment.Donor?.FullName)
                     ? "un donateur"
                     : payment.Donor!.FullName!.Trim();
-                var schoolName = school0?.Name ?? "un daara";
+                var schoolName = school0?.Name ?? "une école";
 
                 // Push à l'ÉCOLE (admin + personnel) : « don reçu de X ».
                 try

@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260831124700_SchoolTypeAndPlanRename")]
+    partial class SchoolTypeAndPlanRename
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1835,9 +1838,6 @@ namespace Idara.API.Migrations
                     b.Property<string>("Appreciation")
                         .HasColumnType("text");
 
-                    b.Property<double?>("ArabicAverage")
-                        .HasColumnType("double precision");
-
                     b.Property<int?>("ClassId")
                         .HasColumnType("integer");
 
@@ -1845,9 +1845,6 @@ namespace Idara.API.Migrations
                         .HasColumnType("text");
 
                     b.Property<double>("GeneralAverage")
-                        .HasColumnType("double precision");
-
-                    b.Property<double?>("GeneralSubjectsAverage")
                         .HasColumnType("double precision");
 
                     b.Property<DateTime>("GeneratedAt")
@@ -1907,9 +1904,6 @@ namespace Idara.API.Migrations
                         .HasColumnType("integer");
 
                     b.Property<int>("SubjectId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("SubjectKind")
                         .HasColumnType("integer");
 
                     b.Property<string>("SubjectName")

@@ -16,7 +16,7 @@ namespace Idara.API.Common.Validation
     public static class SchoolNameRule
     {
         public const string Message =
-            "Renseignez le nom du daara en français ou en arabe — au moins l'un des deux.";
+            "Renseignez le nom de l'école en français ou en arabe — au moins l'un des deux.";
 
         /// <summary>
         /// Renvoie l'erreur rattachée aux DEUX champs quand aucun n'est renseigné.

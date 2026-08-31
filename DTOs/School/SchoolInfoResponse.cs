@@ -20,6 +20,13 @@ namespace Idara.API.DTOs.School
         public string RepresentativeLastName { get; set; } = string.Empty;
         public string RepresentativePhone { get; set; } = string.Empty;
         public List<string> RepresentativeIdDocumentUrls { get; set; } = new();
+        /// <summary>
+        /// Nature de l'établissement. NULL = non renseigné (écoles créées avant
+        /// ce champ) : l'app propose alors TOUS les niveaux plutôt que d'en
+        /// deviner un jeu.
+        /// </summary>
+        public SchoolType? Type { get; set; }
+
         public QuranRiwaya QuranRiwaya { get; set; }
         public List<UserInfoDto> Users { get; set; } = new();
     }

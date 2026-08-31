@@ -31,7 +31,7 @@ namespace Idara.API.Services
             {
                 Id = 1,
                 HeroTitle = "Nos formules",
-                HeroSubtitle = "Un tarif par taille de daara. Sans engagement, résiliable à tout moment.",
+                HeroSubtitle = "Un tarif par taille d'école. Sans engagement, résiliable à tout moment.",
                 IsPublished = true
             };
             _context.PricingPageContents.Add(content);

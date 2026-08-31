@@ -209,7 +209,7 @@ namespace Idara.API.Services
                     row.RelativeItem().Column(c =>
                     {
                         c.Item().Text("Idara").Bold().FontSize(14).FontColor(PrimaryHex);
-                        c.Item().Text("Gestion et paiements des écoles coraniques (daara) — Sénégal")
+                        c.Item().Text("Gestion et paiements des daara et écoles franco-arabes — Sénégal")
                             .FontSize(8).FontColor(TextSecondary);
                     });
                     row.ConstantItem(200).AlignRight().Column(c =>

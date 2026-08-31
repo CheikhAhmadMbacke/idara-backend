@@ -38,7 +38,7 @@ namespace Idara.API.Common.Utilities
         /// Nom mis en avant sur un document français : le nom français, à défaut
         /// le nom arabe, à défaut <paramref name="fallback"/>.
         /// </summary>
-        public string Primary(string fallback = "Daara") => Fr ?? Ar ?? fallback;
+        public string Primary(string fallback = "École") => Fr ?? Ar ?? fallback;
 
         /// <summary>
         /// Second nom, affiché sous le principal — null quand il n'y en a qu'un

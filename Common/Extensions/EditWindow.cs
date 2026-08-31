@@ -68,6 +68,6 @@ namespace Idara.API.Common.Extensions
         public static string RefusalMessage(bool deleting = false) =>
             $"Ce suivi a été enregistré il y a plus de {Hours} heures : il n'est plus "
             + (deleting ? "supprimable. " : "modifiable. ")
-            + "Demandez à la direction du daara de faire la correction.";
+            + "Demandez à la direction de l'école de faire la correction.";
     }
 }

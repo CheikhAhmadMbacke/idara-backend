@@ -53,12 +53,12 @@ namespace Idara.API.Common.Utilities
             // pléonasme, les deux termes désignant la même chose.
             var metaTitle = ar
                 ? "أسعار إدارة — برنامج إدارة المدارس القرآنية (الدارات)"
-                : "Tarifs Idara — logiciel de gestion pour écoles coraniques (daara)";
+                : "Tarifs Idara — logiciel de gestion pour daara et écoles franco-arabes";
             var metaDesc = Trim(StripTags(subtitle), 155);
             if (string.IsNullOrWhiteSpace(metaDesc))
                 metaDesc = ar
                     ? "خطط اشتراك إدارة حسب حجم الدارة."
-                    : "Les formules d'abonnement Idara, selon la taille de votre daara.";
+                    : "Les formules d'abonnement Idara, selon la taille de votre école.";
 
             sb.Append("<title>").Append(E(metaTitle)).Append("</title>\n");
             sb.Append("<meta name=\"description\" content=\"").Append(E(metaDesc)).Append("\">\n");

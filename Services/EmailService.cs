@@ -272,7 +272,7 @@ namespace Idara.API.Services
             // détail de contexte. L'utilisateur, lui, n'a rien à faire.
             Row("Téléphone", a.PhoneNumber, strong: true);
             Row("Personne", $"{a.PersonName}{(string.IsNullOrWhiteSpace(a.RoleLabel) ? "" : $" · {a.RoleLabel}")}");
-            Row("Daara", a.SchoolName);
+            Row("École", a.SchoolName);
             Row("Écran", a.Route);
             Row("Quand", a.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy à HH:mm"));
             // Pas de ligne « Type » : l'en-tête de l'e-mail l'affiche déjà, et

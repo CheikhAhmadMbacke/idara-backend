@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Idara.API.Common.Validation;
+using Idara.API.Enums;
 
 namespace Idara.API.DTOs.Auth
 {
@@ -37,6 +38,13 @@ namespace Idara.API.DTOs.Auth
 
         [Required(ErrorMessage = "Le téléphone du représentant est requis.")]
         public string RepPhone { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Nature de l'établissement. Facultatif : une app antérieure à ce champ
+        /// ne l'envoie pas, et l'école reste alors « non renseignée » plutôt que
+        /// classée d'office (cf. <see cref="Enums.SchoolType"/>).
+        /// </summary>
+        public SchoolType? SchoolType { get; set; }
 
         public List<string> LegalDocumentsBase64 { get; set; } = new();
         public List<string> LegalDocumentsNames { get; set; } = new();

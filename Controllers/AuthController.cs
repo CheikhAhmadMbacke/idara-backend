@@ -443,6 +443,8 @@ namespace Idara.API.Controllers
                 user.School.RepresentativeLastName = request.RepLastName;
                 user.School.RepresentativePhone = request.RepPhone;
                 user.School.RepresentativeIdDocumentUrl = repUrls.Any() ? string.Join(",", repUrls) : user.School.RepresentativeIdDocumentUrl;
+                // NULL = inchangé : une app antérieure au champ ne l'efface pas (§140).
+                if (request.SchoolType.HasValue) user.School.Type = request.SchoolType.Value;
                 user.School.KycStatus = KycStatus.Submitted;
                 user.School.SubmittedAt = DateTime.UtcNow;
                 user.School.RejectionReason = null;
@@ -462,6 +464,7 @@ namespace Idara.API.Controllers
                 RepresentativeLastName = request.RepLastName,
                 RepresentativePhone = request.RepPhone,
                 RepresentativeIdDocumentUrl = repUrls.Any() ? string.Join(",", repUrls) : null,
+                Type = request.SchoolType,
                 CreatedAt = DateTime.UtcNow,
                 SubmittedAt = DateTime.UtcNow
             };
