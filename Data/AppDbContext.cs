@@ -79,6 +79,9 @@ namespace Idara.API.Data
         public DbSet<TranslationProposal> TranslationProposals { get; set; }
         public DbSet<TranslationReviewer> TranslationReviewers { get; set; }
 
+        // Imports en masse (fichiers Excel/CSV deposes par les ecoles).
+        public DbSet<ImportBatch> ImportBatches { get; set; }
+
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
@@ -137,6 +140,20 @@ namespace Idara.API.Data
             // Retirer un relecteur ne doit PAS effacer son travail : on
             // desactive (IsActive) plutot que de supprimer, et la FK protege
             // contre une suppression qui emporterait ses propositions.
+            // ---------- Imports en masse ----------
+            modelBuilder.Entity<ImportBatch>()
+                .HasIndex(b => new { b.SchoolId, b.CreatedAt });
+            modelBuilder.Entity<ImportBatch>()
+                .Property(b => b.RowsJson)
+                .HasColumnType("jsonb");
+            // Supprimer une ecole emporte ses imports : ils n'ont aucun sens
+            // sans elle (et la cascade explicite du §77 s'en charge deja).
+            modelBuilder.Entity<ImportBatch>()
+                .HasOne(b => b.School)
+                .WithMany()
+                .HasForeignKey(b => b.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             modelBuilder.Entity<TranslationProposal>()
                 .HasOne(p => p.Reviewer)
                 .WithMany(r => r.Proposals)

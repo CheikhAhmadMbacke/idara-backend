@@ -149,6 +149,8 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
+// Import en masse : reutilise IStudentService, ne le duplique pas.
+builder.Services.AddScoped<IStudentImportService, StudentImportService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();

@@ -373,6 +373,10 @@ namespace Idara.API.Controllers
             // la FK en Restrict, l'oubli se paierait par un 500 au milieu d'une
             // suppression déjà entamée (§77/§103).
             await _context.SchoolSetupDismissals.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
+            // Imports en masse : la FK est en Cascade, mais on la nomme ici pour
+            // que la cascade explicite reste la liste COMPLÈTE de ce qui dépend
+            // d'une école (§77) — c'est elle qu'on relit quand on ajoute une table.
+            await _context.ImportBatches.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
             // Journal du daara (photos avant événements). IgnoreQueryFilters :
             // sans lui, le filtre global !IsDeleted laisserait les événements
             // effacés en base, et la suppression de l'école échouerait sur la
