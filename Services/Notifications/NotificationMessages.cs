@@ -70,6 +70,48 @@ namespace Idara.API.Services.Notifications
             Fr: $"Rappel : les frais d'inscription de {eleve} ({montantFcfa} FCFA) restent a regler. Reglez sur idara.sn ou sur l'application.",
             Ar: $"تذكير: رسوم تسجيل {eleve} ({montantFcfa} FCFA) ما زالت غير مدفوعة. ادفع عبر idara.sn أو عبر التطبيق.");
 
+        // ===== Variantes FAMILLE : un seul SMS pour plusieurs enfants =====
+        //
+        // 🔴 Motif, et il est d'abord ECONOMIQUE (mesure du 2026-09-01) : les
+        // rappels partaient PAR FACTURE, donc par enfant. Dans un daara la
+        // fratrie est la norme — une famille de trois enfants recevait trois SMS
+        // identiques a trois minutes d'intervalle, factures trois fois. Le
+        // groupage divise la depense par le nombre moyen d'enfants par famille.
+        //
+        // Effet second, tout aussi voulu : les parents cessent de recevoir la
+        // meme phrase en rafale, ce qui la faisait passer pour du spam.
+        //
+        // On donne le NOMBRE d'enfants et le TOTAL, pas la liste des prenoms :
+        // avec cinq enfants la liste ferait deborder le segment (donc doublerait
+        // le cout du message cense en economiser), et le detail par enfant est de
+        // toute facon dans l'application. Ce qui est actionnable ici, c'est le
+        // montant a payer.
+
+        public static BilingualMessage InvoiceDueFamily(int nbEnfants, long totalFcfa, string periode) => new(
+            Fr: $"Les mensualites de vos {nbEnfants} enfants ({totalFcfa} FCFA) pour {periode} sont a payer. Reglez sur idara.sn ou sur l'application.",
+            Ar: $"أقساط أبنائكم ({nbEnfants}) بمبلغ {totalFcfa} FCFA عن {periode} مستحقة الدفع. ادفع عبر idara.sn أو عبر التطبيق.");
+
+        public static BilingualMessage InvoiceOverdueFamily(int nbEnfants, long totalFcfa) => new(
+            Fr: $"Rappel : les mensualites de vos {nbEnfants} enfants ({totalFcfa} FCFA) restent a regler. Reglez sur idara.sn ou sur l'application.",
+            Ar: $"تذكير: أقساط أبنائكم ({nbEnfants}) بمبلغ {totalFcfa} FCFA ما زالت غير مدفوعة. ادفع عبر idara.sn أو عبر التطبيق.");
+
+        public static BilingualMessage RegistrationOverdueFamily(int nbEnfants, long totalFcfa) => new(
+            Fr: $"Rappel : les frais d'inscription de vos {nbEnfants} enfants ({totalFcfa} FCFA) restent a regler. Reglez sur idara.sn ou sur l'application.",
+            Ar: $"تذكير: رسوم تسجيل أبنائكم ({nbEnfants}) بمبلغ {totalFcfa} FCFA ما زالت غير مدفوعة. ادفع عبر idara.sn أو عبر التطبيق.");
+
+        public static BilingualMessage PaymentDueSoonFamily(
+            int nbEnfants, long totalFcfa, DateTime limite, InvoiceType type)
+        {
+            var date = $"{limite:dd/MM}";
+            return type == InvoiceType.Registration
+                ? new(
+                    Fr: $"Les frais d'inscription de vos {nbEnfants} enfants ({totalFcfa} FCFA) sont a regler avant le {date}. Reglez sur idara.sn ou sur l'application.",
+                    Ar: $"رسوم تسجيل أبنائكم ({nbEnfants}) بمبلغ {totalFcfa} FCFA يجب دفعها قبل {date}. ادفع عبر idara.sn أو عبر التطبيق.")
+                : new(
+                    Fr: $"Les mensualites de vos {nbEnfants} enfants ({totalFcfa} FCFA) sont a regler avant le {date}. Reglez sur idara.sn ou sur l'application.",
+                    Ar: $"أقساط أبنائكم ({nbEnfants}) بمبلغ {totalFcfa} FCFA يجب دفعها قبل {date}. ادفع عبر idara.sn أو عبر التطبيق.");
+        }
+
         // ===== Rappel AVANT la date limite (2026-08-27) =====
         // Part entre J-2 et le jour J, UNIQUEMENT si la fenêtre de paiement est
         // assez longue (cf. OverdueInvoiceReminderJob) — sinon il doublerait le

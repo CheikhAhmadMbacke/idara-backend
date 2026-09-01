@@ -985,7 +985,10 @@ namespace Idara.API.Controllers
                     target.FullName ?? string.Empty, target.PhoneNumber, request.Code),
                 Bilingual: platform.SmsBilingual,
                 TemplateCode: "CREDENTIALS_SMS",
-                RelatedEntityId: target.Id));
+                RelatedEntityId: target.Id,
+                SchoolId: currentUser.SchoolId,
+                TriggerSource: "api:auth/credentials-sms",
+                TriggerUserId: currentUserId));
 
             if (!sent)
                 return BadRequest(ApiResponse<bool>.Fail(

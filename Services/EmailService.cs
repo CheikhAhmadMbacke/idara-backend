@@ -349,6 +349,65 @@ namespace Idara.API.Services
             return (subject, body.ToString());
         }
 
+        public Task SendOpsAlertEmailAsync(string toEmail, DTOs.Alerts.OpsAlertEmail a)
+        {
+            var (subject, body) = BuildOpsAlert(a);
+            return SendAsync(toEmail, subject, body, isHtml: true);
+        }
+
+        /// <summary>
+        /// Compose l'alerte d'exploitation, séparément de son envoi (même motif
+        /// que <see cref="BuildIncidentAlert"/> : un e-mail qu'on ne peut
+        /// vérifier qu'en l'envoyant réellement ne se vérifie jamais, §133).
+        ///
+        /// <para>Mise en page volontairement identique à celle des incidents :
+        /// ces e-mails arrivent dans la même boîte, souvent la nuit, et deux
+        /// gabarits différents obligeraient à réapprendre où regarder.</para>
+        /// </summary>
+        public static (string Subject, string Body) BuildOpsAlert(DTOs.Alerts.OpsAlertEmail a)
+        {
+            var accent = a.Urgent ? "#B91C1C" : "#B45309";
+
+            var rows = new System.Text.StringBuilder();
+            for (var i = 0; i < a.Facts.Count; i++)
+            {
+                var (label, value) = a.Facts[i];
+                if (string.IsNullOrWhiteSpace(value)) continue;
+                // Le premier fait en gras : c'est celui qui déclenche l'action
+                // (le nom de l'école, le numéro à rappeler). Une alerte qui ne
+                // dit pas QUI n'a fait que la moitié du chemin (§177).
+                var style = i == 0 ? "font-weight:bold;font-size:15px" : "";
+                rows.Append(
+                    "<tr>" +
+                    $"<td style=\"padding:7px 10px;border-bottom:1px solid #E2E8F0;color:#64748B;white-space:nowrap\">{Esc(label)}</td>" +
+                    $"<td style=\"padding:7px 10px;border-bottom:1px solid #E2E8F0;{style}\">{Esc(value)}</td>" +
+                    "</tr>");
+            }
+
+            var body = new System.Text.StringBuilder();
+            body.Append("<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:auto\">");
+            body.Append($"<div style=\"background:{accent};color:#fff;padding:14px 16px;border-radius:8px 8px 0 0\">"
+                + $"<div style=\"font-size:17px;font-weight:bold\">{Esc(a.Heading)}</div>"
+                + $"<div style=\"font-size:13px;opacity:.85;margin-top:2px\">{Esc(a.KindLabel)}</div></div>");
+            body.Append("<div style=\"border:1px solid #E2E8F0;border-top:none;border-radius:0 0 8px 8px;padding:16px\">");
+
+            if (!string.IsNullOrWhiteSpace(a.Advice))
+            {
+                body.Append("<div style=\"background:#FEF3C7;border-left:4px solid #F59E0B;padding:10px 12px;"
+                    + "margin-bottom:14px;font-size:14px\"><div style=\"color:#64748B;font-size:12px\">"
+                    + "Ce qu'il y a à faire</div>"
+                    + $"<div style=\"margin-top:4px\">{Esc(a.Advice!)}</div></div>");
+            }
+
+            body.Append($"<table style=\"border-collapse:collapse;width:100%;font-size:13px\">{rows}</table>");
+            body.Append("<p style=\"color:#94A3B8;font-size:12px;margin-top:16px\">"
+                + $"Détecté le {a.CreatedAt.ToLocalTime():dd/MM/yyyy à HH:mm}. "
+                + "Retrouvez l'historique dans Idara → SuperAdmin → Alertes.</p>");
+            body.Append("</div></div>");
+
+            return (a.Subject, body.ToString());
+        }
+
         /// <summary>
         /// Échappement HTML. Indispensable : le message d'erreur et le
         /// commentaire de l'utilisateur sont du texte non contrôlé, qui casserait

@@ -14,17 +14,20 @@ namespace Idara.API.Data
         private readonly AppDbContext _context;
         private readonly SuperAdminSettings _settings;
         private readonly ObservabilitySettings _observability;
+        private readonly OpsAlertSettings _opsAlerts;
         private readonly ILogger<DbInitializer> _logger;
 
         public DbInitializer(
             AppDbContext context,
             IOptions<SuperAdminSettings> settings,
             IOptions<ObservabilitySettings> observability,
+            IOptions<OpsAlertSettings> opsAlerts,
             ILogger<DbInitializer> logger)
         {
             _context = context;
             _settings = settings.Value;
             _observability = observability.Value;
+            _opsAlerts = opsAlerts.Value;
             _logger = logger;
         }
 
@@ -46,6 +49,7 @@ namespace Idara.API.Data
             await TrimDemoTeacherAssignmentsAsync();
             await PurgeStaleIdempotencyRecordsAsync();
             await PurgeStaleIncidentsAsync();
+            await PurgeStaleOpsAlertsAsync();
         }
 
         /// <summary>
@@ -150,6 +154,41 @@ namespace Idara.API.Data
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[observability] Purge des incidents impossible.");
+            }
+        }
+
+        /// <summary>
+        /// Purge les alertes d'exploitation trop anciennes.
+        ///
+        /// <para>Rétention plus longue que celle des incidents clients (120 jours
+        /// contre 30) et ce n'est pas un détail : une alerte de dépense SMS doit
+        /// pouvoir se relire en face de la facture Sonatel du mois SUIVANT, qui
+        /// arrive avec plusieurs semaines de retard. Une alerte purgée avant sa
+        /// facture ne sert plus à rien.</para>
+        ///
+        /// <para>Les alertes NON RÉSOLUES sont épargnées quel que soit leur âge :
+        /// une anomalie de décaissement jamais traitée ne doit pas disparaître
+        /// d'elle-même au bout de quatre mois — c'est exactement celle qu'il
+        /// faudra retrouver.</para>
+        /// </summary>
+        private async Task PurgeStaleOpsAlertsAsync()
+        {
+            try
+            {
+                var cutoff = DateTime.UtcNow.AddDays(-Math.Max(7, _opsAlerts.RetentionDays));
+                var removed = await _context.OpsAlerts
+                    .Where(a => a.Resolved && a.CreatedAt < cutoff)
+                    .ExecuteDeleteAsync();
+                if (removed > 0)
+                {
+                    _logger.LogInformation(
+                        "[ops-alert] {Count} alerte(s) classée(s) de plus de {Days} jours purgée(s).",
+                        removed, _opsAlerts.RetentionDays);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[ops-alert] Purge des alertes impossible.");
             }
         }
 

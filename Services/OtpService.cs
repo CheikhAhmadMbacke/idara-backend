@@ -84,7 +84,8 @@ namespace Idara.API.Services
                 Message: NotificationTemplates.OtpCode(otpCode),
                 Bilingual: platform.SmsBilingual,
                 TemplateCode: "OTP",
-                RelatedEntityId: null));
+                RelatedEntityId: null,
+                TriggerSource: "api:auth/request-code"));
 
             return otpCode;
         }

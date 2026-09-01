@@ -348,7 +348,9 @@ namespace Idara.API.Services
                             Bilingual: platform.SmsBilingual,
                             TemplateCode: "PAYMENT_RECEIVED",
                             RelatedEntityId: payment.Id,
-                            PushRoute: "/guardian/invoices"));
+                            PushRoute: "/guardian/invoices",
+                            SchoolId: payment.SchoolId,
+                            TriggerSource: "webhook:payin"));
                     }
                 }
                 catch (Exception ex)

@@ -16,6 +16,30 @@ namespace Idara.API.Services.Notifications
     /// <param name="TemplateCode">Code template (INVOICE_DUE, PAYMENT_RECEIVED, INVOICE_OVERDUE, INVITE…).</param>
     /// <param name="RelatedEntityId">Id métier lié (InvoiceId / PaymentId…), pour dédup des rappels.</param>
     /// <param name="PushRoute">Route in-app ouverte au clic de la notif push (ex. "/guardian/invoices"). Optionnel.</param>
+    /// <param name="SchoolId">École à qui imputer la dépense. Laisser <c>null</c> :
+    /// <c>NotificationService</c> la DÉDUIT du destinataire (son école, ou pour un
+    /// responsable l'école de ses enfants). Déduire au centre plutôt que faire
+    /// renseigner chaque appelant est ce qui garantit que le registre de
+    /// facturation n'ait pas de trou — un appelant qui oublie ce champ rendrait
+    /// une dépense inimputable, donc invisible du garde-fou.</param>
+    /// <param name="Priority">Ce que l'envoi vaut la peine de coûter quand un
+    /// plafond est atteint. <c>null</c> = déduit du <paramref name="TemplateCode"/>
+    /// (source unique, cf. <c>NotificationService.PriorityOf</c>).</param>
+    /// <param name="TriggerSource">D'où vient l'envoi, forme greppable :
+    /// <c>cron:monthly-invoices</c>, <c>api:auth/credentials-sms</c>. C'est lui qui
+    /// transforme « beaucoup de SMS sont partis » en une alerte actionnable.</param>
+    /// <param name="TriggerUserId">Compte dont le geste a déclenché l'envoi
+    /// (l'AUTEUR, pas le destinataire). Null pour un automate.</param>
+    /// <param name="GroupedEntityIds">Autres entités couvertes par ce SEUL message
+    /// (les factures des frères et sœurs, regroupées en un envoi).
+    ///
+    /// <para>Sans ce champ, grouper casserait la déduplication : les rappels se
+    /// dédupliquent par (gabarit, entité), or une seule ligne de registre ne
+    /// porte qu'une entité — les factures des autres enfants seraient donc
+    /// re-notifiées le lendemain, tous les jours. <c>NotificationService</c>
+    /// écrit ici une ligne « compagnon » par entité couverte, à coût nul et sur
+    /// le canal <c>SmsGrouped</c> : la déduplication reste exacte, et le budget
+    /// ne compte qu'une fois ce qui n'est parti qu'une fois.</para></param>
     public record NotificationSmsRequest(
         int? UserId,
         string? RawPhone,
@@ -24,7 +48,12 @@ namespace Idara.API.Services.Notifications
         bool Bilingual,
         string TemplateCode,
         int? RelatedEntityId = null,
-        string? PushRoute = null);
+        string? PushRoute = null,
+        int? SchoolId = null,
+        Enums.SmsPriority? Priority = null,
+        string? TriggerSource = null,
+        int? TriggerUserId = null,
+        IReadOnlyList<int>? GroupedEntityIds = null);
 
     /// <summary>
     /// Demande d'envoi d'une notification PUSH UNIQUEMENT (pas de SMS) à un

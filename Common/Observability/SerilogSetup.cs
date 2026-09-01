@@ -97,6 +97,25 @@ namespace Idara.API.Common.Observability
                 .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
                 .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Warning)
                 .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
+                // 🔴 SANS CETTE LIGNE, LES IDENTIFIANTS SMS PARTENT EN CLAIR DANS
+                // LE JOURNAL. La fabrique de HttpClient de .NET journalise l'URI
+                // COMPLÈTE en Information (« Start processing HTTP request GET
+                // {Uri} », quatre lignes par appel) ; or l'API Orange SMS Pro
+                // porte ses paramètres dans la QUERY STRING — donc le token, la
+                // clé signée, le numéro du destinataire ET le corps du message
+                // (codes de connexion compris) se retrouvaient écrits en clair
+                // dans idara-AAAAMMJJ.json, conservé 30 jours et relisible depuis
+                // la page SuperAdmin « Incidents et journaux ».
+                //
+                // Vérifié empiriquement le 2026-09-01 sur cette configuration
+                // exacte, pas déduit de la documentation : token, clé, code OTP et
+                // numéro tous retrouvés en clair dans le fichier.
+                //
+                // ⚠️ Ne pas remonter ce niveau sans avoir d'abord sorti les
+                // secrets de l'URL. En Warning, on garde ce qui compte (les
+                // échecs) et on perd seulement le bruit — chaque client fait déjà
+                // son propre journal métier, plus lisible.
+                .MinimumLevel.Override("System.Net.Http", LogEventLevel.Warning)
                 .Enrich.FromLogContext()
                 // C'est cet enrichisseur qui comble le « trou n°2 » : sans lui, une
                 // ligne de journal ne dit ni qui, ni quelle école, ni quelle requête.

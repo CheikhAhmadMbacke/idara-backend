@@ -404,13 +404,27 @@ namespace Idara.API.Controllers
             await _context.Classes.Where(x => x.SchoolId == id).ExecuteDeleteAsync(ct);
 
             // 4) Utilisateurs : logs de notif (audit) + sessions + tokens push puis comptes.
-            // NotificationLogs n'a pas de FK → nettoyage explicite (avant de perdre
-            // les UserId), pour ne pas laisser d'orphelins d'une école supprimée.
+            //
+            // 🔴 ANONYMISÉS, PLUS SUPPRIMÉS (2026-09-01). Ces lignes étaient
+            // effacées avec l'école ; depuis qu'elles portent le coût de chaque
+            // SMS, c'est devenu une PIÈCE COMPTABLE : les effacer creusait un
+            // trou dans le total du mois, et ce total doit pouvoir se confronter
+            // à la facture Sonatel des semaines après la suppression du daara.
+            // Un daara supprimé le 20 aurait fait « disparaître » ses SMS du 1er
+            // au 20, et l'écart avec Orange serait resté inexplicable.
+            //
+            // Le lien vers le compte est coupé (UserId, TriggerUserId, Recipient)
+            // — plus aucune donnée personnelle ne subsiste — mais SchoolId et le
+            // nom figé restent : c'est ce qu'il faut, et rien de plus, pour que
+            // la dépense reste imputable.
             await _context.NotificationLogs
                 .Where(n => n.UserId != null
                             && (_context.Users.Any(u => u.Id == n.UserId && u.SchoolId == id)
                                 || guardianIds.Contains(n.UserId.Value)))
-                .ExecuteDeleteAsync(ct);
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.UserId, (int?)null)
+                    .SetProperty(n => n.TriggerUserId, (int?)null)
+                    .SetProperty(n => n.Recipient, "[supprime]"), ct);
             await _context.RefreshTokens.Where(t => t.User!.SchoolId == id).ExecuteDeleteAsync(ct);
             await _context.PushDeviceTokens.Where(t => t.User.SchoolId == id).ExecuteDeleteAsync(ct);
             if (guardianIds.Count > 0)

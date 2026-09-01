@@ -124,86 +124,144 @@ namespace Idara.API.Services
                     .Where(sg => studentIds.Contains(sg.StudentId)
                                  && !sg.Guardian.IsDeleted
                                  && sg.Guardian.PhoneNumber != null)
-                    .Select(sg => new { sg.StudentId, sg.GuardianId, sg.Guardian.PhoneNumber, sg.Guardian.PreferredLanguage })
+                    .Select(sg => new GuardianRef(
+                        sg.StudentId, sg.GuardianId, sg.Guardian.PhoneNumber!, sg.Guardian.PreferredLanguage))
                     .ToListAsync(ct))
                 .GroupBy(g => g.StudentId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            int sent = 0;
-            foreach (var inv in overdue)
+            // Le passage à Overdue est cosmétique et indépendant du rappel : il
+            // doit avoir lieu même pour une facture déjà rappelée ou dont l'élève
+            // est sorti, sinon l'écran de l'école mentirait sur son état.
+            foreach (var inv in overdue.Where(o => o.Status == InvoiceStatus.Pending))
             {
-                // Marque la facture Overdue (cosmétique, idempotent) si encore Pending.
-                if (inv.Status == InvoiceStatus.Pending)
-                {
-                    await db.Invoices.Where(i => i.Id == inv.Id && i.Status == InvoiceStatus.Pending)
-                        .ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, InvoiceStatus.Overdue), ct);
-                }
-
-                // Dédup : une seule tentative de rappel par facture (évite la
-                // re-tentative quotidienne sans plafond si l'envoi échoue).
-                if (await notif.HasAttemptedAsync("INVOICE_OVERDUE", inv.Id, ct))
-                    continue;
-
-                if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians))
-                    continue;
-
-                // Élève absent du dictionnaire = hors effectif (sorti/supprimé) :
-                // aucun rappel automatique. Avant : repli « votre enfant » et le
-                // SMS partait quand même.
-                if (!students.TryGetValue(inv.StudentId, out var eleve))
-                    continue;
-                // Libellé dérivé du TYPE (§158) : avant le 2026-08-27, une
-                // facture d'inscription en retard était rappelée avec le mot
-                // « mensualite » — un mot faux sur un SMS d'argent.
-                var msg = inv.Type == InvoiceType.Registration
-                    ? NotificationTemplates.RegistrationOverdue(eleve, inv.Remaining)
-                    : NotificationTemplates.InvoiceOverdue(eleve, inv.Remaining);
-                foreach (var g in guardians)
-                {
-                    await notif.SendSmsAsync(new NotificationSmsRequest(
-                        UserId: g.GuardianId,
-                        RawPhone: g.PhoneNumber,
-                        PreferredLanguage: g.PreferredLanguage ?? "fr",
-                        Message: msg,
-                        Bilingual: bilingual,
-                        TemplateCode: "INVOICE_OVERDUE",
-                        RelatedEntityId: inv.Id,
-                        PushRoute: "/guardian/invoices"), ct);
-                    sent++;
-                }
+                await db.Invoices.Where(i => i.Id == inv.Id && i.Status == InvoiceStatus.Pending)
+                    .ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, InvoiceStatus.Overdue), ct);
             }
 
-            // ----- Passe « échéance proche » (une seule fois par facture) -----
-            int dueSoonSent = 0;
-            foreach (var inv in dueSoon)
-            {
-                if (await notif.HasAttemptedAsync("INVOICE_DUE_SOON", inv.Id, ct))
-                    continue;
-                if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians))
-                    continue;
-                if (!students.TryGetValue(inv.StudentId, out var eleve))
-                    continue;
-                var msg = NotificationTemplates.PaymentDueSoon(
-                    eleve, inv.Remaining, inv.DueDate, inv.Type);
-                foreach (var g in guardians)
-                {
-                    await notif.SendSmsAsync(new NotificationSmsRequest(
-                        UserId: g.GuardianId,
-                        RawPhone: g.PhoneNumber,
-                        PreferredLanguage: g.PreferredLanguage ?? "fr",
-                        Message: msg,
-                        Bilingual: bilingual,
-                        TemplateCode: "INVOICE_DUE_SOON",
-                        RelatedEntityId: inv.Id,
-                        PushRoute: "/guardian/invoices"), ct);
-                    dueSoonSent++;
-                }
-            }
+            // ================================================================
+            // Rappels GROUPÉS PAR RESPONSABLE (2026-09-01), et non plus par
+            // facture. Une famille de trois enfants recevait trois SMS
+            // identiques à trois minutes d'intervalle, facturés trois fois ;
+            // dans un daara la fratrie est la norme, donc c'était le premier
+            // poste de dépense évitable. Le groupage se fait par (responsable,
+            // TYPE de facture) : mélanger mensualité et frais d'inscription
+            // obligerait à un mot générique, et un mot faux sur un SMS d'argent
+            // se paie en appels à l'école (§158).
+            //
+            // La déduplication reste EXACTE grâce à `GroupedEntityIds` : chaque
+            // facture couverte reçoit sa ligne de registre, à coût nul.
+            // ================================================================
+            var sent = await SendGroupedAsync(
+                notif, guardiansByStudent, students, bilingual, "INVOICE_OVERDUE",
+                overdue.Select(o => (o.Id, o.StudentId, o.Type, o.Remaining, DueDate: (DateTime?)null)),
+                (type, count, total, name, _) => count == 1
+                    ? (type == InvoiceType.Registration
+                        ? NotificationTemplates.RegistrationOverdue(name!, total)
+                        : NotificationTemplates.InvoiceOverdue(name!, total))
+                    : (type == InvoiceType.Registration
+                        ? NotificationTemplates.RegistrationOverdueFamily(count, total)
+                        : NotificationTemplates.InvoiceOverdueFamily(count, total)),
+                ct);
+
+            var dueSoonSent = await SendGroupedAsync(
+                notif, guardiansByStudent, students, bilingual, "INVOICE_DUE_SOON",
+                dueSoon.Select(d => (d.Id, d.StudentId, d.Type, d.Remaining, DueDate: (DateTime?)d.DueDate)),
+                (type, count, total, name, due) => count == 1
+                    ? NotificationTemplates.PaymentDueSoon(name!, total, due!.Value, type)
+                    : NotificationTemplates.PaymentDueSoonFamily(count, total, due!.Value, type),
+                ct);
 
             _logger.LogInformation(
                 "[overdue-cron] Tick {Date:yyyy-MM-dd} : {Overdue} facture(s) en retard ({Sent} rappel(s)), {DueSoon} limite(s) proche(s) ({DueSoonSent} rappel(s))",
                 today, overdue.Count, sent, dueSoon.Count, dueSoonSent);
             return sent + dueSoonSent;
+        }
+
+        /// <summary>Responsable joignable d'un élève (type nommé et non anonyme :
+        /// il traverse une frontière de méthode).</summary>
+        private sealed record GuardianRef(
+            int StudentId, int GuardianId, string PhoneNumber, string? PreferredLanguage);
+
+        /// <summary>Une facture à rappeler, réduite à ce dont le rappel a besoin.</summary>
+        private sealed record InvoiceRef(
+            int Id, int StudentId, InvoiceType Type, long Remaining, DateTime? DueDate);
+
+        /// <summary>
+        /// Envoie UN rappel par responsable, couvrant toutes les factures de même
+        /// type qu'il doit encore régler.
+        ///
+        /// <para><b>Trois garanties, et chacune répare un défaut réel.</b>
+        /// ① La déduplication se fait facture par facture AVANT le groupage :
+        /// une facture déjà rappelée ne relance rien, et n'entraîne pas non plus
+        /// les factures de ses frères et sœurs. ② Un élève hors effectif (sorti
+        /// ou supprimé) est écarté ici, pas plus bas : le recouvrement d'une
+        /// famille partie se fait par téléphone (§159). ③ Le total annoncé est
+        /// la somme des factures RÉELLEMENT couvertes — jamais celle de toutes
+        /// les factures de la famille, ce qui ferait payer deux fois ce qui a
+        /// déjà été rappelé.</para>
+        /// </summary>
+        private static async Task<int> SendGroupedAsync(
+            INotificationService notif,
+            IReadOnlyDictionary<int, List<GuardianRef>> guardiansByStudent,
+            IReadOnlyDictionary<int, string> students,
+            bool bilingual,
+            string templateCode,
+            IEnumerable<(int Id, int StudentId, InvoiceType Type, long Remaining, DateTime? DueDate)> invoices,
+            Func<InvoiceType, int, long, string?, DateTime?, BilingualMessage> compose,
+            CancellationToken ct)
+        {
+            // (responsable, type) → factures à couvrir par un seul message.
+            var buckets = new Dictionary<(int GuardianId, InvoiceType Type), List<InvoiceRef>>();
+            var guardianById = new Dictionary<int, GuardianRef>();
+
+            foreach (var inv in invoices)
+            {
+                // Dédup PAR FACTURE, avant tout groupage.
+                if (await notif.HasAttemptedAsync(templateCode, inv.Id, ct)) continue;
+                if (!guardiansByStudent.TryGetValue(inv.StudentId, out var guardians)) continue;
+                if (!students.ContainsKey(inv.StudentId)) continue;
+
+                foreach (var g in guardians)
+                {
+                    guardianById[g.GuardianId] = g;
+                    var key = (g.GuardianId, inv.Type);
+                    if (!buckets.TryGetValue(key, out var list))
+                        buckets[key] = list = new List<InvoiceRef>();
+                    list.Add(new InvoiceRef(inv.Id, inv.StudentId, inv.Type, inv.Remaining, inv.DueDate));
+                }
+            }
+
+            var sent = 0;
+            foreach (var ((guardianId, type), list) in buckets)
+            {
+                var g = guardianById[guardianId];
+                var total = list.Sum(i => i.Remaining);
+                // Le nombre d'ENFANTS distincts, pas de factures : deux factures
+                // du même enfant ne font pas « vos 2 enfants ».
+                var childIds = list.Select(i => i.StudentId).Distinct().ToList();
+                var name = childIds.Count == 1 ? students[childIds[0]] : null;
+                // Échéance annoncée = la PLUS PROCHE du lot : c'est celle qui
+                // engage, et annoncer la plus lointaine ferait rater les autres.
+                var due = list.Where(i => i.DueDate != null).Select(i => i.DueDate!.Value)
+                    .DefaultIfEmpty().Min();
+
+                await notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: g.GuardianId,
+                    RawPhone: g.PhoneNumber,
+                    PreferredLanguage: g.PreferredLanguage ?? "fr",
+                    Message: compose(type, childIds.Count, total, name,
+                        due == default ? null : due),
+                    Bilingual: bilingual,
+                    TemplateCode: templateCode,
+                    RelatedEntityId: list[0].Id,
+                    PushRoute: "/guardian/invoices",
+                    TriggerSource: "cron:overdue-reminder",
+                    GroupedEntityIds: list.Select(i => i.Id).ToList()), ct);
+                sent++;
+            }
+
+            return sent;
         }
 
         private static DateTime NextFireUtc(DateTime nowUtc)

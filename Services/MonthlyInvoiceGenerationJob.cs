@@ -282,7 +282,9 @@ namespace Idara.API.Services
                     Bilingual: bilingual,
                     TemplateCode: "FREE_PAYMENT_DUE",
                     RelatedEntityId: schoolId,
-                    PushRoute: "/guardian/invoices"), ct);
+                    PushRoute: "/guardian/invoices",
+                    SchoolId: schoolId,
+                    TriggerSource: "cron:monthly-invoices"), ct);
                 sent++;
             }
 
@@ -410,13 +412,8 @@ namespace Idara.API.Services
                     .Where(sg => studentIds.Contains(sg.StudentId)
                                  && !sg.Guardian.IsDeleted
                                  && sg.Guardian.PhoneNumber != null)
-                    .Select(sg => new
-                    {
-                        sg.StudentId,
-                        sg.GuardianId,
-                        sg.Guardian.PhoneNumber,
-                        sg.Guardian.PreferredLanguage
-                    })
+                    .Select(sg => new GuardianRef(
+                        sg.StudentId, sg.GuardianId, sg.Guardian.PhoneNumber!, sg.Guardian.PreferredLanguage))
                     .ToListAsync(ct))
                 .GroupBy(g => g.StudentId)
                 .ToDictionary(g => g.Key, g => g.ToList());
@@ -429,6 +426,10 @@ namespace Idara.API.Services
                 db, schoolId, settings,
                 students.Select(s => new FeeTarget(s.Id, s.ClassId, s.BoardingStatus)).ToList(),
                 today, ct);
+
+            // Rappels à envoyer, regroupés par responsable : un seul SMS pour la
+            // fratrie au lieu d'un par enfant.
+            var pending = new Dictionary<int, PendingFamilySms>();
 
             // 5) Pour chaque élève, résout son montant et insère l'Invoice.
             //    INSERT individuel (pas AddRange + un seul SaveChanges) : on
@@ -473,24 +474,21 @@ namespace Idara.API.Services
                     await db.SaveChangesAsync(ct);
                     stats.Created++;
 
-                    // SMS « facture due » aux responsables joignables (best-effort,
-                    // post-commit). Uniquement sur facture NOUVELLEMENT créée — pas
-                    // sur un re-run du cron (AlreadyExisting) → pas de spam.
+                    // SMS « facture due » : COLLECTÉ ici, envoyé après la boucle,
+                    // groupé par responsable (2026-09-01). Uniquement sur facture
+                    // NOUVELLEMENT créée — pas sur un re-run du cron.
+                    //
+                    // L'envoi ne peut plus avoir lieu dans la boucle : c'est
+                    // justement parce qu'il y était qu'une famille de trois
+                    // enfants recevait trois SMS facturés au lieu d'un.
                     if (guardiansByStudent.TryGetValue(s.Id, out var guardians))
                     {
-                        var eleve = $"{s.FirstName} {s.LastName}".Trim();
-                        var msg = NotificationTemplates.InvoiceDue(eleve, amount.Value, periodeLabel);
                         foreach (var g in guardians)
                         {
-                            await notif.SendSmsAsync(new NotificationSmsRequest(
-                                UserId: g.GuardianId,
-                                RawPhone: g.PhoneNumber,
-                                PreferredLanguage: g.PreferredLanguage ?? "fr",
-                                Message: msg,
-                                Bilingual: bilingual,
-                                TemplateCode: "INVOICE_DUE",
-                                RelatedEntityId: invoice.Id,
-                                PushRoute: "/guardian/invoices"), ct);
+                            if (!pending.TryGetValue(g.GuardianId, out var bucket))
+                                pending[g.GuardianId] = bucket = new PendingFamilySms(g);
+                            bucket.Add(invoice.Id, s.Id,
+                                $"{s.FirstName} {s.LastName}".Trim(), amount.Value);
                         }
                     }
                 }
@@ -512,10 +510,71 @@ namespace Idara.API.Services
                 }
             }
 
+            // ---- Envoi GROUPÉ, après la boucle ----
+            // Hors du `try` par élève à dessein : un échec de notification ne doit
+            // pas se confondre avec un échec d'insertion de facture (§42/§57).
+            foreach (var (_, bucket) in pending)
+            {
+                await notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: bucket.Guardian.GuardianId,
+                    RawPhone: bucket.Guardian.PhoneNumber,
+                    PreferredLanguage: bucket.Guardian.PreferredLanguage ?? "fr",
+                    Message: bucket.ChildCount == 1
+                        ? NotificationTemplates.InvoiceDue(
+                            bucket.SingleChildName, bucket.Total, periodeLabel)
+                        : NotificationTemplates.InvoiceDueFamily(
+                            bucket.ChildCount, bucket.Total, periodeLabel),
+                    Bilingual: bilingual,
+                    TemplateCode: "INVOICE_DUE",
+                    RelatedEntityId: bucket.InvoiceIds[0],
+                    PushRoute: "/guardian/invoices",
+                    SchoolId: schoolId,
+                    TriggerSource: "cron:monthly-invoices",
+                    GroupedEntityIds: bucket.InvoiceIds), ct);
+            }
+
             return stats;
         }
 
         // ---- Helpers ----
+
+        /// <summary>Responsable joignable d'un élève (type nommé : il traverse
+        /// une frontière de méthode et sert de clé de groupage).</summary>
+        private sealed record GuardianRef(
+            int StudentId, int GuardianId, string PhoneNumber, string? PreferredLanguage);
+
+        /// <summary>
+        /// Les factures qu'un même responsable doit recevoir dans UN SEUL SMS.
+        ///
+        /// <para>Le nombre d'ENFANTS distincts et non de factures : deux
+        /// factures du même enfant ne font pas « vos 2 enfants ». Le total est
+        /// celui des factures réellement couvertes, jamais de toute la
+        /// famille — sans quoi le message réclamerait ce qui a déjà été
+        /// annoncé.</para>
+        /// </summary>
+        private sealed class PendingFamilySms
+        {
+            public PendingFamilySms(GuardianRef guardian) => Guardian = guardian;
+
+            public GuardianRef Guardian { get; }
+            public List<int> InvoiceIds { get; } = new();
+            public long Total { get; private set; }
+
+            private readonly Dictionary<int, string> _children = new();
+
+            public int ChildCount => _children.Count;
+
+            /// <summary>Nom de l'unique enfant (n'a de sens qu'à
+            /// <see cref="ChildCount"/> == 1, seul cas où l'appelant l'utilise).</summary>
+            public string SingleChildName => _children.Values.First();
+
+            public void Add(int invoiceId, int studentId, string studentName, long amount)
+            {
+                InvoiceIds.Add(invoiceId);
+                _children[studentId] = studentName;
+                Total += amount;
+            }
+        }
 
         private static DateTime NextFireUtc(DateTime nowUtc)
         {

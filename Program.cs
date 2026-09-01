@@ -66,6 +66,7 @@ builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(Sen
 builder.Services.Configure<OrangeSmsSettings>(builder.Configuration.GetSection(OrangeSmsSettings.SectionName));
 builder.Services.Configure<FcmSettings>(builder.Configuration.GetSection(FcmSettings.SectionName));
 builder.Services.Configure<AppDistributionSettings>(builder.Configuration.GetSection(AppDistributionSettings.SectionName));
+builder.Services.Configure<OpsAlertSettings>(builder.Configuration.GetSection(OpsAlertSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException("Section 'Jwt' manquante dans la configuration.");
@@ -161,6 +162,23 @@ builder.Services.AddScoped<ICashPaymentService, CashPaymentService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
 builder.Services.AddScoped<IPricingPageService, PricingPageService>();
 builder.Services.AddScoped<Idara.API.Services.Notifications.INotificationService, Idara.API.Services.Notifications.NotificationService>();
+
+// ---------- Garde-fou de depense SMS (2026-09-01) ----------
+// Consulte AVANT chaque SMS, au point de passage unique qu'est
+// NotificationService. Ses compteurs sont DERIVES du registre NotificationLog
+// (jamais d'une table de totaux) : une seule verite, et des plafonds
+// insensibles aux redemarrages — contrairement aux compteurs memoire, qui
+// repartaient a zero a chaque deploiement (§92).
+builder.Services.AddScoped<Idara.API.Services.Notifications.ISmsBudgetGuard,
+    Idara.API.Services.Notifications.SmsBudgetGuard>();
+
+// ---------- Alertes d'exploitation ----------
+// Depense SMS qui derape, retrait en echec, anomalie de decaissement : c'est ce
+// service qui les fait SORTIR de la base pour arriver dans une boite mail.
+// Jusqu'ici, PayoutAlert s'ecrivait depuis des mois sans que personne ne le lise.
+// Singleton : il travaille en tache de fond, avec son propre perimetre d'injection.
+builder.Services.AddSingleton<Idara.API.Services.Alerts.IOpsAlertService,
+    Idara.API.Services.Alerts.OpsAlertService>();
 
 // ---------- Observabilité (lot 1) ----------
 // Destination des incidents remontés par l'application. Derrière une interface

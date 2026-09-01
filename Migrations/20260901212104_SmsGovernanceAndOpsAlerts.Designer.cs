@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260901212104_SmsGovernanceAndOpsAlerts")]
+    partial class SmsGovernanceAndOpsAlerts
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2340,49 +2343,6 @@ namespace Idara.API.Migrations
                     b.HasKey("SchoolId");
 
                     b.ToTable("SchoolWallets");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.SmsProviderInvoice", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<long>("AmountHtFcfa")
-                        .HasColumnType("bigint");
-
-                    b.Property<long>("AmountTtcFcfa")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("Month")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Note")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("ProviderQuantity")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("RecordedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RecordedById")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Year")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Year", "Month")
-                        .IsUnique();
-
-                    b.ToTable("SmsProviderInvoices");
                 });
 
             modelBuilder.Entity("Idara.API.Models.StaffAttendance", b =>

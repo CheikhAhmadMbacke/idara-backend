@@ -387,7 +387,9 @@ namespace Idara.API.Services
                             Bilingual: platform.SmsBilingual,
                             TemplateCode: "REGISTRATION_DUE",
                             RelatedEntityId: registrationInvoice.Id,
-                            PushRoute: "/guardian/invoices"));
+                            PushRoute: "/guardian/invoices",
+                            SchoolId: student.SchoolId,
+                            TriggerSource: "api:students/create"));
                     }
                 }
                 catch (Exception ex)

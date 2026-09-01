@@ -58,6 +58,23 @@ namespace Idara.API.Services
             if (string.IsNullOrWhiteSpace(message))
                 return new SmsSendResult(false, Error: "Empty message");
 
+            // 🔒 DERNIER VERROU sur la destination, ici et pas seulement chez
+            // l'appelant. `NotificationService` normalise déjà (et rejette tout
+            // ce qui n'est pas un mobile sénégalais), et `SmsBudgetGuard` le
+            // revérifie — mais cette méthode est PUBLIQUE sur une interface :
+            // le jour où un nouveau code appellera ISmsService directement, il
+            // contournera les deux. Un SMS international coûte 40,35 F contre
+            // 3,50 (onze fois le prix) et c'est exactement ce que cherche la
+            // fraude au SMS pumping. Le fournisseur est le dernier endroit par
+            // où tout passe : c'est donc ici que le verrou doit aussi exister.
+            if (!Common.Utilities.SmsSegmentCalculator.IsSenegalMobileE164(toE164))
+            {
+                _logger.LogError(
+                    "[orange-sms] REFUS destination hors Senegal to={To} — envoi bloque",
+                    MaskPhone(toE164));
+                return new SmsSendResult(false, Error: "Recipient outside Senegal");
+            }
+
             // "+221771234567" → "221771234567" (le + est refusé, erreur 110).
             var recipient = toE164.Trim().TrimStart('+');
             var startedAt = DateTime.UtcNow;

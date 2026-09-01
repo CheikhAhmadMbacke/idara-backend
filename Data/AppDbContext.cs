@@ -92,6 +92,12 @@ namespace Idara.API.Data
         // ----- Observabilité (lot 1) -----
         public DbSet<ClientIncident> ClientIncidents { get; set; }
 
+        // ----- Alertes d'exploitation (dépense SMS, échecs de retrait) -----
+        public DbSet<OpsAlert> OpsAlerts { get; set; }
+
+        // ----- Factures SMS du fournisseur, saisies pour confrontation -----
+        public DbSet<SmsProviderInvoice> SmsProviderInvoices { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -181,6 +187,33 @@ namespace Idara.API.Data
                 .HasIndex(n => new { n.TemplateCode, n.RelatedEntityId });
             modelBuilder.Entity<NotificationLog>()
                 .HasIndex(n => n.CreatedAt);
+
+            // --- NotificationLog : index du GARDE-FOU et de la FACTURATION ---
+            // Ces deux index ne sont pas du confort : le registre est interrogé
+            // AVANT CHAQUE SMS (plafonds école, plafond destinataire). Sans eux,
+            // le dispositif anti-abus ferait un balayage complet de la table à
+            // chaque envoi et deviendrait lui-même le problème.
+            modelBuilder.Entity<NotificationLog>()
+                .HasIndex(n => new { n.SchoolId, n.CreatedAt });
+            modelBuilder.Entity<NotificationLog>()
+                .HasIndex(n => new { n.Recipient, n.CreatedAt });
+
+            // --- SmsProviderInvoice : une seule facture par mois ---
+            // L'unicité n'est pas cosmétique : deux lignes pour le même mois
+            // feraient afficher deux écarts contradictoires, et on ne saurait
+            // pas lequel croire.
+            modelBuilder.Entity<SmsProviderInvoice>()
+                .HasIndex(i => new { i.Year, i.Month })
+                .IsUnique();
+
+            // --- OpsAlert (alertes d'exploitation, append-only) ---
+            // Vue back-office : non résolues, récentes d'abord.
+            modelBuilder.Entity<OpsAlert>()
+                .HasIndex(a => new { a.Resolved, a.CreatedAt });
+            // Regroupement : « ce défaut a-t-il déjà donné lieu à un e-mail dans
+            // la fenêtre ? » — requêté à CHAQUE alerte levée.
+            modelBuilder.Entity<OpsAlert>()
+                .HasIndex(a => new { a.GroupingKey, a.EmailedAt });
 
             // --- PushDeviceToken : token unique (réaffectable), index par user ---
             modelBuilder.Entity<PushDeviceToken>()

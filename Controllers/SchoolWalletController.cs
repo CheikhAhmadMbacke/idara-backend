@@ -549,17 +549,16 @@ namespace Idara.API.Controllers
         /// insuffisant, erreur gateway 5xx) à partir du message d'erreur SenePay,
         /// pour afficher un message honnête plutôt que d'accuser les coordonnées.
         /// </summary>
-        private static bool IsTemporaryPayoutOutage(string? reason)
-        {
-            if (string.IsNullOrEmpty(reason)) return false;
-            return reason.Contains("insufficient", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("balance", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("indisponible", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("502", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("503", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("504", StringComparison.OrdinalIgnoreCase);
-        }
+        /// <summary>
+        /// Délègue à <see cref="Common.Utilities.PayoutFailureClassifier"/>
+        /// (2026-09-01). La logique vivait ici en propre ; depuis que l'alerte
+        /// e-mail doit classer le MÊME motif pour décider de son urgence et de
+        /// son conseil, deux copies auraient fini par se contredire — l'école
+        /// lisant « coordonnées invalides » pendant que l'e-mail dirait
+        /// « réserve à sec ».
+        /// </summary>
+        private static bool IsTemporaryPayoutOutage(string? reason) =>
+            Common.Utilities.PayoutFailureClassifier.IsTemporaryOutage(reason);
 
         /// <summary>
         /// Filtres communs à la LISTE et à l'EXPORT des transferts : masqués

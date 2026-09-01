@@ -638,7 +638,10 @@ namespace Idara.API.Controllers
                             Bilingual: platform.SmsBilingual,
                             TemplateCode: "REGISTRATION_DUE",
                             RelatedEntityId: invoice.Id,
-                            PushRoute: "/guardian/invoices"), ct);
+                            PushRoute: "/guardian/invoices",
+                            SchoolId: schoolId,
+                            TriggerSource: "api:fees/registration-invoice",
+                            TriggerUserId: User.GetUserId()), ct);
                     }
                 }
             }
@@ -1207,7 +1210,10 @@ namespace Idara.API.Controllers
                             Bilingual: platform.SmsBilingual,
                             TemplateCode: "CASH_PAYMENT_CANCELLED",
                             RelatedEntityId: result.Payment.Id,
-                            PushRoute: "/guardian/invoices"), ct);
+                            PushRoute: "/guardian/invoices",
+                            SchoolId: schoolId,
+                            TriggerSource: "api:fees/cash-cancel",
+                            TriggerUserId: User.GetUserId()), ct);
                     }
                 }
                 catch (Exception ex)
@@ -1309,7 +1315,9 @@ namespace Idara.API.Controllers
                     Bilingual: platform.SmsBilingual,
                     TemplateCode: "PAYMENT_RECEIVED",
                     RelatedEntityId: payment.Id,
-                    PushRoute: "/guardian/invoices"), ct);
+                    PushRoute: "/guardian/invoices",
+                    SchoolId: payment.SchoolId,
+                    TriggerSource: "api:fees/cash-payment"), ct);
             }
             catch (Exception ex)
             {

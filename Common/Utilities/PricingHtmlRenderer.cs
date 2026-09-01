@@ -180,12 +180,17 @@ namespace Idara.API.Common.Utilities
                 sb.Append("</p>\n");
             }
 
-            // Les DEUX quotas, toujours : c'est la tranche d'élèves qui dit à un
-            // directeur si la formule lui convient.
-            sb.Append("<ul class=\"quotas\">\n<li>").Append(StudentRange(p, ar)).Append("</li>\n");
-            sb.Append("<li>").Append(ar
-                ? $"{Money(p.NotificationQuota)} إشعار في الشهر"
-                : $"{Money(p.NotificationQuota)} notifications / mois").Append("</li>\n</ul>\n");
+            // La tranche d'élèves, et elle seule : c'est ce qui dit à un directeur
+            // si la formule lui convient.
+            //
+            // Le quota de notifications a été RETIRÉ le 2026-09-01 (décision
+            // produit) : les SMS sont inclus dans le produit et ne se vendent pas
+            // au détail. L'afficher promettait un décompte que rien ne tenait —
+            // il n'a jamais été appliqué nulle part — et posait au lecteur une
+            // question sans réponse : que se passe-t-il quand il est atteint ?
+            // Les garde-fous anti-abus demeurent, mais internes et calés sur
+            // l'effectif réel, jamais sur le plan souscrit.
+            sb.Append("<ul class=\"quotas\">\n<li>").Append(StudentRange(p, ar)).Append("</li>\n</ul>\n");
 
             if (p.Features.Count > 0)
             {

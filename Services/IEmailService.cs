@@ -12,5 +12,11 @@ namespace Idara.API.Services
         /// problème. Toujours en français (destinataire interne).
         /// </summary>
         Task SendIncidentAlertEmailAsync(string toEmail, DTOs.Observability.IncidentAlertEmail alert);
+
+        /// <summary>
+        /// Alerte d'exploitation au SuperAdmin : dépense SMS qui dérape, retrait
+        /// en échec, anomalie de décaissement. Toujours en français.
+        /// </summary>
+        Task SendOpsAlertEmailAsync(string toEmail, DTOs.Alerts.OpsAlertEmail alert);
     }
 }

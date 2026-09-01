@@ -63,6 +63,35 @@ namespace Idara.API.Models
         /// <summary>Image de couverture de la carte d'accueil. Prioritaire sur CoverColor si renseignée.</summary>
         public string? CoverImageUrl { get; set; }
 
+        // ----- Garde-fou SMS (2026-09-01) -----
+
+        /// <summary>
+        /// Relève ponctuellement le plafond SMS mensuel de CETTE école, en
+        /// segments. NULL (défaut) = plafond calculé sur l'effectif.
+        ///
+        /// <para>Indispensable pour que le garde-fou reste vivable : une rentrée
+        /// où l'école crée trois cents comptes d'un coup est légitime et sortira
+        /// du plafond ordinaire. Sans cette soupape, la seule issue serait de
+        /// relever le plafond de TOUTES les écoles — c'est-à-dire de désarmer le
+        /// dispositif pour tout le monde à cause d'une seule.</para>
+        /// </summary>
+        public int? SmsMonthlyCapOverrideSegments { get; set; }
+
+        /// <summary>
+        /// Suspend tous les SMS non critiques de CETTE école. Posé
+        /// automatiquement quand un emballement est détecté, retiré à la main
+        /// par le SuperAdmin une fois la cause comprise. Les codes de connexion
+        /// et les identifiants continuent de partir : on isole l'école, on ne
+        /// l'enferme pas dehors.
+        /// </summary>
+        public bool SmsSuspended { get; set; }
+
+        /// <summary>Motif et date de la suspension, pour que l'écran dise POURQUOI
+        /// une école ne notifie plus.</summary>
+        public string? SmsSuspendedReason { get; set; }
+
+        public DateTime? SmsSuspendedAt { get; set; }
+
         public ICollection<User> Users { get; set; } = new List<User>();
     }
 }

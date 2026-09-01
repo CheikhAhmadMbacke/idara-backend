@@ -16,13 +16,16 @@ namespace Idara.API.Services
     {
         private readonly AppDbContext _context;
         private readonly INotificationService _notif;
+        private readonly Alerts.IOpsAlertService _alerts;
         private readonly ILogger<PayoutSettlementService> _logger;
 
         public PayoutSettlementService(
-            AppDbContext context, INotificationService notif, ILogger<PayoutSettlementService> logger)
+            AppDbContext context, INotificationService notif,
+            Alerts.IOpsAlertService alerts, ILogger<PayoutSettlementService> logger)
         {
             _context = context;
             _notif = notif;
+            _alerts = alerts;
             _logger = logger;
         }
 
@@ -104,7 +107,9 @@ namespace Idara.API.Services
                     Bilingual: user == null || platform.SmsBilingual,
                     TemplateCode: "TRANSFER_RECEIVED",
                     RelatedEntityId: withdrawal.Id,
-                    PushRoute: "/my-transfers"), ct);
+                    PushRoute: "/my-transfers",
+                    SchoolId: withdrawal.SchoolId,
+                    TriggerSource: "settle:payout"), ct);
             }
             catch (Exception ex)
             {
@@ -330,6 +335,11 @@ namespace Idara.API.Services
                     await NotifyAdminsAsync(withdrawal.SchoolId!.Value,
                         NotificationTemplates.WithdrawalFailed(withdrawal.AmountFcfa),
                         "WITHDRAWAL_FAILED", withdrawal.Id);
+                    // L'ECOLE etait prevenue, PAS TOI. Un retrait qui echoue
+                    // parce que la reserve du prestataire est a sec fait echouer
+                    // TOUS les retraits de TOUTES les ecoles, et jusqu'ici on ne
+                    // l'apprenait que par l'appel d'un directeur (§111).
+                    await AlertWithdrawalFailedAsync(withdrawal, reason, source, ct);
                     return PayoutSettlementOutcome.Restituted;
                 }
 
@@ -488,6 +498,7 @@ namespace Idara.API.Services
                     _logger.LogInformation(
                         "[payout-settle] Retrait PLATEFORME {Id} → Failed (source={Source}, raison={Reason})",
                         withdrawal.Id, source, Truncate(reason, 120));
+                    await AlertWithdrawalFailedAsync(withdrawal, reason, source, ct);
                     return PayoutSettlementOutcome.Restituted;
 
                 case WithdrawalStatus.Completed:
@@ -549,6 +560,112 @@ namespace Idara.API.Services
             _logger.LogCritical(
                 "[ALERT][payout] {Type} school={School} withdrawal={Withdrawal} — {Message}",
                 type, schoolId, withdrawalId, message);
+
+            // Ces alertes s'ecrivaient en base et dans le journal depuis des
+            // MOIS sans que personne ne les lise : ni ecran, ni e-mail. Une
+            // double depense corrigee ou une reconciliation rompue merite mieux
+            // qu'une ligne de journalctl que rien ne fait remonter.
+            var schoolName = schoolId == null ? null : await _context.Schools.AsNoTracking()
+                .Where(x => x.Id == schoolId.Value).Select(x => x.Name)
+                .FirstOrDefaultAsync(ct);
+
+            _alerts.Queue(new Alerts.OpsAlertRequest(
+                type == PayoutAlertType.StuckUnderVerification
+                    ? Enums.OpsAlertKind.WithdrawalStuck
+                    : Enums.OpsAlertKind.PayoutAnomaly,
+                GroupingKey: $"payout-{type}-{withdrawalId?.ToString() ?? "global"}",
+                Subject: $"Decaissement — {type}",
+                Facts: new[]
+                {
+                    new Alerts.AlertFact("Ecole", schoolName ?? (schoolId == null
+                        ? "plateforme" : $"#{schoolId}")),
+                    new Alerts.AlertFact("Retrait", withdrawalId == null
+                        ? "-" : IdaraReference.Withdrawal(withdrawalId.Value)),
+                    new Alerts.AlertFact("Nature", type.ToString()),
+                    new Alerts.AlertFact("Detail", Truncate(message, 900)),
+                },
+                Advice: type switch
+                {
+                    PayoutAlertType.StuckUnderVerification =>
+                        "Interroger le prestataire sur l'etat reel de ce decaissement. Les fonds "
+                        + "restent reserves cote ecole tant que ce n'est pas tranche : ne rien "
+                        + "restituer a la main sans preuve.",
+                    PayoutAlertType.CorrectionImpossible =>
+                        "Le solde de l'ecole ne permet pas de re-debiter : il y a une dette a "
+                        + "regulariser manuellement. A traiter en priorite, l'ecart grandit a "
+                        + "chaque mouvement.",
+                    PayoutAlertType.ReconciliationMismatch =>
+                        "L'identite R = D + P est rompue. Comparer la reserve du prestataire aux "
+                        + "soldes des ecoles avant tout nouveau retrait de gains.",
+                    _ => "Verification manuelle requise : l'argent et les ecritures ne disent pas "
+                       + "la meme chose.",
+                },
+                SchoolId: schoolId,
+                RelatedId: withdrawalId));
+        }
+
+        /// <summary>
+        /// Prévient par e-mail qu'un retrait a échoué, avec la cause CLASSÉE.
+        ///
+        /// <para>Le classement décide de tout : une réserve de décaissement à sec
+        /// est urgente et n'appelle aucune action de l'école, un numéro invalide
+        /// se règle par un appel. Le regroupement se fait par CAUSE et non par
+        /// retrait : quand la réserve est vide, dix écoles échouent en quelques
+        /// minutes et dix e-mails identiques feraient perdre le onzième.</para>
+        /// </summary>
+        private async Task AlertWithdrawalFailedAsync(
+            Withdrawal withdrawal, string reason, string source, CancellationToken ct)
+        {
+            try
+            {
+                var cause = PayoutFailureClassifier.Classify(reason);
+                var schoolName = withdrawal.SchoolId == null
+                    ? "Plateforme (gains)"
+                    : await _context.Schools.AsNoTracking()
+                        .Where(x => x.Id == withdrawal.SchoolId.Value).Select(x => x.Name)
+                        .FirstOrDefaultAsync(ct) ?? $"#{withdrawal.SchoolId}";
+
+                _alerts.Queue(new Alerts.OpsAlertRequest(
+                    cause == PayoutFailureCause.ProviderOutage
+                        ? Enums.OpsAlertKind.WithdrawalProviderOutage
+                        : Enums.OpsAlertKind.WithdrawalFailed,
+                    // Regroupe par CAUSE quand le prestataire est en cause (un
+                    // seul e-mail pour toutes les ecoles touchees), par RETRAIT
+                    // sinon (chaque cas est particulier et se traite seul).
+                    GroupingKey: cause == PayoutFailureCause.ProviderOutage
+                        ? "withdrawal-provider-outage"
+                        : $"withdrawal-failed-{withdrawal.Id}",
+                    Subject: cause == PayoutFailureCause.ProviderOutage
+                        ? "Retrait impossible — le prestataire ne peut pas decaisser"
+                        : $"Retrait echoue — {schoolName}",
+                    Facts: new[]
+                    {
+                        new Alerts.AlertFact("Ecole", schoolName ?? "-"),
+                        new Alerts.AlertFact("Montant",
+                            withdrawal.AmountFcfa.ToString("N0",
+                                System.Globalization.CultureInfo.InvariantCulture)
+                                .Replace(",", " ") + " FCFA"),
+                        new Alerts.AlertFact("Beneficiaire",
+                            withdrawal.RecipientName + " · "
+                            + SenegalPhone.ToDisplay(withdrawal.RecipientPhone, "-")),
+                        new Alerts.AlertFact("Operateur", withdrawal.Operator.ToString()),
+                        new Alerts.AlertFact("Reference", IdaraReference.Withdrawal(withdrawal.Id)),
+                        new Alerts.AlertFact("Cause", PayoutFailureClassifier.Label(cause)),
+                        new Alerts.AlertFact("Motif brut", Truncate(reason, 400)),
+                        new Alerts.AlertFact("Detecte par", source),
+                    },
+                    Advice: PayoutFailureClassifier.Advice(cause),
+                    SchoolId: withdrawal.SchoolId,
+                    RelatedId: withdrawal.Id));
+            }
+            catch (Exception ex)
+            {
+                // Une alerte ratee ne doit jamais aggraver un retrait deja en
+                // echec : le retrait est regle, sa restitution est committee.
+                _logger.LogError(ex,
+                    "[payout-settle] Alerte e-mail impossible pour le retrait {Id} — pas bloquant",
+                    withdrawal.Id);
+            }
         }
 
         // --- Helpers ---
