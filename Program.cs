@@ -150,8 +150,24 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
-// Import en masse : reutilise IStudentService, ne le duplique pas.
+// Création d'un compte par une école : source unique, partagée par le
+// formulaire d'invitation ET l'import en masse du personnel.
+builder.Services.AddScoped<IUserInvitationService, UserInvitationService>();
+// Import en masse : reutilise IStudentService / IUserInvitationService, ne les
+// duplique pas.
 builder.Services.AddScoped<IStudentImportService, StudentImportService>();
+builder.Services.AddScoped<IStaffImportService, StaffImportService>();
+// Lecture d'un cahier photographie. Le service vision NE CREE PAS un second
+// chemin d'import : il remplace seulement le lecteur de fichier, et rend un
+// SheetTable que l'import existant analyse sans changement.
+builder.Services.Configure<Idara.API.Options.VisionSettings>(
+    builder.Configuration.GetSection(Idara.API.Options.VisionSettings.SectionName));
+builder.Services.AddSingleton<Idara.API.Services.Vision.IDocumentVisionService,
+    Idara.API.Services.Vision.DocumentVisionService>();
+builder.Services.AddScoped<Idara.API.Services.Vision.IOcrBudgetGuard,
+    Idara.API.Services.Vision.OcrBudgetGuard>();
+builder.Services.AddScoped<Idara.API.Services.Vision.IPhotoImportService,
+    Idara.API.Services.Vision.PhotoImportService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();

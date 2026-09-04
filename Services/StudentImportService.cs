@@ -1,10 +1,12 @@
 using System.Text.Json;
 using ClosedXML.Excel;
+using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.DTOs.Student;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 namespace Idara.API.Services
@@ -13,6 +15,19 @@ namespace Idara.API.Services
     {
         Task<byte[]> BuildTemplateAsync(int schoolId, CancellationToken ct);
         Task<ImportBatch> AnalyzeAsync(int schoolId, int userId, byte[] file, string fileName, CancellationToken ct);
+
+        /// <summary>
+        /// Analyse un tableau DÉJÀ LU, quelle qu'en soit l'origine.
+        ///
+        /// <para>C'est le point de couture qui permet à l'import par photo
+        /// d'exister sans créer un second chemin : la lecture d'un cahier par
+        /// l'IA produit un <see cref="SheetTable"/>, exactement comme la lecture
+        /// d'un .xlsx, et tout l'aval est partagé. Un élève photographié et un
+        /// élève importé d'Excel ne peuvent donc pas diverger.</para>
+        /// </summary>
+        Task<ImportBatch> AnalyzeTableAsync(
+            int schoolId, int userId, SheetTable table, string sourceName, CancellationToken ct);
+
         Task<ImportBatch> CommitAsync(int schoolId, int userId, int batchId, bool sendSms, CancellationToken ct);
     }
 
@@ -35,13 +50,15 @@ namespace Idara.API.Services
     {
         private readonly AppDbContext _context;
         private readonly IStudentService _students;
+        private readonly INotificationService _notif;
         private readonly ILogger<StudentImportService> _logger;
 
         public StudentImportService(AppDbContext context, IStudentService students,
-            ILogger<StudentImportService> logger)
+            INotificationService notif, ILogger<StudentImportService> logger)
         {
             _context = context;
             _students = students;
+            _notif = notif;
             _logger = logger;
         }
 
@@ -69,13 +86,11 @@ namespace Idara.API.Services
             // --- Feuille 1 : les données. En PREMIER, parce que c'est celle
             // qu'Excel ouvre — l'école ne doit pas avoir à chercher.
             var ws = wb.AddWorksheet("Élèves");
-            string[] headers =
-            {
-                "Prénom", "Nom", "Classe", "Date de naissance", "Sexe", "Régime",
-                "Tarif", "Frais d'inscription", "Prénom du responsable",
-                "Nom du responsable", "Téléphone du responsable", "Lien de parenté",
-                "Adresse", "Remarques",
-            };
+            // Source UNIQUE : les mêmes colonnes servent d'en-tête au modèle et
+            // de consigne à l'IA qui lit un cahier photographié. Les recopier
+            // ici aurait garanti qu'un jour l'IA produise une colonne que ce
+            // modèle ignore, sans que rien ne le signale (§140).
+            var headers = ImportColumns.Students;
             for (int i = 0; i < headers.Length; i++)
             {
                 var cell = ws.Cell(1, i + 1);
@@ -178,6 +193,12 @@ namespace Idara.API.Services
                     "Aucune colonne « Prénom » ni « Nom » n'a été trouvée. Utilisez le modèle "
                     + "à télécharger : c'est la première ligne du fichier qui donne les colonnes.");
 
+            return await AnalyzeTableAsync(schoolId, userId, table, fileName, ct);
+        }
+
+        public async Task<ImportBatch> AnalyzeTableAsync(
+            int schoolId, int userId, SheetTable table, string sourceName, CancellationToken ct)
+        {
             var rows = StudentImportParser.Parse(table);
 
             // --- Élèves DÉJÀ présents. On ne les écrase pas (décision produit) :
@@ -232,7 +253,7 @@ namespace Idara.API.Services
                 SchoolId = schoolId,
                 CreatedById = userId,
                 Kind = ImportKind.Students,
-                FileName = fileName.Length > 200 ? fileName[..200] : fileName,
+                FileName = sourceName.Length > 200 ? sourceName[..200] : sourceName,
                 Status = ImportBatchStatus.Analyzed,
                 RowsJson = JsonSerializer.Serialize(payload),
                 TotalRows = rows.Count,
@@ -306,6 +327,12 @@ namespace Idara.API.Services
 
             int createdStudents = 0, createdGuardians = 0;
             var credentials = new List<object>();
+            // Les mêmes identifiants, sous forme typée, pour l'envoi SMS
+            // éventuel. La liste ci-dessus reste faite d'objets anonymes parce
+            // que sa forme JSON (« name », « phone », « code ») est LUE PAR
+            // L'APPLI : la typer changerait la casse des clés et casserait le
+            // modal récap en silence (§140).
+            var newGuardians = new List<DTOs.Common.UserCredentialDto>();
             var failures = new List<string>();
 
             foreach (var e in toCreate)
@@ -365,6 +392,7 @@ namespace Idara.API.Services
                     foreach (var c in created.NewGuardianCredentials ?? new())
                     {
                         createdGuardians++;
+                        newGuardians.Add(c);
                         credentials.Add(new
                         {
                             student = $"{dto.FirstName} {dto.LastName}".Trim(),
@@ -406,7 +434,62 @@ namespace Idara.API.Services
                 + "{Guardians} responsable(s) créé(s) ; {Failed} échec(s)",
                 schoolId, createdStudents, createdClasses, createdGuardians, failures.Count);
 
+            // SMS des identifiants aux responsables créés. POST-COMMIT et
+            // best-effort (§42/§90) : les élèves sont enregistrés, un SMS qui ne
+            // part pas ne doit pas faire croire à un import raté.
+            //
+            // ⚠️ Avant le 2026-09-02, ce paramètre était accepté, transmis… et
+            // jamais utilisé. L'école cochait « envoyer les identifiants », on
+            // lui annonçait le nombre de SMS, et rien ne partait.
+            if (sendSms && newGuardians.Count > 0)
+                await SendCredentialsAsync(schoolId, userId, newGuardians, ct);
+
             return batch;
+        }
+
+        /// <summary>
+        /// Envoie à chaque responsable créé son code d'accès. Ne lève jamais.
+        /// Le garde-fou de dépense (§191) tranche envoi par envoi — on ne
+        /// cherche pas à le devancer ici.
+        /// </summary>
+        private async Task SendCredentialsAsync(
+            int schoolId, int triggerUserId,
+            List<DTOs.Common.UserCredentialDto> credentials, CancellationToken ct)
+        {
+            var platform = await _context.GetPlatformSettingsAsync();
+            int sent = 0;
+
+            foreach (var c in credentials)
+            {
+                if (!c.CanLogin || string.IsNullOrWhiteSpace(c.Code)
+                    || string.IsNullOrWhiteSpace(c.Phone)) continue;
+                try
+                {
+                    // La langue est décidée par NotificationService (règle d'or) :
+                    // un destinataire jamais connecté reçoit le bilingue.
+                    var ok = await _notif.SendSmsAsync(new NotificationSmsRequest(
+                        UserId: c.UserId,
+                        RawPhone: c.Phone,
+                        PreferredLanguage: "fr",
+                        Message: NotificationTemplates.CredentialsSms(c.FullName, c.Phone, c.Code),
+                        Bilingual: platform.SmsBilingual,
+                        TemplateCode: "CREDENTIALS_SMS",
+                        RelatedEntityId: c.UserId,
+                        SchoolId: schoolId,
+                        TriggerSource: "api:import/students/commit",
+                        TriggerUserId: triggerUserId), ct);
+                    if (ok) sent++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[import] SMS d'identifiants non envoyé à {UserId}", c.UserId);
+                }
+            }
+
+            _logger.LogInformation(
+                "[import] École {SchoolId} : {Sent}/{Total} SMS d'identifiants envoyés",
+                schoolId, sent, credentials.Count);
         }
 
         // ---- petits accesseurs JSON, tolérants aux valeurs absentes ----

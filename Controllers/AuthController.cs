@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -28,6 +28,7 @@ namespace Idara.API.Controllers
         private readonly IWebHostEnvironment _environment;
         private readonly IEmailService _emailService;
         private readonly INotificationService _notif;
+        private readonly IUserInvitationService _invitations;
         private readonly IMemoryCache _cache;
         private readonly UploadSettings _uploads;
         private readonly ILogger<AuthController> _logger;
@@ -40,6 +41,7 @@ namespace Idara.API.Controllers
             IWebHostEnvironment environment,
             IEmailService emailService,
             INotificationService notif,
+            IUserInvitationService invitations,
             IMemoryCache cache,
             IOptions<UploadSettings> uploads,
             ILogger<AuthController> logger)
@@ -51,6 +53,7 @@ namespace Idara.API.Controllers
             _environment = environment;
             _emailService = emailService;
             _notif = notif;
+            _invitations = invitations;
             _cache = cache;
             _uploads = uploads.Value;
             _logger = logger;
@@ -698,116 +701,35 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
-            var currentUser = await _context.Users.Include(u => u.School).FirstOrDefaultAsync(u => u.Id == userId);
-            if (currentUser?.School == null)
+            var currentUser = await _context.Users.Include(u => u.School)
+                .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+            if (currentUser == null)
                 return BadRequest(ApiResponse<bool>.Fail("École non trouvée pour cet utilisateur."));
 
-            if (currentUser.School.KycStatus != KycStatus.Validated)
-                return BadRequest(ApiResponse<bool>.Fail("L'école doit être validée pour ajouter des utilisateurs."));
-
-            if (currentUser.AccountStatus != AccountStatus.Active)
-                return BadRequest(ApiResponse<bool>.Fail("Votre compte doit être actif pour ajouter des utilisateurs."));
-
-            // Validation spécifique Guardian : l'élève doit appartenir à l'école.
-            if (request.Function == UserRoles.Guardian)
+            // Toutes les règles (KYC, unicité du numéro, code à 6 chiffres,
+            // statut et langue hérités) vivent dans IUserInvitationService :
+            // l'import en masse du personnel les applique à l'identique.
+            try
             {
-                if (!request.StudentId.HasValue)
-                    return BadRequest(ApiResponse<bool>.Fail("StudentId requis pour inviter un Guardian."));
+                var cred = await _invitations.InviteAsync(currentUser, new InviteUserCommand(
+                    FullName: request.FullName,
+                    PhoneNumber: request.PhoneNumber,
+                    Function: request.Function,
+                    Email: request.Email,
+                    CanLogin: request.CanLogin,
+                    JobTitle: request.JobTitle,
+                    StudentId: request.StudentId,
+                    Relationship: request.Relationship,
+                    IsPrimaryGuardian: request.IsPrimaryGuardian));
 
-                var studentOk = await _context.Students.AnyAsync(s =>
-                    s.Id == request.StudentId.Value
-                    && s.SchoolId == currentUser.SchoolId
-                    && !s.IsDeleted);
-                if (!studentOk)
-                    return BadRequest(ApiResponse<bool>.Fail("Élève introuvable dans votre école."));
+                return Ok(ApiResponse<UserCredentialDto>.Ok(cred, cred.CanLogin
+                    ? "Utilisateur ajouté."
+                    : "Personnel ajouté (sans accès à l'application)."));
             }
-
-            var phone = SenegalPhone.Normalize(request.PhoneNumber);
-            if (phone == null)
-                return BadRequest(ApiResponse<bool>.Fail("Numéro de téléphone invalide."));
-            if (await _context.Users.AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted))
-                return BadRequest(ApiResponse<bool>.Fail("Ce numéro est déjà utilisé."));
-
-            var email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim().ToLowerInvariant();
-            if (email != null && await _context.Users.AnyAsync(u => u.Email == email && !u.IsDeleted))
-                return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
-
-            // Code à 6 chiffres = mot de passe initial (non-expirant), envoyé par
-            // SMS. L'utilisateur se connecte avec son numéro + ce code, puis
-            // pourra le changer dans l'app.
-            var code = SixDigitCode();
-
-            var invitedStatus = request.Function == UserRoles.Guardian
-                ? AccountStatus.Active
-                : (currentUser.AccountStatus == AccountStatus.Active ? AccountStatus.Active : AccountStatus.Inactive);
-
-            // Un Guardian n'est pas attaché à une école (multi-école possible).
-            int? newUserSchoolId = request.Function == UserRoles.Guardian ? null : currentUser.SchoolId;
-
-            // Personnel « sans appli » : pas de connexion → on n'envoie aucun code
-            // et le mot de passe est aléatoire (jamais utilisable).
-            var canLogin = request.CanLogin || request.Function == UserRoles.Guardian
-                || request.Function == UserRoles.SchoolViewer;
-
-            var newUser = new User
+            catch (InviteRejectedException ex)
             {
-                Email = email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(canLogin ? code : Guid.NewGuid().ToString("N")),
-                Role = request.Function,
-                CanLogin = canLogin,
-                JobTitle = string.IsNullOrWhiteSpace(request.JobTitle) ? null : request.JobTitle.Trim(),
-                IsEmailVerified = true,
-                AccountStatus = invitedStatus,
-                SchoolId = newUserSchoolId,
-                FullName = request.FullName,
-                PhoneNumber = phone,
-                CreatedAt = DateTime.UtcNow,
-                // Hérite de la langue de celui qui invite (env. culturellement homogène).
-                PreferredLanguage = currentUser.PreferredLanguage,
-            };
-            _context.Users.Add(newUser);
-            await _context.SaveChangesAsync();
-
-            // Liaison Guardian ↔ Student (l'invite n'a de sens que liée à un enfant).
-            if (request.Function == UserRoles.Guardian && request.StudentId.HasValue)
-            {
-                _context.StudentGuardians.Add(new StudentGuardian
-                {
-                    StudentId = request.StudentId.Value,
-                    GuardianId = newUser.Id,
-                    Relationship = request.Relationship ?? string.Empty,
-                    IsPrimaryGuardian = request.IsPrimaryGuardian
-                });
-                await _context.SaveChangesAsync();
+                return BadRequest(ApiResponse<bool>.Fail(ex.Message));
             }
-
-            // Compte sans appli : aucun identifiant à communiquer, aucun SMS.
-            if (!canLogin)
-            {
-                return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
-                {
-                    FullName = request.FullName,
-                    Phone = phone,
-                    CanLogin = false,
-                }, "Personnel ajouté (sans accès à l'application)."));
-            }
-
-            // Message prêt à partager pour le modal récap (Copier / WhatsApp /
-            // SMS). AUCUN envoi automatique ici (décision produit 2026-08-18) :
-            // le SMS ne part que si l'école appuie sur le bouton « SMS » du modal
-            // (endpoint credentials-sms ci-dessous) — le choix du canal lui
-            // appartient, comme avant.
-            var messageText = NotificationTemplates.CredentialShare(request.FullName, phone, code);
-
-            return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
-            {
-                UserId = newUser.Id,
-                FullName = request.FullName,
-                Phone = phone,
-                Code = code,
-                Message = messageText,
-                CanLogin = true,
-            }, "Utilisateur ajouté."));
         }
 
         /// <summary>

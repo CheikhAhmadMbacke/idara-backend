@@ -205,6 +205,69 @@ namespace Idara.API.Models
         /// </remarks>
         public DateTime? QuranSubjectsRetypedAt { get; set; }
 
+        // ============================================================
+        //  📷 Import par PHOTO (lecture d'un cahier par l'IA)
+        // ============================================================
+        //
+        // Décision produit du 2026-09-02 : la lecture d'un cahier est INCLUSE,
+        // jamais facturée séparément et jamais réservée à un palier
+        // d'abonnement — le coût suit l'effectif, donc il suit déjà le plan
+        // (~2 % d'un mois, quel que soit le plan). Ce qui est borné, c'est le
+        // VOLUME, pas le prix : le danger n'est pas 50 F la page, c'est
+        // 4 000 pages. Même leçon que le §191.
+        //
+        // ⚠️ Ces colonnes sont ajoutées à une ligne SINGLETON DÉJÀ EXISTANTE :
+        // la migration DOIT les semer explicitement (§193), sinon la ligne
+        // héritée de juin recevrait 0 partout et l'import photo serait coupé
+        // pour tout le monde dès le premier démarrage.
+
+        /// <summary>
+        /// Interrupteur général. <c>false</c> = l'écran photo disparaît et
+        /// l'endpoint refuse. À couper si le fournisseur est indisponible ou si
+        /// la dépense dérape, sans redéploiement.
+        /// </summary>
+        public bool OcrEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Pages offertes à une école, une fois pour toutes. 30 pages ≈ 750
+        /// élèves : assez pour couvrir le premier import ET le refaire deux
+        /// fois. Exposition maximale ≈ 1 500 FCFA par école — le prix d'un
+        /// prospect dont on a déjà validé le dossier.
+        /// </summary>
+        public int OcrBaseAllowancePages { get; set; } = 30;
+
+        /// <summary>
+        /// Pages acceptées en UN envoi. Les pages partent dans une seule requête
+        /// (le modèle voit l'en-tête une fois et garde la disposition) — mais
+        /// une requête sans borne est une facture sans borne.
+        /// </summary>
+        public int OcrMaxPagesPerRequest { get; set; } = 12;
+
+        /// <summary>
+        /// Plafond de dépense QUOTIDIEN, toutes écoles confondues. C'est ce
+        /// plafond-là qui protège d'un bug ou d'une boucle — le quota par école
+        /// ne le fait pas. Dérivé du registre, jamais d'un compteur stocké.
+        /// </summary>
+        public long OcrDailyPlatformCapFcfa { get; set; } = 25000;
+
+        /// <summary>
+        /// Échecs consécutifs tolérés pour une école avant de la couper. Un
+        /// échec ne consomme pas son quota (elle n'a rien reçu) — sans ce
+        /// garde-fou, une boucle d'échecs dépenserait sans jamais buter sur le
+        /// quota.
+        /// </summary>
+        public int OcrMaxConsecutiveFailures { get; set; } = 5;
+
+        /// <summary>
+        /// Prix du million de tokens d'ENTRÉE, en centimes de FCFA. Réglable
+        /// sans redéploiement : c'est un tarif fournisseur, il changera.
+        /// Opus 5 : 5 $/M ≈ 3 035 FCFA/M ≈ 303 500 centimes.
+        /// </summary>
+        public long OcrInputPriceCentimesPerMTok { get; set; } = 303500;
+
+        /// <summary>Prix du million de tokens de SORTIE. Opus 5 : 25 $/M ≈ 15 175 FCFA/M.</summary>
+        public long OcrOutputPriceCentimesPerMTok { get; set; } = 1517500;
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>

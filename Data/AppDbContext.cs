@@ -82,6 +82,16 @@ namespace Idara.API.Data
         // Imports en masse (fichiers Excel/CSV deposes par les ecoles).
         public DbSet<ImportBatch> ImportBatches { get; set; }
 
+        /// <summary>
+        /// Registre des lectures de cahier par l'IA. C'est de LUI que se
+        /// dérivent le quota d'une école et la dépense du jour — jamais d'un
+        /// compteur stocké (§191).
+        /// </summary>
+        public DbSet<OcrJob> OcrJobs { get; set; }
+
+        /// <summary>Pages accordées à une école en plus de son quota de base.</summary>
+        public DbSet<OcrPageGrant> OcrPageGrants { get; set; }
+
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
@@ -158,6 +168,29 @@ namespace Idara.API.Data
                 .HasOne(b => b.School)
                 .WithMany()
                 .HasForeignKey(b => b.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // --- Registre des lectures de cahier par l'IA -----------------
+            // Index sur (SchoolId, CreatedAt) : le quota d'une ecole s'y lit.
+            // Index sur CreatedAt seul : la depense du JOUR, toutes ecoles
+            // confondues, s'y lit — c'est le plafond qui protege d'une boucle,
+            // et il est evalue AVANT chaque appel payant.
+            modelBuilder.Entity<OcrJob>()
+                .HasIndex(j => new { j.SchoolId, j.CreatedAt });
+            modelBuilder.Entity<OcrJob>()
+                .HasIndex(j => j.CreatedAt);
+            modelBuilder.Entity<OcrJob>()
+                .HasOne(j => j.School)
+                .WithMany()
+                .HasForeignKey(j => j.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<OcrPageGrant>()
+                .HasIndex(g => g.SchoolId);
+            modelBuilder.Entity<OcrPageGrant>()
+                .HasOne(g => g.School)
+                .WithMany()
+                .HasForeignKey(g => g.SchoolId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<TranslationProposal>()

@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260902134347_ImportBatchCreatedUsers")]
+    partial class ImportBatchCreatedUsers
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1395,106 +1398,6 @@ namespace Idara.API.Migrations
                     b.ToTable("NotificationLogs");
                 });
 
-            modelBuilder.Entity("Idara.API.Models.OcrJob", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("BlockedReason")
-                        .HasColumnType("text");
-
-                    b.Property<int>("ChargedPages")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("CostCentimes")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("CreatedById")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("DurationMs")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Error")
-                        .HasColumnType("text");
-
-                    b.Property<int>("ExtractedRows")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("ImportBatchId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("InputTokens")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Kind")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("OutputTokens")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PageCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("SchoolId")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("Success")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("UncertainCells")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedAt");
-
-                    b.HasIndex("SchoolId", "CreatedAt");
-
-                    b.ToTable("OcrJobs");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.OcrPageGrant", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("GrantedByUserId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Pages")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("SchoolId")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SchoolId");
-
-                    b.ToTable("OcrPageGrants");
-                });
-
             modelBuilder.Entity("Idara.API.Models.OpsAlert", b =>
                 {
                     b.Property<int>("Id")
@@ -1896,27 +1799,6 @@ namespace Idara.API.Migrations
                         .HasColumnType("bigint");
 
                     b.Property<long>("MinWithdrawalFcfa")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("OcrBaseAllowancePages")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("OcrDailyPlatformCapFcfa")
-                        .HasColumnType("bigint");
-
-                    b.Property<bool>("OcrEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<long>("OcrInputPriceCentimesPerMTok")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("OcrMaxConsecutiveFailures")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("OcrMaxPagesPerRequest")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("OcrOutputPriceCentimesPerMTok")
                         .HasColumnType("bigint");
 
                     b.Property<double>("ParentFeePercent")
@@ -4020,28 +3902,6 @@ namespace Idara.API.Migrations
                         .IsRequired();
 
                     b.Navigation("Student");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.OcrJob", b =>
-                {
-                    b.HasOne("Idara.API.Models.School", "School")
-                        .WithMany()
-                        .HasForeignKey("SchoolId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("School");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.OcrPageGrant", b =>
-                {
-                    b.HasOne("Idara.API.Models.School", "School")
-                        .WithMany()
-                        .HasForeignKey("SchoolId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("School");
                 });
 
             modelBuilder.Entity("Idara.API.Models.Payment", b =>

@@ -47,6 +47,17 @@ namespace Idara.API.Models
         public int CreatedClasses { get; set; }
         public int CreatedGuardians { get; set; }
 
+        /// <summary>
+        /// Comptes de personnel créés (<see cref="ImportKind.Staff"/>).
+        /// Colonne à part plutôt que réemploi de <see cref="CreatedStudents"/> :
+        /// un compteur qui ment sur ce qu'il compte finit toujours par être lu
+        /// de travers. Vaut 0 pour un import d'élèves, et pour les lots
+        /// antérieurs à l'ajout de la colonne — ce qui est exact dans les deux
+        /// cas (aucun personnel n'y a été créé), contrairement au piège du §193
+        /// où un zéro par défaut coupait un service.
+        /// </summary>
+        public int CreatedUsers { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? CommittedAt { get; set; }
 
