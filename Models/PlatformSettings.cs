@@ -46,6 +46,20 @@ namespace Idara.API.Models
         /// </summary>
         public long MaxDonationFcfa { get; set; } = 2_000_000;
 
+        /// <summary>
+        /// Image d'illustration de la page d'accueil publique, remplaçable
+        /// depuis le back-office (chemin relatif <c>/uploads/landing/…</c>).
+        /// </summary>
+        /// <remarks>
+        /// Elle était en dur dans l'application (<c>assets/images/daara.jpg</c>) :
+        /// la changer imposait une nouvelle version, donc une mise à jour à tous
+        /// les utilisateurs pour une photo — exactement ce qu'on cherche à éviter
+        /// ([[feedback_minimize_user_updates]]). <c>null</c> = on garde l'image
+        /// livrée avec l'application, qui reste le repli si le serveur est
+        /// injoignable.
+        /// </remarks>
+        public string? LandingHeroImagePath { get; set; }
+
         /// <summary>Majoration appliquée au parent quand FeesPayer=Parent (8 = +8 %).</summary>
         public double ParentFeePercent { get; set; } = 8.0;
 
