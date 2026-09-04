@@ -46,6 +46,26 @@ namespace Idara.API.DTOs.Auth
         /// </summary>
         public SchoolType? SchoolType { get; set; }
 
+        /// <summary>
+        /// Logo de l'établissement, en base64 (préfixe <c>data:</c> accepté).
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Facultatif, et il doit le rester.</b> Bloquer une inscription
+        /// pour une image serait absurde — l'école peut toujours le poser plus
+        /// tard depuis la personnalisation de son espace.</para>
+        /// <para><b>Pourquoi le demander ICI.</b> Le logo n'est pas décoratif :
+        /// il apparaît sur les reçus PDF, les bulletins, l'en-tête de l'espace,
+        /// la page publique de paiement et celle des collectes de dons. Le
+        /// réclamer au KYC, c'est le récupérer au seul moment où l'école remplit
+        /// un formulaire d'identité de bout en bout — au lieu d'espérer qu'elle
+        /// trouve, des semaines plus tard, un écran de réglages qu'elle
+        /// n'ouvrira jamais.</para>
+        /// <para>⚠️ <b>Null = inchangé</b> à la re-soumission d'un KYC rejeté :
+        /// une application antérieure à ce champ ne doit pas effacer un logo
+        /// déjà posé (§140).</para>
+        /// </remarks>
+        public string? LogoBase64 { get; set; }
+
         public List<string> LegalDocumentsBase64 { get; set; } = new();
         public List<string> LegalDocumentsNames { get; set; } = new();
         public List<string> RepresentativeDocumentsBase64 { get; set; } = new();

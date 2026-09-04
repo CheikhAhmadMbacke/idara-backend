@@ -439,6 +439,18 @@ namespace Idara.API.Controllers
             var legalUrls = await SaveBase64FilesAsync(request.LegalDocumentsBase64, request.LegalDocumentsNames, "legal");
             var repUrls = await SaveBase64FilesAsync(request.RepresentativeDocumentsBase64, request.RepresentativeDocumentsNames, "representative");
 
+            // Le logo va dans le MÊME dossier que celui posé depuis la
+            // personnalisation de l'espace : une seule source, un seul chemin,
+            // et rien à réconcilier le jour où l'école le remplace (§199).
+            string? logoUrl = null;
+            if (!string.IsNullOrWhiteSpace(request.LogoBase64))
+            {
+                logoUrl = await SaveSchoolLogoAsync(request.LogoBase64!);
+                if (logoUrl == null)
+                    return BadRequest(ApiResponse<bool>.Fail(
+                        $"Logo invalide ou trop lourd (JPEG/PNG/WEBP, {_uploads.MaxPhotoSizeMb} Mo maximum)."));
+            }
+
             if (user.School != null)
             {
                 if (user.School.KycStatus != KycStatus.Rejected)
@@ -455,6 +467,9 @@ namespace Idara.API.Controllers
                 user.School.RepresentativeIdDocumentUrl = repUrls.Any() ? string.Join(",", repUrls) : user.School.RepresentativeIdDocumentUrl;
                 // NULL = inchangé : une app antérieure au champ ne l'efface pas (§140).
                 if (request.SchoolType.HasValue) user.School.Type = request.SchoolType.Value;
+                // Logo absent = on garde celui déjà posé. Une application
+                // antérieure à ce champ ne doit pas l'effacer en resoumettant.
+                if (logoUrl != null) user.School.LogoUrl = logoUrl;
                 user.School.KycStatus = KycStatus.Submitted;
                 user.School.SubmittedAt = DateTime.UtcNow;
                 user.School.RejectionReason = null;
@@ -474,6 +489,7 @@ namespace Idara.API.Controllers
                 RepresentativeLastName = request.RepLastName,
                 RepresentativePhone = request.RepPhone,
                 RepresentativeIdDocumentUrl = repUrls.Any() ? string.Join(",", repUrls) : null,
+                LogoUrl = logoUrl,
                 Type = request.SchoolType,
                 CreatedAt = DateTime.UtcNow,
                 SubmittedAt = DateTime.UtcNow
@@ -1045,6 +1061,30 @@ namespace Idara.API.Controllers
         /// (data URI) et magic-bytes. Lève <see cref="InvalidOperationException"/>
         /// en cas de dépassement — transformé en HTTP 400 par GlobalExceptionMiddleware.
         /// </summary>
+        /// <summary>
+        /// Enregistre le logo de l'établissement dans <c>/uploads/school-branding/</c>.
+        /// </summary>
+        /// <remarks>
+        /// Même dossier et mêmes règles que le logo posé depuis la
+        /// personnalisation de l'espace : c'est le MÊME champ
+        /// (<c>School.LogoUrl</c>) qui est alimenté, pas un doublon. Bornes
+        /// d'une PHOTO et non d'un document — un logo est une image, un PDF n'en
+        /// est pas un.
+        /// Renvoie <c>null</c> si l'image est invalide ou trop lourde.
+        /// </remarks>
+        private async Task<string?> SaveSchoolLogoAsync(string base64)
+        {
+            var decoded = FileUploadValidator.DecodeAndValidate(
+                base64, _uploads.MaxPhotoSizeMb, _uploads.AllowedPhotoMimeTypes);
+            if (decoded == null) return null;
+
+            var folder = Path.Combine(_environment.WebRootPath, "uploads", "school-branding");
+            Directory.CreateDirectory(folder);
+            var fileName = $"{Guid.NewGuid():N}{decoded.Extension}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(folder, fileName), decoded.Bytes);
+            return $"/uploads/school-branding/{fileName}";
+        }
+
         private async Task<List<string>> SaveBase64FilesAsync(List<string> base64List, List<string> fileNames, string subFolder)
         {
             var savedUrls = new List<string>();

@@ -55,8 +55,23 @@ namespace Idara.API.Common.Utilities
             if (!System.Linq.Enumerable.Contains(allowedMimeTypes, contentType, System.StringComparer.OrdinalIgnoreCase))
                 return null;
 
+            // 🔴 C'est le CONTENU qui décide, jamais la déclaration du client.
+            //
+            // Le défaut corrigé le 2026-09-04 : on ne rejetait que si la
+            // signature était reconnue ET contredisait le type annoncé. Un
+            // contenu SANS signature — donc n'importe quoi — passait dès lors
+            // que le client déclarait « image/png », et atterrissait dans
+            // /uploads/, servi publiquement par nginx sans authentification
+            // (§122). Le fichier n'était alors pas ce qu'il prétendait être :
+            // au mieux une image cassée sur tous les reçus et en-têtes de
+            // l'école, sans que rien ne dise pourquoi.
+            //
+            // Les cinq types acceptés (JPEG, PNG, GIF, WEBP, PDF) portent TOUS
+            // une signature universelle : exiger qu'elle soit reconnue ne
+            // refuse aucun fichier légitime.
             var sniffed = SniffMimeFromBytes(bytes);
-            if (sniffed != null && !MimeMatchesFamily(contentType, sniffed)) return null;
+            if (sniffed == null) return null;
+            if (!MimeMatchesFamily(contentType, sniffed)) return null;
 
             var finalExt = MimeToExtension(contentType) ?? ext ?? ".bin";
             return new Decoded(bytes, finalExt, contentType);
