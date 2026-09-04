@@ -49,6 +49,77 @@ namespace Idara.API.Controllers
         /// plateforme (tarifs, plafonds SMS, coupe-circuit) n'a rien à faire
         /// dans une réponse publique.
         /// </remarks>
+        /// <summary>
+        /// `GET /api/platform-settings/legal` — les mentions légales affichées
+        /// sur les deux documents juridiques.
+        /// </summary>
+        [HttpGet("legal")]
+        public async Task<ActionResult<ApiResponse<LegalMentionsDto>>> GetLegal(CancellationToken ct)
+        {
+            var s = await _context.GetPlatformSettingsAsync(ct);
+            return Ok(ApiResponse<LegalMentionsDto>.Ok(new LegalMentionsDto
+            {
+                CompanyName = s.LegalCompanyName,
+                Form = s.LegalForm,
+                Ninea = s.LegalNinea,
+                Rccm = s.LegalRccm,
+                Address = s.LegalAddress,
+                Representative = s.LegalRepresentative,
+                CdpNumber = s.LegalCdpNumber,
+                ContactEmail = s.LegalContactEmail,
+                ContactPhone = s.LegalContactPhone,
+                Version = s.LegalVersion
+            }));
+        }
+
+        /// <summary>
+        /// `PUT /api/platform-settings/legal` — mettre à jour les mentions.
+        /// </summary>
+        /// <remarks>
+        /// Chaque champ est appliqué tel quel, vide compris : ici, effacer une
+        /// mention est une action légitime (une information erronée doit pouvoir
+        /// disparaître de la page, et une valeur vide est simplement omise au
+        /// rendu). Seule la VERSION résiste au vide : sans elle, les
+        /// acceptations horodatées ne prouveraient plus rien.
+        /// </remarks>
+        [HttpPut("legal")]
+        public async Task<ActionResult<ApiResponse<LegalMentionsDto>>> UpdateLegal(
+            [FromBody] LegalMentionsDto dto, CancellationToken ct)
+        {
+            var s = await _context.GetPlatformSettingsAsync(ct);
+            static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+            s.LegalCompanyName = Clean(dto.CompanyName);
+            s.LegalForm = Clean(dto.Form);
+            s.LegalNinea = Clean(dto.Ninea);
+            s.LegalRccm = Clean(dto.Rccm);
+            s.LegalAddress = Clean(dto.Address);
+            s.LegalRepresentative = Clean(dto.Representative);
+            s.LegalCdpNumber = Clean(dto.CdpNumber);
+            s.LegalContactEmail = Clean(dto.ContactEmail);
+            s.LegalContactPhone = Clean(dto.ContactPhone);
+            if (!string.IsNullOrWhiteSpace(dto.Version))
+                s.LegalVersion = dto.Version!.Trim();
+
+            s.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+            _logger.LogInformation("[platform] Mentions légales mises à jour (version {Version})", s.LegalVersion);
+
+            return Ok(ApiResponse<LegalMentionsDto>.Ok(new LegalMentionsDto
+            {
+                CompanyName = s.LegalCompanyName,
+                Form = s.LegalForm,
+                Ninea = s.LegalNinea,
+                Rccm = s.LegalRccm,
+                Address = s.LegalAddress,
+                Representative = s.LegalRepresentative,
+                CdpNumber = s.LegalCdpNumber,
+                ContactEmail = s.LegalContactEmail,
+                ContactPhone = s.LegalContactPhone,
+                Version = s.LegalVersion
+            }, "Mentions légales enregistrées."));
+        }
+
         [HttpGet("landing-image")]
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<LandingImageDto>>> GetLandingImage(
@@ -178,5 +249,20 @@ namespace Idara.API.Controllers
 
         /// <summary>`true` = revenir à l'image livrée avec l'application.</summary>
         public bool Remove { get; set; }
+    }
+
+    /// <summary>Mentions affichées en tête des deux documents juridiques.</summary>
+    public class LegalMentionsDto
+    {
+        public string? CompanyName { get; set; }
+        public string? Form { get; set; }
+        public string? Ninea { get; set; }
+        public string? Rccm { get; set; }
+        public string? Address { get; set; }
+        public string? Representative { get; set; }
+        public string? CdpNumber { get; set; }
+        public string? ContactEmail { get; set; }
+        public string? ContactPhone { get; set; }
+        public string? Version { get; set; }
     }
 }

@@ -144,6 +144,13 @@ namespace Idara.API.Controllers
                 AccountStatus = AccountStatus.Inactive,
                 CreatedAt = DateTime.UtcNow,
                 LastLoginAt = DateTime.UtcNow,
+                // Trace de l'acceptation des documents juridiques. Le formulaire
+                // d'inscription porte la mention et les deux liens : c'est le
+                // seul parcours où quelqu'un accepte EXPLICITEMENT, et la
+                // version acceptée est celle en vigueur à cet instant — pas une
+                // constante du code, qui mentirait dès la première révision.
+                AcceptedLegalAt = DateTime.UtcNow,
+                AcceptedLegalVersion = (await _context.GetPlatformSettingsAsync()).LegalVersion,
                 PreferredLanguage = !string.IsNullOrWhiteSpace(request.PreferredLanguage)
                     ? request.PreferredLanguage!
                     : HttpContext.GetPreferredLanguage(),

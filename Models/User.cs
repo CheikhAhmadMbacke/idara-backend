@@ -50,6 +50,26 @@ namespace Idara.API.Models
         public DateTime? LastLoginAt { get; set; }
 
         /// <summary>
+        /// Date à laquelle cet utilisateur a accepté les documents juridiques,
+        /// et VERSION acceptée.
+        /// </summary>
+        /// <remarks>
+        /// <para>Les deux vont ensemble : savoir que quelqu'un a accepté « les
+        /// conditions » sans savoir LESQUELLES ne prouve rien le jour où elles
+        /// changent.</para>
+        /// <para><b>Null n'est pas un oubli, c'est la vérité.</b> Un compte créé
+        /// par son école — enseignant, parent, personnel — n'a jamais vu de
+        /// formulaire d'inscription : il n'a rien accepté explicitement, et le
+        /// prétendre en pré-remplissant ce champ fabriquerait une preuve fausse.
+        /// Pour ces comptes, ce sont les conditions elles-mêmes qui prévoient que
+        /// l'usage du service vaut acceptation.</para>
+        /// </remarks>
+        public DateTime? AcceptedLegalAt { get; set; }
+
+        /// <summary>Version des documents acceptée (ex. « 2026-09 »). Null si jamais accepté explicitement.</summary>
+        public string? AcceptedLegalVersion { get; set; }
+
+        /// <summary>
         /// Langue préférée pour les emails et notifications.
         /// Codes ISO 2 lettres : "fr" (défaut) ou "ar".
         /// </summary>

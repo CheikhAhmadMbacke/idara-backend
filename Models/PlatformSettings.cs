@@ -60,6 +60,56 @@ namespace Idara.API.Models
         /// </remarks>
         public string? LandingHeroImagePath { get; set; }
 
+        // ================================================================
+        // ===== Mentions légales (2026-09-04) =====
+        //
+        // Elles vivent en base, pas dans le code : une mention légale qui
+        // demande un redéploiement pour être corrigée finit par rester fausse.
+        // Toutes nullables — les pages juridiques se rendent SANS elles, en
+        // omettant simplement la ligne concernée plutôt qu'en affichant un
+        // libellé vide ou, pire, une valeur inventée.
+        // ================================================================
+
+        /// <summary>Raison sociale exacte de l'éditeur.</summary>
+        public string? LegalCompanyName { get; set; }
+
+        /// <summary>Forme juridique (SUARL, SARL, entreprise individuelle…).</summary>
+        public string? LegalForm { get; set; }
+
+        /// <summary>Numéro d'identification nationale des entreprises (NINEA).</summary>
+        public string? LegalNinea { get; set; }
+
+        /// <summary>Registre du commerce et du crédit mobilier.</summary>
+        public string? LegalRccm { get; set; }
+
+        /// <summary>Adresse du siège social.</summary>
+        public string? LegalAddress { get; set; }
+
+        /// <summary>Représentant légal (nom et qualité).</summary>
+        public string? LegalRepresentative { get; set; }
+
+        /// <summary>
+        /// Numéro de récépissé de déclaration à la Commission de protection des
+        /// données personnelles (loi sénégalaise 2008-12).
+        /// </summary>
+        public string? LegalCdpNumber { get; set; }
+
+        /// <summary>Adresse de contact pour les questions juridiques et les droits.</summary>
+        public string? LegalContactEmail { get; set; }
+
+        /// <summary>Téléphone de contact affiché sur les pages juridiques.</summary>
+        public string? LegalContactPhone { get; set; }
+
+        /// <summary>
+        /// Version des documents juridiques en vigueur (ex. « 2026-09 »).
+        /// </summary>
+        /// <remarks>
+        /// C'est elle qu'on horodate à l'acceptation : sans version, on sait
+        /// qu'un utilisateur a accepté « les conditions », mais pas LESQUELLES —
+        /// ce qui ne prouve rien le jour où elles changent.
+        /// </remarks>
+        public string LegalVersion { get; set; } = "2026-09";
+
         /// <summary>Majoration appliquée au parent quand FeesPayer=Parent (8 = +8 %).</summary>
         public double ParentFeePercent { get; set; } = 8.0;
 

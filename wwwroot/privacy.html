@@ -4,102 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Politique de confidentialité — Idara</title>
+<link rel="canonical" href="https://api.idara.sn/confidentialite">
+<meta http-equiv="refresh" content="0; url=/confidentialite">
+<meta name="robots" content="noindex, follow">
 <style>
-  :root { --green:#0B744D; --text:#0F172A; --muted:#475569; --border:#E2E8F0; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:var(--text); line-height:1.6; background:#fff; }
-  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
-  header { border-bottom:3px solid var(--green); padding-bottom:16px; margin-bottom:24px; }
-  h1 { color:var(--green); margin:0 0 4px; font-size:26px; }
-  .updated { color:var(--muted); font-size:14px; }
-  h2 { color:var(--green); font-size:19px; margin-top:32px; }
-  h3 { font-size:16px; margin-top:20px; }
-  a { color:var(--green); }
-  ul { padding-left:20px; }
-  .box { background:#F8FAFC; border:1px solid var(--border); border-radius:10px; padding:14px 18px; }
-  footer { margin-top:48px; padding-top:16px; border-top:1px solid var(--border); color:var(--muted); font-size:13px; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+         color:#0F172A; background:#fff; display:grid; place-items:center; min-height:100vh; }
+  .box { max-width:520px; padding:32px 24px; text-align:center; }
+  h1 { color:#0B744D; font-size:22px; margin:0 0 10px; }
+  p { color:#475569; line-height:1.6; }
+  a { color:#0B744D; font-weight:600; }
 </style>
 </head>
 <body>
-<div class="wrap">
-<header>
-  <h1>Politique de confidentialité — Idara</h1>
-  <div class="updated">Dernière mise à jour : 11 juin 2026</div>
-</header>
+<!--
+  ⚠️ NE PAS SUPPRIMER CE FICHIER.
 
-<p>La présente politique décrit comment l'application et la plateforme <strong>Idara</strong>, éditées par <strong>Pyranil Solution</strong> (« nous »), collectent, utilisent et protègent les données personnelles dans le cadre de la gestion d'écoles coraniques (daara) au Sénégal.</p>
+  Cette adresse (/privacy.html) est celle DÉCLARÉE À LA PLAY CONSOLE et à nos
+  prestataires. La casser ferait échouer une validation déjà obtenue.
 
+  Depuis le 2026-09-04, la politique de confidentialité est rendue par le
+  serveur à /confidentialite : ses mentions légales viennent de la base, donc
+  une correction ne demande plus de redéploiement. Ce fichier n'est plus qu'une
+  redirection — le contenu vit désormais dans LegalHtmlRenderer.
+
+  Et il doit rester un FICHIER : le déploiement recopie wwwroot sans effacer,
+  si bien qu'un fichier retiré du dépôt continuerait d'exister sur le serveur
+  et masquerait la route du contrôleur (les fichiers statiques passent avant
+  le routage).
+-->
 <div class="box">
-<strong>En bref :</strong> Idara est un outil de gestion scolaire utilisé par les écoles. Les données des élèves sont saisies par l'école (administrateurs, personnel, enseignants) pour le suivi pédagogique et administratif. Les parents accèdent au suivi de leur(s) enfant(s) et peuvent payer les frais en ligne. Nous ne vendons jamais vos données.
-</div>
-
-<h2>1. Responsable du traitement</h2>
-<p>Pyranil Solution, éditeur de la marque et de l'application Idara. Contact : <a href="mailto:contact.pyranil@gmail.com">contact.pyranil@gmail.com</a>.</p>
-
-<h2>2. Données que nous collectons</h2>
-<h3>Comptes utilisateurs</h3>
-<ul>
-  <li>Administrateurs et personnel d'école : nom, adresse e-mail, numéro de téléphone, mot de passe (stocké chiffré).</li>
-  <li>Enseignants et parents/responsables : nom, numéro de téléphone (identifiant de connexion), e-mail facultatif.</li>
-</ul>
-<h3>Données scolaires (saisies par l'école)</h3>
-<ul>
-  <li>Élèves : identité, date et lieu de naissance, photo facultative, adresse, informations de scolarité, données de santé facultatives (allergies, contacts d'urgence), documents joints.</li>
-  <li>Suivi pédagogique : présences, notes, progression coranique, journal quotidien, bulletins.</li>
-</ul>
-<h3>Paiements</h3>
-<ul>
-  <li>Lorsqu'un parent paie des frais ou qu'une école effectue un retrait, le traitement du paiement est assuré par notre prestataire <strong>SenePay</strong> (Wave, Orange Money). Nous conservons le montant, la date, le statut et une référence de transaction. Nous ne stockons aucun code PIN ni identifiant bancaire.</li>
-</ul>
-<h3>Notifications</h3>
-<ul>
-  <li>Pour envoyer des notifications (paiement reçu, suivi de l'enfant), nous utilisons <strong>Firebase Cloud Messaging</strong> (Google) et, le cas échéant, des SMS. Un identifiant d'appareil (jeton de notification) peut être enregistré.</li>
-</ul>
-<h3>Données techniques</h3>
-<ul>
-  <li>Journaux techniques minimaux nécessaires au fonctionnement et à la sécurité (horodatage, type de requête). L'application ne contient pas de publicité ni de pistage marketing.</li>
-  <li><strong>En cas de problème uniquement</strong> — si l'application rencontre une erreur, ou si vous appuyez sur « Signaler un problème » — une fiche technique nous est envoyée pour nous permettre de corriger le défaut. Elle contient : l'écran où vous vous trouviez, l'enchaînement des écrans et des actions qui précèdent, la version de l'application, le modèle de votre appareil et le message d'erreur. <strong>Elle ne contient jamais ce que vous avez saisi</strong> (aucun texte tapé, aucun mot de passe), ni le nom ni la photo d'un élève. Un écran y figure sous forme d'adresse technique (par exemple <em>/eleves/427</em>) et non sous forme de nom.</li>
-  <li>Ces fiches techniques sont conservées <strong>30 jours</strong>, puis supprimées automatiquement. Aucune fiche n'est envoyée lorsque tout fonctionne normalement.</li>
-</ul>
-
-<h2>3. Finalités et bases légales</h2>
-<ul>
-  <li>Fournir le service de gestion scolaire (exécution du service demandé par l'école).</li>
-  <li>Permettre aux parents le suivi de leur enfant et le paiement des frais.</li>
-  <li>Envoyer des notifications utiles liées au compte et à la scolarité.</li>
-  <li>Assurer la sécurité, prévenir la fraude et respecter nos obligations légales.</li>
-</ul>
-
-<h2>4. Partage des données</h2>
-<p>Nous partageons des données uniquement avec :</p>
-<ul>
-  <li><strong>SenePay</strong> — traitement des paiements en ligne.</li>
-  <li><strong>Google (Firebase)</strong> — envoi des notifications push.</li>
-  <li><strong>Hébergeur (Hetzner, Union européenne)</strong> — hébergement sécurisé des serveurs.</li>
-</ul>
-<p>Nous ne vendons ni ne louons vos données personnelles à des tiers à des fins publicitaires.</p>
-
-<h2>5. Conservation</h2>
-<p>Les données sont conservées tant que le compte de l'école est actif et pour la durée nécessaire au suivi scolaire et aux obligations légales (notamment comptables pour les paiements). À la suppression d'un compte, les données sont effacées ou anonymisées, sauf obligation légale de conservation.</p>
-
-<h2>6. Vos droits</h2>
-<p>Conformément à la loi sénégalaise sur les données personnelles (CDP) et aux standards internationaux, vous disposez d'un droit d'accès, de rectification, de suppression et d'opposition. Les parents peuvent demander l'accès ou la rectification des données de leur enfant via l'école ou en nous écrivant. Pour exercer vos droits : <a href="mailto:contact.pyranil@gmail.com">contact.pyranil@gmail.com</a>.</p>
-
-<h2>7. Données des mineurs</h2>
-<p>Idara est destiné aux écoles et aux adultes (personnel, enseignants, parents). Les données des élèves mineurs sont saisies et gérées par l'école dans le cadre de sa mission éducative, sous sa responsabilité, et accessibles aux parents/responsables liés à l'élève. L'application n'est pas destinée à être utilisée directement par des enfants.</p>
-
-<h2>8. Sécurité</h2>
-<p>Nous appliquons des mesures de sécurité : connexions chiffrées (HTTPS), mots de passe stockés chiffrés (hachage), accès restreint par rôle et par école, serveurs durcis et sauvegardes régulières.</p>
-
-<h2>9. Modifications</h2>
-<p>Cette politique peut être mise à jour. La date de dernière mise à jour figure en haut de cette page.</p>
-
-<h2>10. Contact</h2>
-<p>Pour toute question relative à cette politique ou à vos données : <a href="mailto:contact.pyranil@gmail.com">contact.pyranil@gmail.com</a>.</p>
-
-<footer>
-  Idara — édité par Pyranil Solution. Plateforme de gestion d'écoles coraniques.
-</footer>
+  <h1>Politique de confidentialité</h1>
+  <p>Cette page a déménagé. Vous allez être redirigé automatiquement.</p>
+  <p><a href="/confidentialite">Ouvrir la politique de confidentialité</a></p>
 </div>
 </body>
 </html>
