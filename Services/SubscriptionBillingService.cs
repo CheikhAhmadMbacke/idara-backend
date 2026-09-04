@@ -243,10 +243,20 @@ namespace Idara.API.Services
 
             BillingOutcome outcome;
 
-            if (wallet.AvailableBalance >= sub.AmountFcfa)
+            // ----- SMS refacturés : ce que l'école a explicitement demandé -----
+            // Une école qui a coché « me prévenir par SMS à chaque paiement »
+            // paie ces SMS AU COÛT RÉEL, ajouté à son abonnement. Les lignes
+            // sont lues du registre d'envoi (coût figé à l'envoi, §191) et
+            // marquées une fois facturées : c'est ce qui empêche un rattrapage
+            // du cron de les compter deux fois.
+            var (smsFcfa, smsCount, smsLogIds) =
+                await ComputeSmsRefactureAsync(sub.SchoolId, ct);
+            var totalDue = sub.AmountFcfa + smsFcfa;
+
+            if (wallet.AvailableBalance >= totalDue)
             {
                 // ----- Prélèvement réussi -----
-                var amount = sub.AmountFcfa;
+                var amount = totalDue;
                 // Prélèvement auto = « Paiements d'abord, puis Dons » : la part qui
                 // dépasse le solde paiement entame la poche don (décision produit).
                 // Calculé AVANT de réduire Available (sinon FeeBalance serait faussé).
@@ -275,6 +285,8 @@ namespace Idara.API.Services
                 var invoice = await GetOrCreateInvoiceAsync(sub, periodStart, periodEnd, amount, nowUtc, ct);
                 invoice.Status = SubscriptionInvoiceStatus.Paid;
                 invoice.AmountFcfa = amount;
+                invoice.SmsRefactureFcfa = smsFcfa;
+                invoice.SmsRefactureCount = smsCount;
                 invoice.PaidAt = nowUtc;
 
                 // Avance le cycle + repasse Active + RAZ quota + nettoie les dates SM.
@@ -289,6 +301,16 @@ namespace Idara.API.Services
 
                 await _db.SaveChangesAsync(ct);
                 invoice.WalletTransactionId = walletTx.Id;
+                // Les SMS sont marqués DANS la transaction du prélèvement : si
+                // celui-ci échoue, ils restent à facturer. L'inverse (marquer
+                // avant) perdrait de l'argent en silence.
+                if (smsLogIds.Count > 0)
+                {
+                    await _db.NotificationLogs
+                        .Where(l => smsLogIds.Contains(l.Id))
+                        .ExecuteUpdateAsync(
+                            u => u.SetProperty(l => l.BilledOnSubscriptionInvoiceId, invoice.Id), ct);
+                }
                 await _db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
 
@@ -308,8 +330,14 @@ namespace Idara.API.Services
             // ----- Solde insuffisant : facture en attente + avance dans la SM -----
             var dueStart = sub.NextBillingAt;
             var dueEnd = AdvanceCycle(dueStart, sub.BillingCycle).AddDays(-1);
-            var pendingInvoice = await GetOrCreateInvoiceAsync(sub, dueStart, dueEnd, sub.AmountFcfa, nowUtc, ct);
+            var pendingInvoice = await GetOrCreateInvoiceAsync(sub, dueStart, dueEnd, totalDue, nowUtc, ct);
             pendingInvoice.Status = SubscriptionInvoiceStatus.Pending;
+            // La facture en attente AFFICHE les SMS dus, mais ne les marque PAS
+            // comme facturés : rien n'a été encaissé. Ils seront réagrégés — et
+            // le montant réactualisé — à la prochaine tentative.
+            pendingInvoice.AmountFcfa = totalDue;
+            pendingInvoice.SmsRefactureFcfa = smsFcfa;
+            pendingInvoice.SmsRefactureCount = smsCount;
 
             outcome = BillingOutcome.Insufficient;
 
@@ -413,6 +441,48 @@ namespace Idara.API.Services
                     sub.SchoolId);
             }
         }
+
+        /// <summary>
+        /// Ce que l'école doit pour ses SMS de notification non encore facturés.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Au coût réel, jamais à un forfait.</b> Chaque ligne du
+        /// registre porte le prix unitaire figé à l'envoi et le nombre de
+        /// segments réellement facturés (§192) : on somme des centimes, et on
+        /// n'arrondit qu'à la fin, au franc supérieur — arrondir chaque SMS
+        /// ferait payer jusqu'à 99 centimes de trop par message.</para>
+        /// <para>Seuls les SMS que l'école a DEMANDÉS sont refacturés. Les codes
+        /// de connexion, les rappels de scolarité, les alertes : c'est le
+        /// produit, ils restent à notre charge.</para>
+        /// </remarks>
+        private async Task<(long amountFcfa, int count, List<int> logIds)>
+            ComputeSmsRefactureAsync(int schoolId, CancellationToken ct)
+        {
+            var rows = await _db.NotificationLogs
+                .Where(l => l.SchoolId == schoolId
+                            && l.BilledOnSubscriptionInvoiceId == null
+                            && l.CostCentimes > 0
+                            && RefacturableTemplates.Contains(l.TemplateCode))
+                .Select(l => new { l.Id, l.CostCentimes })
+                .ToListAsync(ct);
+
+            if (rows.Count == 0) return (0, 0, new List<int>());
+
+            var totalCentimes = rows.Sum(r => r.CostCentimes);
+            // Arrondi au franc SUPÉRIEUR, une seule fois sur le total.
+            var fcfa = (totalCentimes + 99) / 100;
+            return (fcfa, rows.Count, rows.Select(r => r.Id).ToList());
+        }
+
+        /// <summary>
+        /// Les seuls envois refacturés à l'école : ceux qu'elle a activés
+        /// elle-même. Toute addition ici fait payer les daara — elle se décide,
+        /// elle ne se glisse pas.
+        /// </summary>
+        private static readonly string[] RefacturableTemplates =
+        {
+            "SCHOOL_PAYMENT_RECEIVED_SMS",
+        };
 
         /// <summary>
         /// Retrouve la facture de la période (hors annulée) ou en crée une neuve.

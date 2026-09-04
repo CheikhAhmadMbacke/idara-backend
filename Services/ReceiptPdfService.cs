@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.Enums;
 using Idara.API.Models;
 using QuestPDF.Fluent;
@@ -63,7 +63,10 @@ namespace Idara.API.Services
             // figure sur un reçu de virement — c'est ce qui permet de rapprocher
             // un encaissement d'une personne quand une famille conteste.
             var counterparty = donor ?? payer;
-            var payerPhone = SenegalPhone.ToDisplay(counterparty?.PhoneNumber, fallback: string.Empty);
+            // Un don par lien public n'a AUCUN compte derrière lui : le numéro
+            // vient alors de ce que le donateur a déclaré au formulaire.
+            var payerPhone = SenegalPhone.ToDisplay(
+                counterparty?.PhoneNumber ?? payment.DonorPhone, fallback: string.Empty);
             var folder = Path.Combine(_env.WebRootPath, "uploads", "receipts");
             Directory.CreateDirectory(folder);
 
@@ -86,7 +89,7 @@ namespace Idara.API.Services
 
                         page.Header().Element(c => ComposeHeader(c, school, payment, isDonation, logoBytes));
                         page.Content().Element(c => ComposeContent(c, payment, student, invoice, donor, isDonation, consolidatedLines, payerPhone));
-                        page.Footer().Element(ComposeFooter);
+                        page.Footer().Element(c => ComposeFooter(c, isDonation));
                     });
                 });
 
@@ -229,15 +232,32 @@ namespace Idara.API.Services
                 {
                     if (isDonation)
                     {
+                        // Un don d'organisation est fait par l'ORGANISATION : son
+                        // nom passe en tête, le représentant vient dessous. Un don
+                        // par lien n'a pas de compte : le nom est celui déclaré.
+                        var isOrganization = !string.IsNullOrWhiteSpace(payment.DonorOrganization)
+                            || donor?.DonorType == DonorType.Organization;
+                        var displayedDonor = FirstNonBlank(
+                            payment.DonorOrganization, payment.DonorName, donor?.FullName) ?? "Donateur";
+
                         c.Item().Text(t =>
                         {
                             t.Span("Donateur : ").SemiBold().FontColor(TextSecondary);
-                            t.Span(donor?.FullName ?? "Donateur").Bold();
+                            t.Span(displayedDonor).Bold();
                         });
+                        if (!string.IsNullOrWhiteSpace(payment.DonorOrganization)
+                            && !string.IsNullOrWhiteSpace(payment.DonorName))
+                        {
+                            c.Item().Text(t =>
+                            {
+                                t.Span("Représentée par : ").SemiBold().FontColor(TextSecondary);
+                                t.Span(payment.DonorName!);
+                            });
+                        }
                         c.Item().Text(t =>
                         {
                             t.Span("Type : ").SemiBold().FontColor(TextSecondary);
-                            t.Span(donor?.DonorType == DonorType.Organization ? "Organisation" : "Particulier");
+                            t.Span(isOrganization ? "Organisation" : "Particulier");
                         });
                         if (!string.IsNullOrWhiteSpace(payerPhone))
                             c.Item().Text(t =>
@@ -248,7 +268,11 @@ namespace Idara.API.Services
                         c.Item().Text(t =>
                         {
                             t.Span("Objet : ").SemiBold().FontColor(TextSecondary);
-                            t.Span("Don à l'école");
+                            // Le donateur a donné POUR quelque chose : son reçu
+                            // doit le nommer, pas dire « don à l'école ».
+                            t.Span(string.IsNullOrWhiteSpace(payment.DonationCampaign?.Name)
+                                ? "Don à l'école"
+                                : payment.DonationCampaign!.Name);
                         });
                     }
                     else if (student != null)
@@ -432,15 +456,33 @@ namespace Idara.API.Services
                 TextSecondary,
                 Border);
 
-        private static void ComposeFooter(IContainer container)
+        private static void ComposeFooter(IContainer container, bool isDonation)
         {
-            container.AlignCenter().Text(t =>
+            container.Column(col =>
             {
-                t.Span("Édité par ").FontColor(TextSecondary).FontSize(7);
-                t.Span("Idara").Bold().FontColor(PrimaryHex).FontSize(7);
-                t.Span($" — {DateTime.UtcNow:dd/MM/yyyy HH:mm} UTC").FontColor(TextSecondary).FontSize(7);
+                // ⚠️ Mention indispensable sur un reçu de don : sans elle, un
+                // donateur peut croire tenir une pièce fiscale déductible — et
+                // c'est l'éditeur du document qu'on viendra voir.
+                if (isDonation)
+                {
+                    col.Item().AlignCenter().Text(
+                        "Ce reçu atteste d'un don volontaire. Il ne constitue pas une pièce fiscale "
+                        + "et n'ouvre droit à aucune déduction.")
+                        .FontColor(TextSecondary).FontSize(7);
+                    col.Item().PaddingTop(2);
+                }
+                col.Item().AlignCenter().Text(t =>
+                {
+                    t.Span("Édité par ").FontColor(TextSecondary).FontSize(7);
+                    t.Span("Idara").Bold().FontColor(PrimaryHex).FontSize(7);
+                    t.Span($" — {DateTime.UtcNow:dd/MM/yyyy HH:mm} UTC").FontColor(TextSecondary).FontSize(7);
+                });
             });
         }
+
+        /// <summary>Première valeur non vide, ou null.</summary>
+        private static string? FirstNonBlank(params string?[] values) =>
+            values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
 
         private static string FrenchStatus(PaymentStatus s) => s switch
         {

@@ -153,6 +153,9 @@ builder.Services.AddScoped<IStudentService, StudentService>();
 // Création d'un compte par une école : source unique, partagée par le
 // formulaire d'invitation ET l'import en masse du personnel.
 builder.Services.AddScoped<IUserInvitationService, UserInvitationService>();
+// Collectes de dons : partage ses regles entre l'ecran de l'ecole et la page
+// publique sans compte (§199).
+builder.Services.AddScoped<IDonationCampaignService, DonationCampaignService>();
 // Import en masse : reutilise IStudentService / IUserInvitationService, ne les
 // duplique pas.
 builder.Services.AddScoped<IStudentImportService, StudentImportService>();

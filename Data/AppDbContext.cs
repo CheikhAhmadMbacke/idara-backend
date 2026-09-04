@@ -52,6 +52,7 @@ namespace Idara.API.Data
         public DbSet<PaymentInvoiceAllocation> PaymentInvoiceAllocations { get; set; }
         public DbSet<PaymentStudentAllocation> PaymentStudentAllocations { get; set; }
         public DbSet<PaymentLink> PaymentLinks { get; set; }
+        public DbSet<DonationCampaign> DonationCampaigns { get; set; }
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
         public DbSet<Withdrawal> Withdrawals { get; set; }
@@ -1050,6 +1051,53 @@ namespace Idara.API.Data
                 .WithMany()
                 .HasForeignKey(p => p.PaymentLinkId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            // --- DonationCampaign (collecte de dons, page publique sans compte) ---
+            modelBuilder.Entity<DonationCampaign>()
+                .Property(c => c.Slug)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            // L'adresse publique est la clé d'entrée : unique sur TOUTE la
+            // plateforme, pas seulement par école (deux daara peuvent vouloir
+            // « salle-bleue » — le second reçoit un suffixe à la création).
+            modelBuilder.Entity<DonationCampaign>()
+                .HasIndex(c => c.Slug)
+                .IsUnique();
+
+            modelBuilder.Entity<DonationCampaign>()
+                .Property(c => c.Name)
+                .HasMaxLength(120)
+                .IsRequired();
+
+            modelBuilder.Entity<DonationCampaign>()
+                .Property(c => c.Description)
+                .HasMaxLength(2000);
+
+            // UNE seule collecte permanente par école. Index filtré : les
+            // collectes ordinaires (IsPermanent = false) ne sont pas contraintes.
+            modelBuilder.Entity<DonationCampaign>()
+                .HasIndex(c => c.SchoolId)
+                .IsUnique()
+                .HasFilter("\"IsPermanent\" = TRUE");
+
+            modelBuilder.Entity<DonationCampaign>()
+                .HasOne(c => c.School)
+                .WithMany()
+                .HasForeignKey(c => c.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Payment → DonationCampaign : SetNull, comme pour PaymentLink. Un
+            // don encaissé ne disparaît jamais avec sa collecte (§55).
+            modelBuilder.Entity<Payment>()
+                .HasOne(p => p.DonationCampaign)
+                .WithMany()
+                .HasForeignKey(p => p.DonationCampaignId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Payment>().Property(p => p.DonorName).HasMaxLength(120);
+            modelBuilder.Entity<Payment>().Property(p => p.DonorPhone).HasMaxLength(32);
+            modelBuilder.Entity<Payment>().Property(p => p.DonorOrganization).HasMaxLength(120);
 
             // --- PaymentInvoiceAllocation (paiement consolidé → N factures) ---
             // Cascade depuis Payment (jamais supprimé hors purge d'école) et

@@ -146,5 +146,16 @@ namespace Idara.API.Models
         /// reviendrait à masquer l'attaque qu'on cherchait à détecter.
         /// </summary>
         public string? BlockedReason { get; set; }
+
+        /// <summary>
+        /// Facture d'abonnement sur laquelle ce SMS a été refacturé à l'école.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>C'est la garantie qu'un SMS n'est jamais facturé deux fois.</b>
+        /// Sans cette marque, la facture suivante ré-agrégerait les mêmes lignes
+        /// — et un rattrapage du cron (§109) les compterait autant de fois qu'il
+        /// repasse. Null = pas encore refacturé, ou non refacturable.
+        /// </remarks>
+        public int? BilledOnSubscriptionInvoiceId { get; set; }
     }
 }

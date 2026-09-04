@@ -24,6 +24,28 @@ namespace Idara.API.Models
         /// <summary>Montant minimum d'un retrait / transfert sortant.</summary>
         public long MinWithdrawalFcfa { get; set; } = 25000;
 
+        /// <summary>
+        /// Montant minimum d'un DON par lien public (500 FCFA).
+        /// </summary>
+        /// <remarks>
+        /// Plus haut que le minimum d'un paiement parent, et volontairement : en
+        /// dessous de 500 F, les frais Wave mangent le don et le daara reçoit une
+        /// misère pour une écriture comptable de plus.
+        /// ⚠️ Colonne ajoutée à une ligne SINGLETON qui existe depuis juin : la
+        /// migration doit porter <c>defaultValue: 500</c>, sinon la ligne réelle
+        /// hérite d'un 0 et le garde-fou ne garde plus rien (§193, §202).
+        /// </remarks>
+        public long MinDonationFcfa { get; set; } = 500;
+
+        /// <summary>
+        /// Montant maximum d'un don par lien public (2 000 000 FCFA). Au-delà, la
+        /// page invite à appeler le daara : un don de cette taille mérite un
+        /// contact humain, et c'est la meilleure barrière anti-blanchiment quand
+        /// on ne contrôle aucune identité.
+        /// ⚠️ Même piège de <c>defaultValue</c> que ci-dessus.
+        /// </summary>
+        public long MaxDonationFcfa { get; set; } = 2_000_000;
+
         /// <summary>Majoration appliquée au parent quand FeesPayer=Parent (8 = +8 %).</summary>
         public double ParentFeePercent { get; set; } = 8.0;
 

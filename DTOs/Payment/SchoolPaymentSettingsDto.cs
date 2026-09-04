@@ -34,6 +34,9 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Frais d'inscription (une fois par élève). Null = non défini.</summary>
         public long? RegistrationFeeFcfa { get; set; }
 
+        /// <summary>Prévenir la direction par SMS à chaque paiement reçu.</summary>
+        public bool NotifySchoolBySmsOnPayment { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }
@@ -111,5 +114,29 @@ namespace Idara.API.DTOs.Payment
         /// RegistrationFeeFcfa : absent = le serveur n'y touche pas.
         /// </summary>
         public bool IncludesRegistrationFee { get; set; }
+
+        /// <summary>
+        /// Prévenir la direction par SMS à chaque paiement de scolarité reçu.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>NULLABLE, sixième occurrence du piège</b> (§137/§140/§152/§158,
+        /// et le jour limite juste au-dessus). Un <c>bool</c> non nullable arrive
+        /// à <c>false</c> quand le client ne l'envoie pas : une école ayant
+        /// activé le SMS le verrait s'éteindre au premier enregistrement des
+        /// réglages depuis un téléphone resté sur une version antérieure — sans
+        /// un mot, et sans que personne ne comprenne pourquoi les SMS ont cessé.
+        /// <c>null</c> = « ne pas toucher ».
+        /// </remarks>
+        public bool? NotifySchoolBySmsOnPayment { get; set; }
+    }
+
+    /// <summary>
+    /// SMS de notification pas encore facturés : ce qui s'ajoutera à la
+    /// prochaine facture d'abonnement de l'école.
+    /// </summary>
+    public class SmsRefacturePreviewDto
+    {
+        public int Count { get; set; }
+        public long AmountFcfa { get; set; }
     }
 }

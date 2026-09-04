@@ -132,5 +132,38 @@ namespace Idara.API.Models
         /// école. La ligne reste en base (jamais de suppression, décision produit).
         /// </summary>
         public bool IsHidden { get; set; }
+
+        // ====================================================================
+        // ===== Don par lien — un donateur SANS compte (2026-09-03) =====
+        // ====================================================================
+
+        /// <summary>
+        /// Collecte à l'origine de ce don. Null pour tout autre paiement, et
+        /// null aussi pour un don fait depuis un compte donateur (chemin
+        /// historique, conservé).
+        /// </summary>
+        public int? DonationCampaignId { get; set; }
+        public DonationCampaign? DonationCampaign { get; set; }
+
+        /// <summary>
+        /// Nom du donateur tel qu'il l'a DÉCLARÉ. Aucune vérification : c'est
+        /// Wave qui authentifie le payeur, pas nous (décision produit). Ne jamais
+        /// l'afficher comme une identité établie.
+        /// </summary>
+        public string? DonorName { get; set; }
+
+        /// <summary>Numéro déclaré — sert à rappeler quelqu'un, pas à l'identifier.</summary>
+        public string? DonorPhone { get; set; }
+
+        /// <summary>Organisation au nom de laquelle le don est fait (null = don personnel).</summary>
+        public string? DonorOrganization { get; set; }
+
+        /// <summary>
+        /// Le donateur a demandé à ne pas figurer sur le mur public. Masque le
+        /// nom sur la PAGE PUBLIQUE uniquement : l'école voit toujours qui a
+        /// donné, et la page le dit franchement plutôt que de laisser croire à
+        /// un anonymat total.
+        /// </summary>
+        public bool DonorAnonymous { get; set; }
     }
 }

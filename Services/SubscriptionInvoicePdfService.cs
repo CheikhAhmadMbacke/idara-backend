@@ -128,8 +128,28 @@ namespace Idara.API.Services
                         c.RelativeColumn(1);
                     });
 
+                    // ⚠️ Une facture doit se LIRE. Quand des SMS sont refacturés,
+                    // le total seul ne se conteste pas : il s'endure. On détaille
+                    // donc l'abonnement, les SMS, puis le total — trois lignes qui
+                    // disent d'où vient chaque franc.
+                    var hasSms = invoice.SmsRefactureFcfa > 0;
+                    if (hasSms)
+                    {
+                        var subscriptionOnly = invoice.AmountFcfa - invoice.SmsRefactureFcfa;
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
+                            .Text("Abonnement");
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
+                            .Text($"{subscriptionOnly:N0} FCFA");
+
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6)
+                            .Text($"Notifications par SMS ({invoice.SmsRefactureCount})").FontSize(9);
+                        table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
+                            .Text($"{invoice.SmsRefactureFcfa:N0} FCFA").FontSize(9);
+                    }
+
                     table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6)
-                        .Text("Montant de l'abonnement").FontColor(Colors.White).SemiBold();
+                        .Text(hasSms ? "Total à régler" : "Montant de l'abonnement")
+                        .FontColor(Colors.White).SemiBold();
                     table.Cell().Background(PrimaryHex).PaddingVertical(5).PaddingHorizontal(6).AlignRight()
                         .Text($"{invoice.AmountFcfa:N0} FCFA").FontColor(Colors.White).SemiBold();
 

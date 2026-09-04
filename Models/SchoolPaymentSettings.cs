@@ -87,6 +87,22 @@ namespace Idara.API.Models
         /// </summary>
         public long? RegistrationFeeFcfa { get; set; }
 
+        /// <summary>
+        /// Prévenir la direction par SMS à chaque paiement de scolarité reçu.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Éteint par défaut, et c'est délibéré.</b> La direction reçoit
+        /// déjà une notification (<c>SCHOOL_PAYMENT_RECEIVED</c>) — gratuite, mais
+        /// muette si le téléphone du directeur a désactivé les notifications, sans
+        /// que personne ne le sache jamais. Le SMS, lui, arrive toujours ; il se
+        /// paie. Un daara de 100 élèves dépensera environ 240 F par mois.</para>
+        /// <para>C'est donc à l'école de décider de dépenser, pas à nous à sa
+        /// place — et l'écran de réglage affiche l'estimation avant de cocher.
+        /// Les dons, eux, sont notifiés par SMS sans condition : ils sont rares,
+        /// et une rentrée d'argent inattendue mérite d'être sue tout de suite.</para>
+        /// </remarks>
+        public bool NotifySchoolBySmsOnPayment { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }

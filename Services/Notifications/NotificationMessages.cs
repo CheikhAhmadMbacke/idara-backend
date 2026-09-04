@@ -245,6 +245,29 @@ namespace Idara.API.Services.Notifications
             Fr: $"Don de {montantFcfa} FCFA recu de {donateur}. Votre solde a ete credite.",
             Ar: $"تبرع بمبلغ {montantFcfa} FCFA من {donateur}. تم إضافة المبلغ إلى رصيدك.");
 
+        /// <summary>
+        /// SMS à la DIRECTION pour un don reçu par lien public, avec l'avancée de
+        /// la collecte : le directeur suit son objectif sans ouvrir l'application.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Un SMS se facture au SEGMENT (§192) : ce texte reste sous 160
+        /// caractères en français. La progression n'est ajoutée que s'il y a un
+        /// objectif — sans lui, la phrase serait plus longue pour ne rien dire.
+        /// </remarks>
+        public static BilingualMessage DonationReceivedSchoolSms(
+            string donateur, long montantFcfa, string collecte, long totalFcfa, long? objectifFcfa)
+        {
+            var avancee = objectifFcfa is > 0
+                ? $" Total : {totalFcfa} sur {objectifFcfa} FCFA."
+                : $" Total : {totalFcfa} FCFA.";
+            var avanceeAr = objectifFcfa is > 0
+                ? $" المجموع: {totalFcfa} من {objectifFcfa} FCFA."
+                : $" المجموع: {totalFcfa} FCFA.";
+            return new(
+                Fr: $"Don de {montantFcfa} FCFA recu de {donateur} - {collecte}.{avancee}",
+                Ar: $"تبرع بمبلغ {montantFcfa} FCFA من {donateur} - {collecte}.{avanceeAr}");
+        }
+
         // Remerciement au donateur (push) après confirmation de son don.
         public static BilingualMessage DonationThanks(long montantFcfa, string ecole) => new(
             Fr: $"Merci pour votre don de {montantFcfa} FCFA a {ecole}. Votre recu est disponible dans l'application.",

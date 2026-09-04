@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="theme-color" content="#0B744D" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Idara — Faire un don</title>
+  <meta property="og:title" content="Soutenir une école" />
+  <meta property="og:description" content="Faites un don avec Wave, en un clic, sans créer de compte." />
+  <meta property="og:site_name" content="Idara" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://idara.sn/og-image.png" />
+  <style>
+    :root {
+      --primary: #0B744D; --primary-dark: #064A31; --primary-light: #2A9D72;
+      --bg: #F7F9FC; --surface: #FFFFFF; --border: #E3E8EF;
+      --text-primary: #1A2233; --text-secondary: #5B6478; --text-tertiary: #8A93A6;
+      --success: #1E9E5C; --success-soft: #E7F6EE;
+      --warning: #E8830C; --warning-soft: #FDF1DF;
+      --danger: #D83B3B; --danger-soft: #FAE5E5;
+      --saffron: #F9A825;
+      --wave: #1DB9F0;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text-primary); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.5; min-height: 100vh; }
+    .container { max-width: 560px; margin: 0 auto; padding: 16px 16px 40px; display: flex; flex-direction: column; gap: 14px; }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px; }
+    .header .left { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 36px; height: 36px; background: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px; }
+    .brand { font-size: 18px; font-weight: 800; color: var(--primary); }
+    .lang { color: var(--primary); text-decoration: none; font-weight: 600; font-size: 14px; border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; background: #fff; cursor: pointer; font-family: inherit; }
+    html[dir=rtl] body { font-family: "Noto Naskh Arabic", "Segoe UI", Tahoma, Arial, sans-serif; }
+    html[dir=rtl] .amount-input input { text-align: left; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; box-shadow: 0 4px 20px rgba(11,116,77,.06); }
+    .card.flush { padding: 0; overflow: hidden; }
+
+    .cover { width: 100%; height: 168px; object-fit: cover; display: block; background: linear-gradient(160deg, var(--primary-light), var(--primary-dark)); }
+
+    .school { display: flex; align-items: center; gap: 12px; }
+    .school img { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); background: #fff; }
+    .school .ph { width: 46px; height: 46px; border-radius: 50%; background: var(--success-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; flex: none; }
+    .school-name { font-weight: 700; font-size: 15px; line-height: 1.25; }
+    .school-name-ar { font-size: 14px; color: var(--text-secondary); direction: rtl; }
+    .school-sub { font-size: 12.5px; color: var(--text-tertiary); }
+
+    .campaign-title { font-size: 22px; font-weight: 800; line-height: 1.2; margin: 14px 0 0; }
+    .campaign-desc { font-size: 14.5px; color: var(--text-secondary); margin-top: 10px; white-space: pre-line; }
+
+    .bar { height: 10px; border-radius: 99px; background: #EDF1F0; overflow: hidden; }
+    .bar > i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--primary-light), var(--primary)); width: 0; transition: width .6s ease; }
+    .bar.over > i { background: linear-gradient(90deg, var(--saffron), #E8830C); }
+    .bar-legend { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+    .bar-legend b { font-size: 18px; color: var(--text-primary); font-weight: 800; }
+    .stats { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); }
+    .stats b { color: var(--text-primary); }
+
+    h2 { font-size: 13px; margin: 0 0 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px; }
+
+    .choice { display: flex; gap: 10px; align-items: flex-start; padding: 13px; border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer; margin-bottom: 8px; }
+    .choice.on { border-color: var(--primary); background: var(--success-soft); }
+    .choice .dot { width: 19px; height: 19px; border-radius: 50%; border: 2px solid var(--text-tertiary); flex: none; margin-top: 1px; }
+    .choice.on .dot { border-color: var(--primary); background: radial-gradient(circle, var(--primary) 0 42%, transparent 45%); }
+    .choice .t { font-weight: 700; font-size: 15px; }
+    .choice .s { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+    label.field { display: block; margin-bottom: 10px; }
+    label.field .lbl { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+    input[type=text], input[type=tel], input[type=number] {
+      width: 100%; padding: 13px 14px; font-size: 16px; font-family: inherit; color: var(--text-primary);
+      border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface); outline: none;
+    }
+    input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,116,77,.12); }
+    input.bad { border-color: var(--danger); }
+    .suggested { display: flex; gap: 8px; margin-bottom: 10px; }
+    .suggested button { flex: 1; padding: 12px 4px; border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface); font-family: inherit; font-size: 15px; font-weight: 700; color: var(--text-primary); cursor: pointer; }
+    .suggested button.on { border-color: var(--primary); background: var(--success-soft); color: var(--primary-dark); }
+
+    .check { display: flex; align-items: center; gap: 10px; padding: 12px 13px; border: 1.5px solid var(--border); border-radius: 12px; cursor: pointer; }
+    .check.on { border-color: var(--primary); background: var(--success-soft); }
+    .check .box { width: 19px; height: 19px; border-radius: 5px; border: 2px solid var(--text-tertiary); flex: none; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; line-height: 1; }
+    .check.on .box { border-color: var(--primary); background: var(--primary); }
+    .check .t { font-size: 14px; font-weight: 600; }
+
+    .fixed-amount { text-align: center; padding: 18px; }
+    .fixed-amount .lbl { font-size: 12px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .6px; font-weight: 700; }
+    .fixed-amount .amt { font-size: 34px; font-weight: 800; letter-spacing: -.5px; margin-top: 4px; }
+    .fixed-amount .fee { font-size: 13px; color: var(--text-secondary); margin-top: 6px; }
+    .fixed-amount .tot { display: flex; justify-content: space-between; border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; font-weight: 700; font-size: 15px; }
+
+    .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 58px; border: none; border-radius: 14px; font-size: 17px; font-weight: 800; cursor: pointer; text-decoration: none; color: #fff; font-family: inherit; }
+    .btn-wave { background: var(--wave); box-shadow: 0 6px 18px rgba(29,185,240,.35); }
+    .btn-wave:disabled { opacity: .55; cursor: default; box-shadow: none; }
+    .btn-primary { background: var(--primary); }
+    .btn-ghost { background: var(--surface); color: var(--primary); border: 1.5px solid var(--primary); min-height: 48px; font-size: 15px; }
+    .wave-mark { width: 34px; height: 34px; padding: 4px; border-radius: 8px; background: #fff; display: inline-flex; align-items: center; justify-content: center; }
+    .wave-mark img { width: 26px; height: 26px; border-radius: 4px; display: block; }
+
+    .donor-row { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-top: 1px solid var(--border); }
+    .donor-row:first-child { border-top: none; }
+    .donor-row .av { width: 32px; height: 32px; border-radius: 9px; background: var(--success-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex: none; }
+    .donor-row .nm { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .donor-row .when { font-size: 12px; color: var(--text-tertiary); font-weight: 400; }
+    .donor-row .amt { font-size: 14px; font-weight: 700; white-space: nowrap; }
+
+    .notice { border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+    .notice.ok { background: var(--success-soft); color: #135F38; }
+    .notice.warn { background: var(--warning-soft); color: #7A4306; }
+    .notice.err { background: var(--danger-soft); color: #8F1F1F; }
+    .notice .link { text-decoration: underline; font-weight: 700; cursor: pointer; }
+    .hint { font-size: 13px; color: var(--text-tertiary); text-align: center; }
+    .center { text-align: center; }
+    .big-icon { width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 12px; display: flex; align-items: center; justify-content: center; font-size: 34px; }
+    .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .bar > i { transition: none; } }
+    .footer { text-align: center; font-size: 12.5px; color: var(--text-tertiary); padding-top: 6px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="left"><div class="logo">i</div><div class="brand">Idara</div></div>
+    <button id="lang" class="lang" type="button"></button>
+  </div>
+
+  <div id="loading" class="card center"><div class="spinner"></div><div data-i18n="loading">Chargement…</div></div>
+
+  <!-- ===== Bloc collecte ===== -->
+  <div id="campaign" class="card flush hidden">
+    <img id="cover" class="cover hidden" alt="" />
+    <div style="padding:18px">
+      <div class="school">
+        <div id="school-logo" class="ph"></div>
+        <div style="min-width:0">
+          <div id="school-name" class="school-name"></div>
+          <div id="school-name-ar" class="school-name-ar hidden"></div>
+        </div>
+      </div>
+      <h1 id="campaign-name" class="campaign-title"></h1>
+      <div id="progress-wrap" class="hidden" style="margin-top:14px">
+        <div id="bar" class="bar"><i id="bar-fill"></i></div>
+        <div class="bar-legend">
+          <span><b id="collected"></b> <span data-i18n="collected">collectés</span></span>
+          <span id="goal-label"></span>
+        </div>
+      </div>
+      <div id="no-goal" class="hidden" style="margin-top:14px">
+        <div class="bar-legend" style="margin:0"><span><b id="collected2"></b> <span data-i18n="collected_total">déjà collectés</span></span></div>
+      </div>
+      <div class="stats">
+        <span><b id="donor-count">0</b> <span data-i18n="donors">donateurs</span></span>
+        <span id="days-left" class="hidden"></span>
+      </div>
+      <div id="campaign-desc" class="campaign-desc"></div>
+    </div>
+  </div>
+
+  <!-- ===== Collecte fermée / en pause ===== -->
+  <div id="closed" class="card center hidden">
+    <div class="big-icon" style="background:var(--success-soft);color:var(--primary)">✓</div>
+    <div id="closed-title" style="font-weight:800;font-size:18px"></div>
+    <div id="closed-hint" class="hint" style="margin-top:6px"></div>
+  </div>
+
+  <!-- ===== Introuvable ===== -->
+  <div id="notfound" class="card center hidden">
+    <div class="big-icon" style="background:var(--danger-soft);color:var(--danger)">!</div>
+    <div style="font-weight:800;font-size:18px" data-i18n="notfound_title">Ce lien n'existe pas</div>
+    <div class="hint" style="margin-top:6px" data-i18n="notfound_hint">Vérifiez l'adresse, ou demandez un nouveau lien à l'école.</div>
+  </div>
+
+  <!-- ===== Formulaire ===== -->
+  <div id="form" class="card hidden">
+    <div id="known" class="notice ok hidden" style="margin-bottom:14px">
+      <span id="known-text"></span> <span class="link" id="forget" data-i18n="not_me">Ce n'est pas moi</span>
+    </div>
+
+    <h2 data-i18n="i_give">Je donne</h2>
+    <div class="choice on" id="choice-person">
+      <div class="dot"></div>
+      <div><div class="t" data-i18n="person_title">À titre personnel</div><div class="s" data-i18n="person_sub">En mon nom</div></div>
+    </div>
+    <div class="choice" id="choice-org">
+      <div class="dot"></div>
+      <div><div class="t" data-i18n="org_title">Au nom d'une organisation</div><div class="s" data-i18n="org_sub">Association, entreprise, mutuelle…</div></div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <label class="field hidden" id="f-org">
+      <span class="lbl" data-i18n="org_name">Nom de l'organisation</span>
+      <input type="text" id="org" autocomplete="organization" maxlength="120" />
+    </label>
+
+    <label class="field">
+      <span class="lbl" id="name-label" data-i18n="full_name">Nom complet</span>
+      <input type="text" id="name" autocomplete="name" maxlength="120" />
+    </label>
+
+    <label class="field">
+      <span class="lbl" data-i18n="phone">Numéro de téléphone</span>
+      <input type="tel" id="phone" autocomplete="tel" inputmode="tel" maxlength="20" placeholder="77 000 00 00" />
+    </label>
+
+    <!-- Montant libre -->
+    <div id="free-amount">
+      <h2 data-i18n="amount">Montant du don</h2>
+      <div class="suggested hidden" id="suggested"></div>
+      <label class="field amount-input">
+        <input type="number" id="amount" inputmode="numeric" min="0" step="100" placeholder="0" />
+      </label>
+    </div>
+
+    <!-- Montant imposé -->
+    <div id="fixed-amount" class="card fixed-amount hidden" style="box-shadow:none;margin-bottom:12px">
+      <div class="lbl" data-i18n="amount">Montant du don</div>
+      <div class="amt" id="fixed-value"></div>
+      <div class="fee hidden" id="fixed-fee"></div>
+      <div class="tot hidden" id="fixed-total">
+        <span data-i18n="you_pay">Vous paierez</span><span id="fixed-total-value"></span>
+      </div>
+    </div>
+
+    <div class="check" id="anon">
+      <span class="box" id="anon-box"></span>
+      <span class="t" data-i18n="anonymous">Ne pas afficher mon nom sur la page</span>
+    </div>
+
+    <div id="form-error" class="notice err hidden" style="margin-top:12px"></div>
+
+    <button id="pay" class="btn btn-wave" style="margin-top:14px" type="button">
+      <span class="wave-mark"><img alt="Wave" src="data:image/png;base64,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" /></span>
+      <span data-i18n="send_donation">Envoyer mon don avec Wave</span>
+    </button>
+    <div class="hint" style="margin-top:10px" data-i18n="privacy_note">L'école verra votre nom et votre numéro.</div>
+  </div>
+
+  <!-- ===== Mur des donateurs ===== -->
+  <div id="wall" class="card hidden">
+    <h2 data-i18n="wall_title">Ils ont déjà donné</h2>
+    <div id="wall-list"></div>
+  </div>
+
+  <div id="inapp" class="notice warn hidden" data-i18n="inapp">Si Wave ne s'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).</div>
+  <div class="footer" data-i18n="footer">Paiement sécurisé via Wave · Idara</div>
+</div>
+
+<script>
+(function () {
+  // ===== Langue : même règle que le lien de paiement et idara.sn/plans (§153).
+  // La pilule affiche la langue CIBLE. « Idara » et « Wave » restent en latin.
+  var I18N = {
+    fr: {
+      title: 'Idara — Faire un don', loading: 'Chargement…',
+      collected: 'collectés', collected_total: 'déjà collectés', donors: 'donateurs',
+      days_left: '{n} jours restants', last_day: 'dernier jour',
+      i_give: 'Je donne', person_title: 'À titre personnel', person_sub: 'En mon nom',
+      org_title: 'Au nom d\'une organisation', org_sub: 'Association, entreprise, mutuelle…',
+      org_name: 'Nom de l\'organisation', full_name: 'Nom complet',
+      rep_name: 'Votre nom (représentant)', phone: 'Numéro de téléphone',
+      amount: 'Montant du don', you_pay: 'Vous paierez',
+      anonymous: 'Ne pas afficher mon nom sur la page',
+      send_donation: 'Envoyer mon don avec Wave', send_donation_org: 'Envoyer le don avec Wave',
+      privacy_note: 'L'école verra votre nom et votre numéro.',
+      wall_title: 'Ils ont déjà donné', anonymous_donor: 'Donateur anonyme',
+      known_hello: 'Bonjour {name}, vos informations sont déjà remplies.', not_me: 'Ce n\'est pas moi',
+      closed_title: 'Cette collecte est terminée', closed_hint: 'Merci à tous ceux qui y ont participé.',
+      paused_title: 'Collecte suspendue', paused_hint: 'L'école a mis cette collecte en pause. Revenez plus tard.',
+      notfound_title: 'Ce lien n\'existe pas', notfound_hint: 'Vérifiez l\'adresse, ou demandez un nouveau lien à l'école.',
+      goal_of: 'sur {goal}', fee_line: '+ {fee} de frais Wave',
+      err_name: 'Indiquez votre nom complet.', err_org: 'Indiquez le nom de l\'organisation.',
+      err_phone: 'Numéro de téléphone invalide.',
+      err_amount_min: 'Le don minimum est de {min}.', err_amount_max: 'Pour un don supérieur à {max}, appelez directement l'école.',
+      load_error: 'Impossible de charger. Vérifiez votre connexion puis rechargez la page.',
+      start_error: 'Le don n\'a pas pu être lancé. Réessayez.', net_error: 'Connexion impossible. Réessayez.',
+      inapp: 'Si Wave ne s\'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).',
+      footer: 'Paiement sécurisé via Wave · Idara',
+      fcfa: 'FCFA', lang_button: 'العربية'
+    },
+    ar: {
+      title: 'Idara — التبرع', loading: 'جارٍ التحميل…',
+      collected: 'تم جمعها', collected_total: 'تم جمعها', donors: 'متبرعون',
+      days_left: 'بقي {n} يومًا', last_day: 'اليوم الأخير',
+      i_give: 'أتبرع', person_title: 'بصفة شخصية', person_sub: 'باسمي',
+      org_title: 'باسم مؤسسة', org_sub: 'جمعية، شركة، تعاضدية…',
+      org_name: 'اسم المؤسسة', full_name: 'الاسم الكامل',
+      rep_name: 'اسمك (الممثل)', phone: 'رقم الهاتف',
+      amount: 'مبلغ التبرع', you_pay: 'ستدفع',
+      anonymous: 'عدم إظهار اسمي في الصفحة',
+      send_donation: 'أرسل تبرّعي عبر Wave', send_donation_org: 'أرسل التبرع عبر Wave',
+      privacy_note: 'ستطّلع المدرسة على اسمك ورقمك.',
+      wall_title: 'تبرعوا من قبل', anonymous_donor: 'متبرع مجهول',
+      known_hello: 'مرحبًا {name}، معلوماتك مملوءة مسبقًا.', not_me: 'لست أنا',
+      closed_title: 'انتهت هذه الحملة', closed_hint: 'شكرًا لكل من ساهم فيها.',
+      paused_title: 'الحملة موقوفة مؤقتًا', paused_hint: 'أوقفت المدرسة هذه الحملة مؤقتًا. عد لاحقًا.',
+      notfound_title: 'هذا الرابط غير موجود', notfound_hint: 'تحقق من العنوان أو اطلب رابطًا جديدًا من المدرسة.',
+      goal_of: 'من {goal}', fee_line: '+ {fee} رسوم Wave',
+      err_name: 'أدخل اسمك الكامل.', err_org: 'أدخل اسم المؤسسة.',
+      err_phone: 'رقم الهاتف غير صالح.',
+      err_amount_min: 'الحد الأدنى للتبرع هو {min}.', err_amount_max: 'للتبرع بأكثر من {max}، اتصل بالمدرسة مباشرة.',
+      load_error: 'تعذّر التحميل. تحقق من اتصالك ثم أعد تحميل الصفحة.',
+      start_error: 'تعذّر بدء التبرع. حاول مرة أخرى.', net_error: 'لا يوجد اتصال. حاول مرة أخرى.',
+      inapp: 'إذا لم يُفتح Wave، افتح هذا الرابط في Chrome أو Safari (القائمة ⋮ ← « فتح في المتصفح »).',
+      footer: 'دفع آمن عبر Wave · Idara',
+      fcfa: 'فرنك', lang_button: 'Français'
+    }
+  };
+
+  var lang = (function () {
+    var q = new URLSearchParams(location.search).get('lang');
+    if (q === 'fr' || q === 'ar') return q;
+    try { var st = localStorage.getItem('idara_lang'); if (st === 'fr' || st === 'ar') return st; } catch (e) {}
+    return /^ar/i.test(navigator.language || '') ? 'ar' : 'fr';
+  })();
+
+  function t(key, vars) {
+    var s = (I18N[lang] && I18N[lang][key]) || I18N.fr[key] || key;
+    if (vars) Object.keys(vars).forEach(function (k) { s = s.split('{' + k + '}').join(vars[k]); });
+    return s;
+  }
+  function applyI18n() {
+    document.documentElement.lang = lang;
+    document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+    document.title = t('title');
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.getElementById('lang').textContent = t('lang_button');
+  }
+  document.getElementById('lang').addEventListener('click', function () {
+    lang = lang === 'fr' ? 'ar' : 'fr';
+    try { localStorage.setItem('idara_lang', lang); } catch (e) {}
+    applyI18n();
+    if (state) render(state);
+  });
+
+  var $ = function (id) { return document.getElementById(id); };
+  var slug = location.pathname.split('/').filter(Boolean).pop();
+  var state = null;
+  var isOrg = false;
+  var anonymous = false;
+  var chosenAmount = null;
+
+  function money(n) {
+    return (n || 0).toLocaleString(lang === 'ar' ? 'ar-EG' : 'fr-FR') + ' ' + t('fcfa');
+  }
+  function show(id, on) { $(id).classList.toggle('hidden', !on); }
+
+  // ===== Mémoire du donateur : le navigateur, rien d'autre =====
+  // Ni compte, ni serveur. Elle ne suit pas le donateur d'un appareil à
+  // l'autre et disparaît avec les données du navigateur — le formulaire est
+  // alors simplement vide, jamais cassé. Le MONTANT n'est jamais mémorisé :
+  // le rappeler aide, le pré-remplir met une pression.
+  var MEM_KEY = 'idara_donor_v1';
+  function loadMemory() {
+    try {
+      var raw = localStorage.getItem(MEM_KEY);
+      if (!raw) return null;
+      var m = JSON.parse(raw);
+      return (m && typeof m === 'object') ? m : null;
+    } catch (e) { return null; }
+  }
+  function saveMemory(m) {
+    try { localStorage.setItem(MEM_KEY, JSON.stringify(m)); } catch (e) {}
+  }
+  function forgetMemory() {
+    try { localStorage.removeItem(MEM_KEY); } catch (e) {}
+  }
+
+  // ===== Chargement =====
+  function load() {
+    fetch('/don/' + encodeURIComponent(slug) + '/state', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) {
+        if (r.status === 404) { show('loading', false); show('notfound', true); return null; }
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data) return;
+        state = data;
+        show('loading', false);
+        render(data);
+      })
+      .catch(function () {
+        show('loading', false);
+        $('notfound').classList.remove('hidden');
+        $('notfound').querySelector('.hint').textContent = t('load_error');
+      });
+  }
+
+  function render(data) {
+    applyI18n();
+    var c = data.campaign, s = data.school;
+
+    // --- École ---
+    $('school-name').textContent = s.name || '';
+    if (s.nameAr) { $('school-name-ar').textContent = s.nameAr; show('school-name-ar', true); }
+    var initials = (s.name || '?').split(' ').filter(Boolean).slice(0, 2)
+      .map(function (w) { return w[0]; }).join('').toUpperCase();
+    if (s.logoUrl) {
+      var img = document.createElement('img');
+      img.src = s.logoUrl; img.alt = '';
+      $('school-logo').replaceWith(img);
+      img.id = 'school-logo';
+    } else {
+      $('school-logo').textContent = initials;
+    }
+
+    // --- Collecte ---
+    $('campaign-name').textContent = c.name || '';
+    if (c.coverImageUrl) { $('cover').src = c.coverImageUrl; show('cover', true); }
+    if (c.description) $('campaign-desc').textContent = c.description;
+
+    if (c.goalAmountFcfa) {
+      show('progress-wrap', true);
+      $('collected').textContent = money(c.collectedFcfa);
+      $('goal-label').textContent = t('goal_of', { goal: money(c.goalAmountFcfa) });
+      var pct = Math.max(0, Math.min(100, c.progressPercent || 0));
+      $('bar-fill').style.width = pct + '%';
+      $('bar').classList.toggle('over', (c.progressPercent || 0) >= 100);
+    } else if (c.collectedFcfa > 0) {
+      show('no-goal', true);
+      $('collected2').textContent = money(c.collectedFcfa);
+    }
+    $('donor-count').textContent = c.donationCount || 0;
+    if (typeof c.daysLeft === 'number') {
+      $('days-left').textContent = c.daysLeft <= 1 ? t('last_day') : t('days_left', { n: c.daysLeft });
+      show('days-left', true);
+    }
+    show('campaign', true);
+
+    // --- Fermée / en pause : pas de formulaire ---
+    if (data.status !== 'open') {
+      var paused = data.status === 'paused';
+      $('closed-title').textContent = t(paused ? 'paused_title' : 'closed_title');
+      $('closed-hint').textContent = t(paused ? 'paused_hint' : 'closed_hint');
+      show('closed', true);
+      show('form', false);
+    } else {
+      renderForm(data);
+      show('form', true);
+    }
+
+    renderWall(data);
+  }
+
+  function renderForm(data) {
+    var c = data.campaign;
+
+    // Montant imposé : le champ DISPARAÎT, il ne se grise pas.
+    if (c.amountMode === 'fixed') {
+      show('free-amount', false);
+      show('fixed-amount', true);
+      $('fixed-value').textContent = money(c.fixedAmountFcfa);
+      // Les frais ne s'affichent QUE si le donateur les paie.
+      if (data.fees && data.fees.payerPays) {
+        var total = Math.ceil(c.fixedAmountFcfa * data.fees.multiplier);
+        $('fixed-fee').textContent = t('fee_line', { fee: money(total - c.fixedAmountFcfa) });
+        $('fixed-total-value').textContent = money(total);
+        show('fixed-fee', true);
+        show('fixed-total', true);
+      }
+    } else {
+      show('free-amount', true);
+      show('fixed-amount', false);
+      var sug = c.suggestedAmounts || [];
+      if (sug.length) {
+        var box = $('suggested');
+        box.innerHTML = '';
+        sug.forEach(function (v) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = v.toLocaleString(lang === 'ar' ? 'ar-EG' : 'fr-FR');
+          b.addEventListener('click', function () {
+            chosenAmount = v;
+            $('amount').value = v;
+            box.querySelectorAll('button').forEach(function (x) { x.classList.remove('on'); });
+            b.classList.add('on');
+          });
+          box.appendChild(b);
+        });
+        show('suggested', true);
+      }
+    }
+
+    // Pré-remplissage depuis la mémoire du navigateur.
+    var mem = loadMemory();
+    if (mem) {
+      if (mem.org) { isOrg = true; $('org').value = mem.org; }
+      if (mem.name) $('name').value = mem.name;
+      if (mem.phone) $('phone').value = mem.phone;
+      var who = mem.org || (mem.name || '').split(' ')[0];
+      if (who) {
+        $('known-text').textContent = t('known_hello', { name: who });
+        show('known', true);
+      }
+    }
+    applyDonorType();
+  }
+
+  function applyDonorType() {
+    $('choice-person').classList.toggle('on', !isOrg);
+    $('choice-org').classList.toggle('on', isOrg);
+    show('f-org', isOrg);
+    $('name-label').textContent = t(isOrg ? 'rep_name' : 'full_name');
+    $('pay').querySelector('span[data-i18n]').textContent = t(isOrg ? 'send_donation_org' : 'send_donation');
+  }
+  $('choice-person').addEventListener('click', function () { isOrg = false; applyDonorType(); });
+  $('choice-org').addEventListener('click', function () { isOrg = true; applyDonorType(); });
+
+  $('anon').addEventListener('click', function () {
+    anonymous = !anonymous;
+    $('anon').classList.toggle('on', anonymous);
+    $('anon-box').textContent = anonymous ? '✓' : '';
+  });
+
+  $('forget').addEventListener('click', function () {
+    forgetMemory();
+    $('org').value = ''; $('name').value = ''; $('phone').value = '';
+    show('known', false);
+  });
+
+  function renderWall(data) {
+    var donors = data.donors || [];
+    if (!data.campaign.showDonorWall || donors.length === 0) { show('wall', false); return; }
+    var list = $('wall-list');
+    list.innerHTML = '';
+    donors.forEach(function (d) {
+      var row = document.createElement('div');
+      row.className = 'donor-row';
+      var name = d.anonymous || !d.name ? t('anonymous_donor') : d.name;
+      var initials = d.anonymous || !d.name ? '•'
+        : name.split(' ').filter(Boolean).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase();
+      var av = document.createElement('div'); av.className = 'av'; av.textContent = initials;
+      var nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = name;
+      var amt = document.createElement('div'); amt.className = 'amt'; amt.textContent = money(d.amountFcfa);
+      row.appendChild(av); row.appendChild(nm); row.appendChild(amt);
+      list.appendChild(row);
+    });
+    show('wall', true);
+  }
+
+  // ===== Envoi =====
+  function fail(msg, fieldId) {
+    var box = $('form-error');
+    box.textContent = msg;
+    show('form-error', true);
+    if (fieldId) { $(fieldId).classList.add('bad'); $(fieldId).focus(); }
+    $('pay').disabled = false;
+  }
+
+  $('pay').addEventListener('click', function () {
+    if (!state) return;
+    show('form-error', false);
+    ['org', 'name', 'phone', 'amount'].forEach(function (id) {
+      var el = $(id); if (el) el.classList.remove('bad');
+    });
+
+    var c = state.campaign;
+    var org = isOrg ? $('org').value.trim() : '';
+    var name = $('name').value.trim();
+    var phone = $('phone').value.trim();
+
+    if (isOrg && org.length < 2) return fail(t('err_org'), 'org');
+    if (name.length < 3) return fail(t('err_name'), 'name');
+    if (phone.replace(/\D/g, '').length < 9) return fail(t('err_phone'), 'phone');
+
+    var amount = 0;
+    if (c.amountMode === 'fixed') {
+      amount = c.fixedAmountFcfa;
+    } else {
+      amount = parseInt($('amount').value, 10) || 0;
+      if (amount < state.limits.minFcfa)
+        return fail(t('err_amount_min', { min: money(state.limits.minFcfa) }), 'amount');
+      if (amount > state.limits.maxFcfa)
+        return fail(t('err_amount_max', { max: money(state.limits.maxFcfa) }), 'amount');
+    }
+
+    // On mémorise AVANT de partir chez Wave : le donateur quitte la page, et
+    // s'il revient par un autre chemin il retrouve quand même ses informations.
+    saveMemory({ org: org || null, name: name, phone: phone });
+
+    $('pay').disabled = true;
+    fetch('/don/' + encodeURIComponent(slug) + '/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        donorName: name,
+        donorPhone: phone,
+        organization: org || null,
+        anonymous: anonymous,
+        amountFcfa: amount
+      })
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; }); })
+      .then(function (res) {
+        var b = res.body || {};
+        if (b.status === 'redirect' && b.redirectUrl) {
+          // Sur le web, on NAVIGUE l'onglet courant : window.open est bloqué
+          // par les navigateurs mobiles et le retour de Wave ressemblerait à un
+          // onglet tué (§113, §183).
+          location.href = b.redirectUrl;
+          return;
+        }
+        if (b.status === 'pending' && b.pendingResultUrl) { location.href = b.pendingResultUrl; return; }
+        fail(b.message || t('start_error'));
+      })
+      .catch(function () { fail(t('net_error')); });
+  });
+
+  // Navigateur intégré (WhatsApp, Facebook) : Wave peut refuser de s'ouvrir.
+  var ua = navigator.userAgent || '';
+  if (/FBAN|FBAV|Instagram|WhatsApp|Line\//i.test(ua)) show('inapp', true);
+
+  applyI18n();
+  load();
+})();
+</script>
+</body>
+</html>

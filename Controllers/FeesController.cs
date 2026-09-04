@@ -66,6 +66,43 @@ namespace Idara.API.Controllers
         // ===== SchoolPaymentSettings =====
         // ========================================================
 
+        /// <summary>
+        /// `GET /api/fees/sms-refacture-preview` — ce que les SMS de notification
+        /// ajouteront à la prochaine facture.
+        /// </summary>
+        /// <remarks>
+        /// <b>L'école doit voir la note AVANT de la recevoir.</b> Sans cet écran,
+        /// elle coche « prévenez-moi par SMS », oublie, et découvre un mois plus
+        /// tard un montant qu'elle ne s'explique pas — c'est ainsi qu'on perd la
+        /// confiance sur une fonctionnalité qu'elle a pourtant demandée.
+        /// </remarks>
+        [HttpGet("sms-refacture-preview")]
+        [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+        public async Task<ActionResult<ApiResponse<SmsRefacturePreviewDto>>> GetSmsRefacturePreview(
+            CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Unauthorized();
+
+            var rows = await _context.NotificationLogs
+                .Where(l => l.SchoolId == schoolId.Value
+                            && l.BilledOnSubscriptionInvoiceId == null
+                            && l.CostCentimes > 0
+                            && l.TemplateCode == "SCHOOL_PAYMENT_RECEIVED_SMS")
+                .Select(l => l.CostCentimes)
+                .ToListAsync(ct);
+
+            var centimes = rows.Sum();
+            return Ok(ApiResponse<SmsRefacturePreviewDto>.Ok(new SmsRefacturePreviewDto
+            {
+                Count = rows.Count,
+                // Même arrondi que la facturation : une seule fois, au franc
+                // supérieur. Un aperçu qui ne dit pas le montant facturé ne sert
+                // à rien.
+                AmountFcfa = (centimes + 99) / 100
+            }));
+        }
+
         [HttpGet("school-settings")]
         [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
         public async Task<ActionResult<SchoolPaymentSettingsDto>> GetSchoolSettings(CancellationToken ct)
@@ -130,6 +167,12 @@ namespace Idara.API.Controllers
             if (dto.PaymentDeadlineDay is int deadline)
                 settings.PaymentDeadlineDay = deadline;
             settings.BillingPeriod = dto.BillingPeriod;
+            // SMS à chaque paiement : appliqué UNIQUEMENT s'il est fourni. Même
+            // raison que le jour limite ci-dessus — une version antérieure au
+            // 2026-09-03 n'envoie pas ce champ, et l'écrire à false éteindrait
+            // le réglage d'une école qui vient de l'activer.
+            if (dto.NotifySchoolBySmsOnPayment is bool notifySms)
+                settings.NotifySchoolBySmsOnPayment = notifySms;
             // 0 est traité comme "pas de tarif général" → on normalise en null.
             settings.GeneralMonthlyFeeFcfa =
                 (dto.GeneralMonthlyFeeFcfa is > 0) ? dto.GeneralMonthlyFeeFcfa : null;
@@ -1970,6 +2013,7 @@ namespace Idara.API.Controllers
             HalfBoardingMonthlyFeeFcfa = s.HalfBoardingMonthlyFeeFcfa,
             DayMonthlyFeeFcfa = s.DayMonthlyFeeFcfa,
             RegistrationFeeFcfa = s.RegistrationFeeFcfa,
+            NotifySchoolBySmsOnPayment = s.NotifySchoolBySmsOnPayment,
             CreatedAt = s.CreatedAt,
             UpdatedAt = s.UpdatedAt
         };

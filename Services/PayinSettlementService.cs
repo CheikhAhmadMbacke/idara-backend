@@ -221,6 +221,10 @@ namespace Idara.API.Services
             var payment = await _context.Payments
                 .Include(p => p.Student)
                 .Include(p => p.Donor)
+                // Le reçu d'un don porte le nom de la collecte : sans cet
+                // Include, il dirait « Don à l'école » alors que le donateur a
+                // donné pour le toit de la salle bleue.
+                .Include(p => p.DonationCampaign)
                 .Include(p => p.Guardian)
                 .Include(p => p.InvoiceAllocations).ThenInclude(a => a.Invoice).ThenInclude(i => i.Student)
                 .Include(p => p.StudentAllocations).ThenInclude(a => a.Student)
@@ -268,12 +272,17 @@ namespace Idara.API.Services
             var shownAmount = payment.TargetAmountFcfa > 0 ? payment.TargetAmountFcfa : payment.AmountFcfa;
             var isTopup = payment.Purpose == PaymentPurpose.WalletTopup;
 
-            // ==================== DON (push uniquement, pas de SMS) ====================
+            // ==================== DON ====================
             if (payment.Purpose == PaymentPurpose.Donation)
             {
-                var donorName = string.IsNullOrWhiteSpace(payment.Donor?.FullName)
-                    ? "un donateur"
-                    : payment.Donor!.FullName!.Trim();
+                // Trois provenances possibles, dans l'ordre de préséance : une
+                // organisation (c'est ELLE qui donne, son représentant n'est
+                // qu'un signataire), un donateur sans compte qui a déclaré son
+                // nom, ou l'ancien chemin — un compte donateur.
+                var donorName = FirstNonBlank(
+                    payment.DonorOrganization,
+                    payment.DonorName,
+                    payment.Donor?.FullName) ?? "un donateur";
                 var schoolName = school0?.Name ?? "une école";
 
                 // Push à l'ÉCOLE (admin + personnel) : « don reçu de X ».
@@ -317,6 +326,24 @@ namespace Idara.API.Services
                     {
                         _logger.LogError(ex,
                             "[payin-settle] Échec push remerciement donateur Payment.Id={Id} — pas bloquant", payment.Id);
+                    }
+                }
+
+                // -------- SMS à la DIRECTION (décision produit 2026-09-03) --------
+                // Un don est rare et inattendu : le directeur doit le savoir tout
+                // de suite, même notifications coupées. Seuls les SchoolAdmin le
+                // reçoivent — un SMS par membre du personnel multiplierait la
+                // note sans rien apporter (§192).
+                if (payment.DonationCampaignId is int campaignId)
+                {
+                    try
+                    {
+                        await SendDonationSmsAsync(payment, campaignId, donorName, shownAmount, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "[payin-settle] Échec SMS don école Payment.Id={Id} — pas bloquant", payment.Id);
                     }
                 }
 
@@ -398,10 +425,134 @@ namespace Idara.API.Services
                     _logger.LogError(ex,
                         "[payin-settle] Échec push école Payment.Id={Id} — pas bloquant", payment.Id);
                 }
+
+                // -------- SMS à la direction, SI l'école l'a demandé --------
+                // Éteint par défaut : la notification ci-dessus est gratuite, ce
+                // SMS ne l'est pas. C'est à l'école de décider de dépenser, pas à
+                // nous à sa place — l'écran de réglage affiche l'estimation.
+                try
+                {
+                    await SendSchoolPaymentSmsIfEnabledAsync(
+                        payment,
+                        isTopup
+                            ? null
+                            : consolidatedSchoolLabel
+                              ?? (payment.Student != null
+                                  ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
+                                  : "un eleve"),
+                        shownAmount, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[payin-settle] Échec SMS école Payment.Id={Id} — pas bloquant", payment.Id);
+                }
             }
 
             // -------- Retry abonnement plateforme (scope DI séparé, best-effort) --------
             await RetrySubscriptionAsync(payment.SchoolId, payment.Id);
+        }
+
+        /// <summary>Première valeur non vide, ou null. Le donateur a trois provenances possibles.</summary>
+        private static string? FirstNonBlank(params string?[] values) =>
+            values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
+
+        /// <summary>
+        /// SMS à la direction pour un don reçu par lien public, avec l'avancée de
+        /// la collecte.
+        /// </summary>
+        /// <remarks>
+        /// Envoyé aux SchoolAdmin SEULEMENT, et à ceux qui ont un numéro. Passe
+        /// par <c>SendSmsAsync</c>, donc par le garde-fou de dépense et le
+        /// registre de facturation (§191) : une collecte virale ne peut pas
+        /// déclencher une rafale de SMS.
+        /// </remarks>
+        private async Task SendDonationSmsAsync(
+            Payment payment, int campaignId, string donorName, long shownAmount, CancellationToken ct)
+        {
+            var campaign = await _context.DonationCampaigns
+                .Where(c => c.Id == campaignId)
+                .Select(c => new { c.Name, c.GoalAmountFcfa })
+                .FirstOrDefaultAsync(ct);
+            if (campaign == null) return;
+
+            // Total de la collecte APRÈS ce don : le règlement est déjà commité
+            // quand cette méthode s'exécute (effets post-commit), donc la somme
+            // inclut bien le don qu'on annonce.
+            var collected = await _context.Payments
+                .Where(p => p.DonationCampaignId == campaignId && p.Status == PaymentStatus.Completed)
+                .SumAsync(p => p.TargetAmountFcfa, ct);
+
+            var admins = await _context.Users
+                .Where(u => u.SchoolId == payment.SchoolId && !u.IsDeleted
+                            && u.Role == UserRoles.SchoolAdmin
+                            && u.PhoneNumber != null)
+                .Select(u => new { u.Id, u.PhoneNumber, u.PreferredLanguage })
+                .ToListAsync(ct);
+            if (admins.Count == 0) return;
+
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+            var msg = NotificationTemplates.DonationReceivedSchoolSms(
+                donorName, shownAmount, campaign.Name, collected, campaign.GoalAmountFcfa);
+
+            foreach (var admin in admins)
+            {
+                await _notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: admin.Id,
+                    RawPhone: admin.PhoneNumber!,
+                    PreferredLanguage: admin.PreferredLanguage ?? "fr",
+                    Message: msg,
+                    Bilingual: platform.SmsBilingual,
+                    TemplateCode: "DONATION_RECEIVED_SCHOOL_SMS",
+                    RelatedEntityId: payment.Id,
+                    PushRoute: "/donations",
+                    SchoolId: payment.SchoolId,
+                    TriggerSource: "webhook:payin"));
+            }
+        }
+
+        /// <summary>
+        /// SMS « paiement reçu » à la direction — uniquement si l'école a activé
+        /// le réglage. Un don ne passe jamais par ici (il a son propre chemin).
+        /// </summary>
+        private async Task SendSchoolPaymentSmsIfEnabledAsync(
+            Payment payment, string? studentLabel, long shownAmount, CancellationToken ct)
+        {
+            if (payment.Purpose == PaymentPurpose.Donation) return;
+
+            var enabled = await _context.SchoolPaymentSettings
+                .Where(s => s.SchoolId == payment.SchoolId)
+                .Select(s => (bool?)s.NotifySchoolBySmsOnPayment)
+                .FirstOrDefaultAsync(ct) ?? false;
+            if (!enabled) return;
+
+            var admins = await _context.Users
+                .Where(u => u.SchoolId == payment.SchoolId && !u.IsDeleted
+                            && u.Role == UserRoles.SchoolAdmin
+                            && u.PhoneNumber != null)
+                .Select(u => new { u.Id, u.PhoneNumber, u.PreferredLanguage })
+                .ToListAsync(ct);
+            if (admins.Count == 0) return;
+
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+            var msg = studentLabel == null
+                ? NotificationTemplates.WalletTopupReceived(shownAmount)
+                : NotificationTemplates.PaymentReceivedSchool(studentLabel, shownAmount);
+
+            foreach (var admin in admins)
+            {
+                await _notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: admin.Id,
+                    RawPhone: admin.PhoneNumber!,
+                    PreferredLanguage: admin.PreferredLanguage ?? "fr",
+                    Message: msg,
+                    Bilingual: platform.SmsBilingual,
+                    TemplateCode: "SCHOOL_PAYMENT_RECEIVED_SMS",
+                    RelatedEntityId: payment.Id,
+                    PushRoute: "/payments/overview",
+                    SchoolId: payment.SchoolId,
+                    TriggerSource: "webhook:payin"));
+            }
         }
 
         /// <summary>
