@@ -65,8 +65,13 @@ namespace Idara.API.Controllers
         /// `GET /api/donation-campaigns` — les collectes de l'école, la
         /// permanente en tête, les actives avant les closes.
         /// </summary>
+        /// <remarks>
+        /// ⚠️ <c>data</c> est la LISTE nue, et <c>canManage</c> voyage à côté d'elle
+        /// dans l'enveloppe — voir <see cref="DonationCampaignsEnvelope"/>. Emballer
+        /// la liste dans un objet a tué cet écran sur tout le parc installé.
+        /// </remarks>
         [HttpGet]
-        public async Task<ActionResult<ApiResponse<DonationCampaignsResponse>>> List(CancellationToken ct)
+        public async Task<ActionResult<DonationCampaignsEnvelope>> List(CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Forbid();
@@ -96,11 +101,12 @@ namespace Idara.API.Controllers
 
             var totals = await _campaigns.GetTotalsAsync(campaigns.Select(c => c.Id).ToList(), ct);
             var dtos = campaigns.Select(c => ToDto(c, totals[c.Id])).ToList();
-            return Ok(ApiResponse<DonationCampaignsResponse>.Ok(new DonationCampaignsResponse
+            return Ok(new DonationCampaignsEnvelope
             {
-                Campaigns = dtos,
+                Success = true,
+                Data = dtos,
                 CanManage = canManage
-            }));
+            });
         }
 
         /// <summary>`GET /api/donation-campaigns/{id}` — une collecte et ses dons.</summary>

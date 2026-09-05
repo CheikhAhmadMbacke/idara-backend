@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Idara.API.DTOs.Common;
 using Idara.API.Enums;
 
 namespace Idara.API.DTOs.Donation
@@ -63,6 +64,36 @@ namespace Idara.API.DTOs.Donation
     {
         public List<DonationCampaignDto> Campaigns { get; set; } = new();
 
+        /// <summary>Créer, modifier, fermer : réservé à la direction.</summary>
+        public bool CanManage { get; set; }
+    }
+
+    /// <summary>
+    /// L'enveloppe RÉELLEMENT servie par <c>GET /api/donation-campaigns</c> :
+    /// <c>data</c> reste la LISTE nue, et le droit de gérer voyage à côté d'elle.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>Pourquoi cette forme et pas <see cref="DonationCampaignsResponse"/>.</b>
+    /// Le 5 septembre 2026, <c>data</c> est passé de la liste nue à un objet
+    /// <c>{ campaigns, canManage }</c> pour porter ce droit. Toutes les applications
+    /// déjà installées lisaient <c>data</c> par un <c>as List</c> : le cast a échoué
+    /// chez elles, et l'écran des collectes est mort d'un coup sur tous les
+    /// téléphones du parc — « Impossible de charger vos collectes », sans qu'aucune
+    /// d'elles ait changé.
+    ///
+    /// Une réponse ne peut pas être à la fois une liste et un objet ; en revanche
+    /// l'ENVELOPPE, elle, peut porter un champ de plus. Un ancien client lit sa
+    /// liste et ignore <c>canManage</c> (il retrouve son test de rôle local, qui
+    /// marchait) ; un client à jour lit le champ et obéit au serveur. Personne n'a
+    /// à installer quoi que ce soit — la règle de conduite du projet : chercher
+    /// d'abord côté serveur.
+    ///
+    /// ⚠️ <b>Règle générale.</b> Le contenu de <c>data</c> est un contrat public
+    /// figé dès la première application publiée. On y AJOUTE des champs, on n'en
+    /// change jamais la nature.
+    /// </remarks>
+    public class DonationCampaignsEnvelope : ApiResponse<List<DonationCampaignDto>>
+    {
         /// <summary>Créer, modifier, fermer : réservé à la direction.</summary>
         public bool CanManage { get; set; }
     }
