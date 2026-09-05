@@ -45,6 +45,28 @@ namespace Idara.API.DTOs.Donation
         public DateTime CreatedAt { get; set; }
     }
 
+    /// <summary>
+    /// Ce que l'utilisateur courant a le droit de faire sur les collectes.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>L'autorité, c'est le SERVEUR.</b> L'écran testait le rôle de son
+    /// côté (<c>role == 'SchoolAdmin'</c>) pour décider d'afficher le bouton
+    /// « Nouvelle collecte ». Quand ce test échouait — pour quelque raison que
+    /// ce soit — le bouton disparaissait <b>sans un mot</b>, et l'utilisateur
+    /// n'avait aucun moyen de comprendre : ni message, ni bouton grisé, rien.
+    /// C'est exactement la porte murée du §212, en pire, parce qu'ici la porte
+    /// existe et se ferme sur un test dupliqué.
+    /// Désormais le serveur DIT ce qui est permis, et l'écran l'explique quand
+    /// ça ne l'est pas.
+    /// </remarks>
+    public class DonationCampaignsResponse
+    {
+        public List<DonationCampaignDto> Campaigns { get; set; } = new();
+
+        /// <summary>Créer, modifier, fermer : réservé à la direction.</summary>
+        public bool CanManage { get; set; }
+    }
+
     /// <summary>Un don reçu, tel que l'école le lit.</summary>
     public class CampaignDonationDto
     {

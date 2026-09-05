@@ -66,15 +66,21 @@ namespace Idara.API.Controllers
         /// permanente en tête, les actives avant les closes.
         /// </summary>
         [HttpGet]
-        public async Task<ActionResult<ApiResponse<List<DonationCampaignDto>>>> List(CancellationToken ct)
+        public async Task<ActionResult<ApiResponse<DonationCampaignsResponse>>> List(CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
             if (schoolId == null) return Forbid();
 
+            // 🔴 C'est le SERVEUR qui dit ce que l'utilisateur peut faire. L'écran
+            // testait le rôle de son côté et faisait disparaître le bouton
+            // « Nouvelle collecte » sans un mot dès que ce test échouait — un
+            // utilisateur devant un écran muet n'a aucun moyen de comprendre.
+            var canManage = User.GetRole() == UserRoles.SchoolAdmin;
+
             // La collecte permanente naît ici, à la première visite : aucune
             // école existante n'a besoin d'être migrée (§175). Réservé à la
             // direction — l'observateur ne doit rien créer en consultant.
-            if (User.GetRole() == UserRoles.SchoolAdmin)
+            if (canManage)
             {
                 var userId = User.GetUserId();
                 if (userId != null)
@@ -90,7 +96,11 @@ namespace Idara.API.Controllers
 
             var totals = await _campaigns.GetTotalsAsync(campaigns.Select(c => c.Id).ToList(), ct);
             var dtos = campaigns.Select(c => ToDto(c, totals[c.Id])).ToList();
-            return Ok(ApiResponse<List<DonationCampaignDto>>.Ok(dtos));
+            return Ok(ApiResponse<DonationCampaignsResponse>.Ok(new DonationCampaignsResponse
+            {
+                Campaigns = dtos,
+                CanManage = canManage
+            }));
         }
 
         /// <summary>`GET /api/donation-campaigns/{id}` — une collecte et ses dons.</summary>
