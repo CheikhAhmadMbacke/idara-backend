@@ -38,9 +38,26 @@ namespace Idara.API.DTOs.Payment
         public PaymentPurpose Purpose { get; set; }
 
         /// <summary>Nom + type du donateur (renseignés uniquement pour un don).</summary>
+        /// <remarks>
+        /// ⚠️ Deux sortes de dons cohabitent. Le don d'un COMPTE donateur remplit
+        /// <see cref="DonorId"/> et <see cref="DonorType"/> ; le don par LIEN n'a
+        /// aucun compte — son identité vit sur le paiement lui-même, et se lit
+        /// dans les quatre champs ci-dessous. Ne renseigner que le premier cas,
+        /// c'était laisser l'école devant « Don reçu » sans savoir de qui.
+        /// </remarks>
         public int? DonorId { get; set; }
         public string? DonorName { get; set; }
         public DonorType? DonorType { get; set; }
+
+        public string? DonorPhone { get; set; }
+        public string? DonorOrganization { get; set; }
+
+        /// <summary>L'anonymat ne vaut QUE pour la page publique : l'école voit toujours qui a donné.</summary>
+        public bool DonorAnonymous { get; set; }
+
+        /// <summary>La collecte à l'origine du don — sans elle, on ignore ce qui a été soutenu.</summary>
+        public int? DonationCampaignId { get; set; }
+        public string? DonationCampaignName { get; set; }
 
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }

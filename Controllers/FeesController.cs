@@ -1437,10 +1437,19 @@ namespace Idara.API.Controllers
         /// Null tant que le prestataire ne l'a pas renvoyée. C'est ELLE qui permet
         /// de rapprocher une ligne Idara d'une ligne du tableau de bord SenePay.
         /// </param>
+        /// <param name="DonorName">
+        /// Qui a donné. ⚠️ Un don par LIEN n'a pas de compte donateur : le nom, le
+        /// numéro et l'organisation vivent sur le `Payment` lui-même. Sans ces
+        /// champs, le détail d'un « Don reçu » n'affichait ni nom ni numéro —
+        /// l'école voyait entrer de l'argent sans savoir de qui.
+        /// </param>
         private sealed record WalletTxRow(
             int Id, WalletTransactionType Type, WalletSource Source, long AmountFcfa, long BalanceAfter,
             WalletRelatedEntity RelatedEntity, int? RelatedId, string? Note, DateTime OccurredAt, string? Label,
-            string Status, string? Reference, string? ProviderReference);
+            string Status, string? Reference, string? ProviderReference,
+            string? DonorName = null, string? DonorPhone = null,
+            string? DonorOrganization = null, bool DonorAnonymous = false,
+            string? CampaignName = null);
 
         /// <summary>
         /// Charge l'historique wallet visible d'une école (récent d'abord), libellés
@@ -1554,6 +1563,12 @@ namespace Idara.API.Controllers
                     Student = p.Student != null ? (p.Student.FirstName + " " + p.Student.LastName) : null,
                     Guardian = p.Guardian != null ? p.Guardian.FullName : null,
                     Donor = p.Donor != null ? p.Donor.FullName : null,
+                    // Don par LIEN : aucun compte donateur, tout est sur le paiement.
+                    p.DonorName,
+                    p.DonorPhone,
+                    p.DonorOrganization,
+                    p.DonorAnonymous,
+                    CampaignName = p.DonationCampaign != null ? p.DonationCampaign.Name : null,
                     p.SenePayTransactionId
                 })
                 .ToDictionaryAsync(p => p.Id, ct);
@@ -1577,9 +1592,15 @@ namespace Idara.API.Controllers
                                  : null;
                         return null;
                     case WalletSource.Donation:
-                        if (relatedId != null && payNames.TryGetValue(relatedId.Value, out var dp)
-                            && !string.IsNullOrWhiteSpace(dp.Donor))
-                            return dp.Donor;
+                        // Ordre volontaire : l'organisation d'abord (c'est elle qui
+                        // donne), puis le nom saisi sur le lien, puis le compte
+                        // donateur historique. L'anonymat ne vaut QUE pour la page
+                        // publique — l'école voit toujours qui a donné.
+                        if (relatedId != null && payNames.TryGetValue(relatedId.Value, out var dp))
+                            return !string.IsNullOrWhiteSpace(dp.DonorOrganization) ? dp.DonorOrganization
+                                 : !string.IsNullOrWhiteSpace(dp.DonorName) ? dp.DonorName
+                                 : !string.IsNullOrWhiteSpace(dp.Donor) ? dp.Donor
+                                 : null;
                         return null;
                     case WalletSource.Withdrawal:
                         if (relatedId != null && wNames.TryGetValue(relatedId.Value, out var w)
@@ -1640,12 +1661,18 @@ namespace Idara.API.Controllers
             return recentRaw.Select(t =>
             {
                 var (reference, provider) = ResolveReferences(t.Source, t.RelatedId);
+                var d = t.Source == WalletSource.Donation && t.RelatedId != null
+                        && payNames.TryGetValue(t.RelatedId.Value, out var dd)
+                    ? dd
+                    : null;
                 return new WalletTxRow(
                     t.Id, t.Type, t.Source, t.AmountFcfa, t.BalanceAfter,
                     t.RelatedEntity, t.RelatedId, t.Note, t.OccurredAt,
                     ResolveLabel(t.Source, t.RelatedId),
                     ResolveStatus(t.Source, t.RelatedId),
-                    reference, provider);
+                    reference, provider,
+                    d?.DonorName, d?.DonorPhone, d?.DonorOrganization,
+                    d?.DonorAnonymous ?? false, d?.CampaignName);
             }).ToList();
         }
 
@@ -1830,8 +1857,15 @@ namespace Idara.API.Controllers
                 InvoiceId = p.InvoiceId,
                 Purpose = p.Purpose,
                 DonorId = p.DonorId,
-                DonorName = p.Donor?.FullName,
+                // Le nom saisi sur le lien prime : c'est celui que le donateur a
+                // donné lui-même. Le compte donateur ne sert que de repli.
+                DonorName = !string.IsNullOrWhiteSpace(p.DonorName) ? p.DonorName : p.Donor?.FullName,
                 DonorType = p.Donor?.DonorType,
+                DonorPhone = p.DonorPhone,
+                DonorOrganization = p.DonorOrganization,
+                DonorAnonymous = p.DonorAnonymous,
+                DonationCampaignId = p.DonationCampaignId,
+                DonationCampaignName = p.DonationCampaign?.Name,
                 AmountFcfa = p.AmountFcfa,
                 FeesFcfa = p.FeesFcfa,
                 NetCreditedFcfa = p.NetCreditedFcfa,
@@ -1862,6 +1896,7 @@ namespace Idara.API.Controllers
                 .Include(p => p.Student).ThenInclude(s => s!.Class)
                 .Include(p => p.Guardian)
                 .Include(p => p.Donor)
+                .Include(p => p.DonationCampaign)
                 .Where(p => p.SchoolId == schoolId)
                 .Where(p => !p.IsHidden); // masqués par le daara → jamais affichés (ni Observateur)
 
