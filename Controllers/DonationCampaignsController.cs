@@ -145,7 +145,8 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<DonationCampaignDetailDto>.Ok(new DonationCampaignDetailDto
             {
                 Campaign = ToDto(campaign, totals),
-                Donations = donations
+                Donations = donations,
+                CanManage = User.GetRole() == UserRoles.SchoolAdmin
             }));
         }
 
@@ -480,6 +481,16 @@ namespace Idara.API.Controllers
     {
         public DonationCampaignDto Campaign { get; set; } = new();
         public List<CampaignDonationDto> Donations { get; set; } = new();
+
+        /// <summary>
+        /// Modifier, suspendre, fermer, supprimer : réservé à la direction.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Champ AJOUTÉ à un objet existant — c'est la seule évolution qui ne
+        /// casse rien (§220) : une application antérieure l'ignore, une récente
+        /// obéit au serveur au lieu de rejouer le test de rôle de son côté (§219).
+        /// </remarks>
+        public bool CanManage { get; set; }
     }
 
     public class CoverImageRequest

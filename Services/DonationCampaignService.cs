@@ -35,7 +35,17 @@ namespace Idara.API.Services
         }
 
         /// <summary>Nom de la collecte permanente, celle qu'on partage sans réfléchir.</summary>
-        public const string PermanentName = "Dons au daara";
+        /// <remarks>
+        /// ⚠️ Neutre à dessein. « Dons au daara » excluait les écoles franco-arabes
+        /// et les établissements qui ne se disent pas daara — le produit les
+        /// accueille depuis le 2026-08-31, c'était le vocabulaire qui retardait
+        /// (§186). L'école reste libre de le renommer ; ce n'est qu'un point de
+        /// départ, mais c'est celui que tout le monde voit d'abord.
+        /// </remarks>
+        public const string PermanentName = "Dons à l'établissement";
+
+        /// <summary>L'ancien nom, gardé pour la migration de renommage (2026-09-05).</summary>
+        public const string LegacyPermanentName = "Dons au daara";
 
         /// <summary>
         /// La collecte permanente de l'école, créée à la volée si elle n'existe
