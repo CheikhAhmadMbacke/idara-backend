@@ -60,9 +60,36 @@ namespace Idara.API.Services.Notifications
             Fr: $"La mensualite de {eleve} ({montantFcfa} FCFA) pour {periode} est a payer. Reglez sur idara.sn ou sur l'application.",
             Ar: $"قسط {eleve} ({montantFcfa} FCFA) عن {periode} مستحق الدفع. ادفع عبر idara.sn أو عبر التطبيق.");
 
-        public static BilingualMessage PaymentReceived(string eleve, long montantFcfa) => new(
-            Fr: $"Paiement de {montantFcfa} FCFA recu pour {eleve}. Merci. Votre recu est disponible dans l'application.",
-            Ar: $"تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. شكرا. الإيصال متاح في التطبيق.");
+        /// <summary>
+        /// Confirmation de paiement au payeur, avec le lien de son reçu.
+        /// </summary>
+        /// <param name="recuUrl">
+        /// Adresse publique du reçu (jeton de 128 bits), ou null pour les
+        /// paiements anciens qui n'en portent pas.
+        ///
+        /// <para>🔴 <b>C'est ce lien qui rend le reçu atteignable.</b> Le texte
+        /// disait « disponible dans l'application » — or un parent qui paie
+        /// depuis un LIEN n'a pas de compte, donc pas d'application : la phrase
+        /// le renvoyait vers une porte qui n'existe pas pour lui. Et depuis que
+        /// la vérification demande jusqu'à une minute (mesurée), celui qui ferme
+        /// la page avant la fin n'obtenait son reçu par AUCUN chemin. Le SMS est
+        /// le filet : page fermée, le reçu arrive quand même.</para>
+        ///
+        /// <para>⚠️ <b>Le lien ne coûte pas un segment de plus</b>, et ce n'est
+        /// pas un hasard : mesuré à 138 caractères dans le pire cas réaliste
+        /// (nom très long + montant à 6 chiffres), soit 22 de marge sous les 160
+        /// du segment GSM-7. On envoie l'adresse de la PAGE de résultat et non
+        /// celle du PDF — 12 caractères de moins, et elle offre en plus le
+        /// partage WhatsApp. Toute retouche de ce texte se REMESURE (§224).</para>
+        /// </param>
+        public static BilingualMessage PaymentReceived(
+            string eleve, long montantFcfa, string? recuUrl = null) => new(
+            Fr: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"Paiement de {montantFcfa} FCFA recu pour {eleve}. Merci. Votre recu est disponible dans l'application."
+                : $"Paiement de {montantFcfa} FCFA recu pour {eleve}. Recu : {recuUrl}",
+            Ar: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. شكرا. الإيصال متاح في التطبيق."
+                : $"تم استلام دفعة {montantFcfa} FCFA لفائدة {eleve}. الإيصال: {recuUrl}");
 
         public static BilingualMessage InvoiceOverdue(string eleve, long montantFcfa) => new(
             Fr: $"Rappel : la mensualite de {eleve} ({montantFcfa} FCFA) reste a regler. Reglez sur idara.sn ou sur l'application.",
@@ -221,9 +248,14 @@ namespace Idara.API.Services.Notifications
 
         // Rechargement du wallet école (topup) : pas d'élève, c'est l'école qui
         // alimente son propre solde.
-        public static BilingualMessage WalletTopupReceived(long montantFcfa) => new(
-            Fr: $"Recharge de {montantFcfa} FCFA recue. Votre solde a ete credite.",
-            Ar: $"تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك.");
+        public static BilingualMessage WalletTopupReceived(
+            long montantFcfa, string? recuUrl = null) => new(
+            Fr: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"Recharge de {montantFcfa} FCFA recue. Votre solde a ete credite."
+                : $"Recharge de {montantFcfa} FCFA recue. Votre solde a ete credite. Recu : {recuUrl}",
+            Ar: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك."
+                : $"تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك. الإيصال: {recuUrl}");
 
         // Auto-ajustement de palier à la facturation : l'effectif de l'école a
         // dépassé le plafond de son plan, on l'a remontée au plan adapté.
@@ -279,10 +311,26 @@ namespace Idara.API.Services.Notifications
                 Ar: $"تبرع بمبلغ {montantFcfa} FCFA من {donateur} - {collecte}.{avanceeAr}");
         }
 
-        // Remerciement au donateur (push) après confirmation de son don.
-        public static BilingualMessage DonationThanks(long montantFcfa, string ecole) => new(
-            Fr: $"Merci pour votre don de {montantFcfa} FCFA a {ecole}. Votre recu est disponible dans l'application.",
-            Ar: $"شكرا على تبرعك بمبلغ {montantFcfa} FCFA لفائدة {ecole}. الإيصال متاح في التطبيق.");
+        /// <summary>
+        /// Remerciement au donateur après confirmation de son don.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Renverse la décision du 2026-09-03</b> (« aucun SMS au
+        /// donateur »), et c'est le délai de vérification qui l'a rendue
+        /// intenable : un donateur qui ferme la page avant la fin n'obtenait
+        /// JAMAIS son reçu — il n'a pas de compte, donc aucun autre chemin n'y
+        /// menait. Sans <paramref name="recuUrl"/>, le texte renvoie vers
+        /// l'application : c'est le cas du donateur qui a bien un compte, à qui
+        /// le message part en push.
+        /// </remarks>
+        public static BilingualMessage DonationThanks(
+            long montantFcfa, string ecole, string? recuUrl = null) => new(
+            Fr: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"Merci pour votre don de {montantFcfa} FCFA a {ecole}. Votre recu est disponible dans l'application."
+                : $"Merci pour votre don de {montantFcfa} FCFA a {ecole}. Recu : {recuUrl}",
+            Ar: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"شكرا على تبرعك بمبلغ {montantFcfa} FCFA لفائدة {ecole}. الإيصال متاح في التطبيق."
+                : $"شكرا على تبرعك بمبلغ {montantFcfa} FCFA لفائدة {ecole}. الإيصال: {recuUrl}");
 
         // Retrait/transfert effectué : prévient l'admin uniquement.
         public static BilingualMessage WithdrawalDone(long montantFcfa) => new(

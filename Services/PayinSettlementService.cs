@@ -1,10 +1,12 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Options;
 using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Idara.API.Services
 {
@@ -15,6 +17,7 @@ namespace Idara.API.Services
         private readonly IReceiptPdfService _receiptPdf;
         private readonly INotificationService _notif;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly SenePaySettings _senepaySettings;
         private readonly ILogger<PayinSettlementService> _logger;
 
         public PayinSettlementService(
@@ -22,14 +25,35 @@ namespace Idara.API.Services
             IReceiptPdfService receiptPdf,
             INotificationService notif,
             IServiceScopeFactory scopeFactory,
+            IOptions<SenePaySettings> senepaySettings,
             ILogger<PayinSettlementService> logger)
         {
             _context = context;
             _receiptPdf = receiptPdf;
             _notif = notif;
             _scopeFactory = scopeFactory;
+            _senepaySettings = senepaySettings.Value;
             _logger = logger;
         }
+
+        /// <summary>
+        /// Adresse publique du reçu d'un paiement, ou null s'il ne porte pas de
+        /// jeton (paiements antérieurs à sa mise en place).
+        /// </summary>
+        /// <remarks>
+        /// <para>C'est la page de RÉSULTAT, pas le PDF : elle est 12 caractères
+        /// plus courte — ce qui compte quand le message doit tenir dans un
+        /// segment — et elle offre en plus le téléchargement et le partage
+        /// WhatsApp, là où le PDF direct ne donne que le fichier.</para>
+        ///
+        /// <para>Le jeton fait 128 bits : il n'est pas énumérable, et c'est lui
+        /// qui autorise l'accès sans compte. Sans lui, pas de lien — on ne
+        /// fabrique jamais une adresse qui échouerait chez le destinataire.</para>
+        /// </remarks>
+        private string? PublicReceiptUrl(Payment payment) =>
+            string.IsNullOrEmpty(payment.PublicResultToken)
+                ? null
+                : $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/{payment.Id}/{payment.PublicResultToken}";
 
         public async Task<PayinSettlementResult> SettleAsync(
             int paymentId,
@@ -329,6 +353,24 @@ namespace Idara.API.Services
                     }
                 }
 
+                // -------- SMS de reçu au DONATEUR (décision 2026-09-05) --------
+                // 🔴 Renverse la décision du 2026-09-03 (« aucun SMS au
+                // donateur »), et c'est la MESURE qui l'a imposé : la
+                // vérification d'un paiement demande 40 à 60 secondes, dont
+                // moins de 3 nous appartiennent. Un donateur qui ferme la page
+                // avant la fin n'a AUCUN autre chemin vers son reçu — il n'a pas
+                // de compte, donc pas d'application, et personne ne peut le lui
+                // renvoyer. Le SMS est le filet.
+                try
+                {
+                    await SendDonorReceiptSmsAsync(payment, schoolName, shownAmount, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[payin-settle] Échec SMS reçu donateur Payment.Id={Id} — pas bloquant", payment.Id);
+                }
+
                 // -------- SMS à la DIRECTION (décision produit 2026-09-03) --------
                 // Un don est rare et inattendu : le directeur doit le savoir tout
                 // de suite, même notifications coupées. Seuls les SchoolAdmin le
@@ -366,7 +408,11 @@ namespace Idara.API.Services
                                 ? $"{payment.Student.FirstName} {payment.Student.LastName}".Trim()
                                 : "votre enfant");
                         var platform = await _context.GetPlatformSettingsAsync(ct);
-                        var msg = NotificationTemplates.PaymentReceived(eleve, shownAmount);
+                        // Le lien du recu voyage AVEC la confirmation : celui qui a
+                        // paye depuis un lien n'a pas de compte, et celui qui a ferme
+                        // la page pendant la verification n'a plus aucun autre chemin.
+                        var msg = NotificationTemplates.PaymentReceived(
+                            eleve, shownAmount, PublicReceiptUrl(payment));
                         await _notif.SendSmsAsync(new NotificationSmsRequest(
                             UserId: guardian.Id,
                             RawPhone: guardian.PhoneNumber,
@@ -512,6 +558,51 @@ namespace Idara.API.Services
         }
 
         /// <summary>
+        /// SMS de reçu au DONATEUR, avec le lien de sa pièce.
+        /// </summary>
+        /// <remarks>
+        /// <para>Le numéro vient d'abord de ce que le donateur a DÉCLARÉ sur la
+        /// page publique, sinon de son compte quand il en a un. Aucun numéro,
+        /// aucun envoi : on ne devine pas où joindre quelqu'un.</para>
+        ///
+        /// <para>⚠️ <b>Non refacturé à l'école</b> (décision 2026-09-06). Le §208
+        /// refacture les SMS que l'école DEMANDE — l'annonce du don à la
+        /// direction en est un. Le reçu du donateur, lui, n'est demandé par
+        /// personne : c'est une brique du produit, au même titre que le SMS de
+        /// confirmation au parent, qui part déjà sans être refacturé. Le
+        /// rattachement à <c>SchoolId</c> reste posé pour que la dépense soit
+        /// imputable et VISIBLE des plafonds (§191) — imputable n'est pas
+        /// facturable.</para>
+        ///
+        /// <para>Un donateur n'a ni compte ni langue connue quand il donne par
+        /// lien : <c>UserId</c> est alors null, et la règle d'or de la langue
+        /// (§192) ne peut pas relire de préférence — on part en français, la
+        /// langue de la page de don par défaut.</para>
+        /// </remarks>
+        private async Task SendDonorReceiptSmsAsync(
+            Payment payment, string schoolName, long shownAmount, CancellationToken ct)
+        {
+            var phone = FirstNonBlank(payment.DonorPhone, payment.Donor?.PhoneNumber);
+            if (phone == null) return;
+
+            var url = PublicReceiptUrl(payment);
+            if (url == null) return; // Sans reçu atteignable, le SMS n'a plus d'objet.
+
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+            await _notif.SendSmsAsync(new NotificationSmsRequest(
+                UserId: payment.DonorId,
+                RawPhone: phone,
+                PreferredLanguage: payment.Donor?.PreferredLanguage ?? "fr",
+                Message: NotificationTemplates.DonationThanks(shownAmount, schoolName, url),
+                Bilingual: platform.SmsBilingual,
+                TemplateCode: "DONATION_RECEIPT_SMS",
+                RelatedEntityId: payment.Id,
+                PushRoute: "/donor/donations",
+                SchoolId: payment.SchoolId,
+                TriggerSource: "webhook:payin"));
+        }
+
+        /// <summary>
         /// SMS « paiement reçu » à la direction — uniquement si l'école a activé
         /// le réglage. Un don ne passe jamais par ici (il a son propre chemin).
         /// </summary>
@@ -535,8 +626,12 @@ namespace Idara.API.Services
             if (admins.Count == 0) return;
 
             var platform = await _context.GetPlatformSettingsAsync(ct);
+            // Le recu n'accompagne que la RECHARGE : c'est l'ecole qui l'a
+            // payee, donc c'est sa piece. Pour un paiement de parent, la piece
+            // revient au parent — la direction, elle, a l'historique complet
+            // dans l'application, et le lien porterait le recu d'un tiers.
             var msg = studentLabel == null
-                ? NotificationTemplates.WalletTopupReceived(shownAmount)
+                ? NotificationTemplates.WalletTopupReceived(shownAmount, PublicReceiptUrl(payment))
                 : NotificationTemplates.PaymentReceivedSchool(studentLabel, shownAmount);
 
             foreach (var admin in admins)

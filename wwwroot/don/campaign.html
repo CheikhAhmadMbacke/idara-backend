@@ -279,7 +279,7 @@
       start_error: 'Le don n\'a pas pu être lancé. Réessayez.', net_error: 'Connexion impossible. Réessayez.',
       inapp: 'Si Wave ne s\'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).',
       footer: 'Paiement sécurisé via Wave · Idara',
-      fcfa: 'FCFA', lang_button: 'العربية'
+      lang_button: 'العربية'
     },
     ar: {
       title: 'Idara — التبرع', loading: 'جارٍ التحميل…',
@@ -306,7 +306,7 @@
       start_error: 'تعذّر بدء التبرع. حاول مرة أخرى.', net_error: 'لا يوجد اتصال. حاول مرة أخرى.',
       inapp: 'إذا لم يُفتح Wave، افتح هذا الرابط في Chrome أو Safari (القائمة ⋮ ← « فتح في المتصفح »).',
       footer: 'دفع آمن عبر Wave · Idara',
-      fcfa: 'فرنك', lang_button: 'Français'
+      lang_button: 'Français'
     }
   };
 
@@ -346,7 +346,10 @@
   var chosenAmount = null;
 
   function money(n) {
-    return (n || 0).toLocaleString(lang === 'ar' ? 'ar-EG' : 'fr-FR') + ' ' + t('fcfa');
+    // L'argent ne se traduit JAMAIS (decision produit 2026-09-05) : chiffres
+    // latins et « FCFA » quelle que soit la langue. Un arabophone senegalais lit
+    // mieux « 1000 FCFA » que « ١٠٠٠ فرنك ».
+    return (n || 0).toLocaleString('fr-FR') + ' FCFA';
   }
   function show(id, on) { $(id).classList.toggle('hidden', !on); }
 
@@ -474,7 +477,7 @@
         sug.forEach(function (v) {
           var b = document.createElement('button');
           b.type = 'button';
-          b.textContent = v.toLocaleString(lang === 'ar' ? 'ar-EG' : 'fr-FR');
+          b.textContent = v.toLocaleString('fr-FR');
           b.addEventListener('click', function () {
             chosenAmount = v;
             $('amount').value = v;

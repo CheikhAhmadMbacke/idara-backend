@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" dir="ltr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
@@ -194,8 +194,19 @@
     }
     .footer a { color: var(--text-tertiary); }
 
-    /* RTL support si on traduit la page en arabe plus tard */
+    /* Arabe : la page est bilingue depuis le 2026-09-06. La direction est
+       posée sur <html> par applyI18n(), jamais en dur. */
     [dir="rtl"] .header { flex-direction: row-reverse; }
+    html[dir="rtl"] body { font-family: "Noto Naskh Arabic", "Segoe UI", Tahoma, Arial, sans-serif; }
+    /* La reference SenePay et les montants restent lus de gauche a droite :
+       ce sont des identifiants et des chiffres latins, pas du texte arabe. */
+    html[dir="rtl"] .summary-value { direction: ltr; unicode-bidi: embed; }
+    .lang {
+      margin-inline-start: auto;
+      color: var(--primary); background: #fff; cursor: pointer;
+      font-family: inherit; font-size: 14px; font-weight: 600;
+      border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+    }
   </style>
 </head>
 <body>
@@ -203,24 +214,25 @@
     <div class="header">
       <div class="logo">i</div>
       <div class="brand">Idara</div>
+      <button id="lang" class="lang" type="button"></button>
     </div>
 
     <div id="state" class="state-card">
       <div id="state-icon" class="state-icon loading">
         <div class="spinner"></div>
       </div>
-      <h1 id="state-title" class="state-title">Vérification du paiement…</h1>
-      <p id="state-subtitle" class="state-subtitle">Nous confirmons votre transaction avec SenePay.</p>
+      <h1 id="state-title" class="state-title" data-i18n="pending_title">Vérification du paiement…</h1>
+      <p id="state-subtitle" class="state-subtitle" data-i18n="pending_sub">Cela prend en général moins d’une minute. Vous pouvez fermer cette page : votre reçu vous sera envoyé par SMS.</p>
       <div id="summary" class="summary" style="display:none;"></div>
     </div>
 
     <a id="pdf-link" href="#" target="_blank" rel="noopener" style="display:none;"><img id="pdf-frame" class="receipt-preview" alt="Reçu" onerror="this.style.display='none';document.getElementById('pdf-fallback').style.display='block';" /></a>
-    <div id="pdf-fallback" class="hint" style="display:none;text-align:center;margin-top:12px;color:#5B6478">Aperçu indisponible — utilisez « Télécharger le reçu » ci-dessous.</div>
+    <div id="pdf-fallback" class="hint" style="display:none;text-align:center;margin-top:12px;color:#5B6478" data-i18n="preview_unavailable">Aperçu indisponible — utilisez « Télécharger le reçu » ci-dessous.</div>
 
     <div id="actions" class="actions" style="display:none;"></div>
 
     <div class="footer">
-      Paiement sécurisé via <strong>SenePay</strong> ·
+      <span data-i18n="footer_secure">Paiement sécurisé via</span> <strong>SenePay</strong> ·
       <a href="https://idara.sn">idara.sn</a>
     </div>
   </div>
@@ -233,6 +245,147 @@
     const paymentId = pathParts[1];
     const token = pathParts[2];
     const initialStatus = new URLSearchParams(window.location.search).get('status') || 'success';
+
+    // ===================== Bilingue FR / AR (2026-09-06) =====================
+    // La page etait en francais uniquement, alors qu'un daara sur deux travaille
+    // en arabe et que c'est la SEULE page que voit un parent payant par lien.
+    //
+    // La cle localStorage est la MEME que celle de la page de don
+    // (« idara_lang ») : un donateur qui a bascule en arabe pour donner
+    // retrouve l'arabe sur son recu. Deux cles auraient reset son choix
+    // au moment precis ou il attend une confirmation.
+    //
+    // 🔴 L'ARGENT NE SE TRADUIT JAMAIS (decision produit 2026-09-05) : les
+    // montants restent en chiffres LATINS et la devise reste « FCFA », dans
+    // les deux langues. Un arabophone senegalais lit mieux « 1000 FCFA » que
+    // « ١٠٠٠ فرنك ». C'est pourquoi aucune cle de ce dictionnaire ne porte de
+    // montant ni de devise — fmt() s'en charge, sans locale.
+    const I18N = {
+      fr: {
+        title: 'Idara — Résultat du paiement',
+        lang_button: 'العربية',
+        pending_title: 'Vérification du paiement…',
+        pending_sub: "Cela prend en général moins d'une minute. Vous pouvez fermer cette page : votre reçu vous sera envoyé par SMS.",
+        cancel_title: 'Paiement annulé',
+        cancel_sub: "Vous avez annulé le paiement. Vous pouvez réessayer depuis l'application Idara.",
+        notfound_title: 'Paiement introuvable',
+        notfound_sub: "Ce lien de paiement n'est pas valide ou a expiré.",
+        ok_title_payment: 'Paiement confirmé',
+        ok_title_topup: 'Recharge confirmée',
+        ok_title_donation: 'Don confirmé',
+        ok_sub_payment: "Votre paiement a bien été reçu par l'école. Le reçu officiel est ci-dessous.",
+        ok_sub_topup: 'Le solde de votre école a bien été crédité. Le reçu est ci-dessous.',
+        ok_sub_donation: 'Merci pour votre don. Le daara a bien reçu votre soutien. Le reçu est ci-dessous.',
+        failed_title: 'Paiement échoué',
+        expired_title: 'Paiement expiré',
+        failed_sub: "Le paiement n'a pas pu être traité. Vous pouvez réessayer.",
+        slow_title: 'Paiement en cours de traitement',
+        slow_sub: 'La confirmation prend plus de temps que prévu. Le reçu apparaîtra dans votre historique Idara dès que le paiement est confirmé.',
+        offline_title: 'Connexion perdue',
+        offline_sub: 'Vérifiez votre connexion internet et rechargez la page.',
+        amount_paid: 'Montant payé',
+        amount_topup: 'Montant rechargé',
+        amount_donation: 'Montant du don',
+        student: 'Élève',
+        donor: 'Donateur',
+        school: 'École',
+        daara: 'Daara',
+        method: 'Moyen de paiement',
+        reference: 'Référence',
+        share_whatsapp: 'Partager sur WhatsApp',
+        download: 'Télécharger le reçu',
+        back: 'Retour à Idara',
+        preview_alt: 'Reçu',
+        preview_unavailable: 'Aperçu indisponible — utilisez « Télécharger le reçu » ci-dessous.',
+        footer_secure: 'Paiement sécurisé via',
+        wa_payment: 'paiement', wa_topup: 'rechargement', wa_donation: 'don',
+        wa_text: 'Bonjour, voici le reçu de mon {kind} Idara ({amount}).'
+      },
+      ar: {
+        title: 'Idara — نتيجة الدفع',
+        lang_button: 'Français',
+        pending_title: 'جارٍ التحقق من الدفع…',
+        pending_sub: 'يستغرق ذلك عادة أقل من دقيقة. يمكنك إغلاق هذه الصفحة: سيصلك الإيصال عبر رسالة نصية.',
+        cancel_title: 'تم إلغاء الدفع',
+        cancel_sub: 'لقد ألغيت عملية الدفع. يمكنك المحاولة مجددا من تطبيق Idara.',
+        notfound_title: 'الدفع غير موجود',
+        notfound_sub: 'رابط الدفع هذا غير صالح أو انتهت صلاحيته.',
+        ok_title_payment: 'تم تأكيد الدفع',
+        ok_title_topup: 'تم تأكيد الشحن',
+        ok_title_donation: 'تم تأكيد التبرع',
+        ok_sub_payment: 'تم استلام دفعتكم من طرف المدرسة. الإيصال الرسمي أدناه.',
+        ok_sub_topup: 'تم إضافة المبلغ إلى رصيد مدرستكم. الإيصال أدناه.',
+        ok_sub_donation: 'شكرا على تبرعكم. لقد وصل دعمكم إلى الدارة. الإيصال أدناه.',
+        failed_title: 'فشل الدفع',
+        expired_title: 'انتهت صلاحية الدفع',
+        failed_sub: 'تعذّرت معالجة الدفع. يمكنكم المحاولة مجددا.',
+        slow_title: 'الدفع قيد المعالجة',
+        slow_sub: 'التأكيد يستغرق وقتا أطول من المتوقع. سيظهر الإيصال في سجلّكم على Idara بمجرد تأكيد الدفع.',
+        offline_title: 'انقطع الاتصال',
+        offline_sub: 'تحققوا من اتصالكم بالإنترنت ثم أعيدوا تحميل الصفحة.',
+        amount_paid: 'المبلغ المدفوع',
+        amount_topup: 'مبلغ الشحن',
+        amount_donation: 'مبلغ التبرع',
+        student: 'التلميذ',
+        donor: 'المتبرع',
+        school: 'المدرسة',
+        daara: 'الدارة',
+        method: 'وسيلة الدفع',
+        reference: 'المرجع',
+        share_whatsapp: 'المشاركة عبر WhatsApp',
+        download: 'تحميل الإيصال',
+        back: 'العودة إلى Idara',
+        preview_alt: 'الإيصال',
+        preview_unavailable: 'المعاينة غير متاحة — استعملوا « تحميل الإيصال » أدناه.',
+        footer_secure: 'دفع آمن عبر',
+        wa_payment: 'دفعتي', wa_topup: 'شحني', wa_donation: 'تبرعي',
+        wa_text: 'السلام عليكم، هذا إيصال {kind} عبر Idara ({amount}).'
+      }
+    };
+
+    var lang = (function () {
+      var q = new URLSearchParams(location.search).get('lang');
+      if (q === 'fr' || q === 'ar') return q;
+      try { var st = localStorage.getItem('idara_lang'); if (st === 'fr' || st === 'ar') return st; } catch (e) {}
+      return /^ar/i.test(navigator.language || '') ? 'ar' : 'fr';
+    })();
+
+    function t(key, vars) {
+      var s = (I18N[lang] && I18N[lang][key]) || I18N.fr[key] || key;
+      if (vars) Object.keys(vars).forEach(function (k) { s = s.split('{' + k + '}').join(vars[k]); });
+      return s;
+    }
+
+    function applyI18n() {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+      document.title = t('title');
+      document.querySelectorAll('[data-i18n]').forEach(function (el) {
+        el.textContent = t(el.getAttribute('data-i18n'));
+      });
+      var img = document.getElementById('pdf-frame');
+      if (img) img.alt = t('preview_alt');
+      // §153 : le bouton porte la langue CIBLE, pas la langue courante.
+      document.getElementById('lang').textContent = t('lang_button');
+    }
+    applyI18n();
+
+    // Bascule par RECHARGEMENT plutot que par re-rendu. La page est un ecran
+    // d'attente de moins d'une minute : recharger la remet dans le meme etat
+    // (le sondage relit le statut, qui n'a pas bouge) pour trois lignes de
+    // code, la ou un re-rendu obligerait a garder en memoire l'etat courant et
+    // ses variables — donc a maintenir un second chemin d'affichage, et a le
+    // tenir juste sur les six etats terminaux.
+    document.getElementById('lang').addEventListener('click', function () {
+      lang = lang === 'fr' ? 'ar' : 'fr';
+      try { localStorage.setItem('idara_lang', lang); } catch (e) {}
+      // Le parametre d'URL prime sur localStorage a la lecture : sans cette
+      // mise a jour, un lien porteur de ?lang= annulerait le choix a chaque
+      // rechargement.
+      var u = new URL(window.location.href);
+      u.searchParams.set('lang', lang);
+      window.location.replace(u.toString());
+    });
 
     const stateIcon = document.getElementById('state-icon');
     const stateTitle = document.getElementById('state-title');
@@ -262,17 +415,18 @@
     function renderSummary(data) {
       const rows = [
         {
-          label: data.isTopup ? 'Montant rechargé' : data.isDonation ? 'Montant du don' : 'Montant payé',
+          label: data.isTopup ? t('amount_topup') : data.isDonation ? t('amount_donation') : t('amount_paid'),
           value: fmt(data.amountChargedFcfa) + ' FCFA',
           big: true,
         },
       ];
-      if (data.studentName) rows.push({ label: 'Élève', value: data.studentName });
-      if (data.isDonation && data.donorName) rows.push({ label: 'Donateur', value: data.donorName });
-      if (data.schoolName) rows.push({ label: data.isDonation ? 'Daara' : 'École', value: data.schoolName });
-      rows.push({ label: 'Moyen de paiement', value: data['operator'] === 'Orange' ? 'Orange Money' : 'Wave' });
+      if (data.studentName) rows.push({ label: t('student'), value: data.studentName });
+      if (data.isDonation && data.donorName) rows.push({ label: t('donor'), value: data.donorName });
+      if (data.schoolName) rows.push({ label: data.isDonation ? t('daara') : t('school'), value: data.schoolName });
+      // Les marques restent en latin, meme en arabe (regle projet).
+      rows.push({ label: t('method'), value: data['operator'] === 'Orange' ? 'Orange Money' : 'Wave' });
       if (data.senePayTransactionId) {
-        rows.push({ label: 'Référence', value: data.senePayTransactionId });
+        rows.push({ label: t('reference'), value: data.senePayTransactionId });
       }
       summaryEl.innerHTML = rows.map(r => `
         <div class="summary-row">
@@ -291,19 +445,20 @@
         // attachés depuis une web page, mais ouvre parfaitement un lien externe
         // que le destinataire peut télécharger.
         const pdfUrl = `${window.location.origin}/pay/${paymentId}/${token}/receipt.pdf`;
+        const waKind = data.isDonation ? t('wa_donation') : data.isTopup ? t('wa_topup') : t('wa_payment');
         const waText = encodeURIComponent(
-          `Bonjour, voici le reçu de mon ${data.isDonation ? 'don' : data.isTopup ? 'rechargement' : 'paiement'} Idara (${fmt(data.amountChargedFcfa)} FCFA). ${pdfUrl}`
+          t('wa_text', { kind: waKind, amount: fmt(data.amountChargedFcfa) + ' FCFA' }) + ' ' + pdfUrl
         );
         items.push(`
           <a class="btn btn-whatsapp" href="https://wa.me/?text=${waText}" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.2-1.8-.9-2.1-1-.3-.1-.5-.2-.7.2-.2.3-.8 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.3-.5-2.4-1.5-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.6.1-.1.3-.3.4-.5.1-.2.2-.3.3-.5.1-.2 0-.4 0-.5-.1-.2-.7-1.6-.9-2.2-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5 0 1.5 1 2.9 1.2 3.1.1.2 2.1 3.3 5.2 4.6.7.3 1.3.5 1.7.6.7.2 1.4.2 1.9.1.6-.1 1.8-.7 2-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.4Z"/><path d="M20.5 3.5C18.3 1.2 15.3 0 12 0 5.4 0 0 5.4 0 12c0 2.1.5 4.1 1.6 5.9L0 24l6.3-1.6c1.7.9 3.7 1.4 5.7 1.4 6.6 0 12-5.4 12-12 0-3.2-1.3-6.2-3.5-8.3Zm-8.5 18.4c-1.8 0-3.6-.5-5.1-1.4l-.4-.2-3.8 1 1-3.7-.2-.4C2.6 15.7 2 13.9 2 12c0-5.5 4.5-10 10-10s10 4.5 10 10-4.5 9.9-10 9.9Z"/></svg>
-            Partager sur WhatsApp
+            ${esc(t('share_whatsapp'))}
           </a>
         `);
         items.push(`
           <a class="btn btn-primary" href="${pdfUrl}?download=true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-            Télécharger le reçu
+            ${esc(t('download'))}
           </a>
         `);
       }
@@ -314,7 +469,7 @@
       items.push(`
         <a class="btn btn-ghost" href="https://idara.sn/app">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>
-          Retour à Idara
+          ${esc(t('back'))}
         </a>
       `);
       actionsEl.innerHTML = items.join('');
@@ -323,12 +478,7 @@
 
     // --- Cas annulation immédiate ---
     if (initialStatus === 'cancel') {
-      setState(
-        'warning',
-        '⚠️',
-        'Paiement annulé',
-        'Vous avez annulé le paiement. Vous pouvez réessayer depuis l\'application Idara.'
-      );
+      setState('warning', '⚠️', t('cancel_title'), t('cancel_sub'));
       renderActions({}, false);
     } else {
       // --- Cas success : poll du statut côté serveur ---
@@ -342,8 +492,7 @@
           const res = await fetch(`/pay/${paymentId}/${token}/status`);
           if (!res.ok) {
             if (res.status === 404) {
-              setState('error', '❌', 'Paiement introuvable',
-                'Ce lien de paiement n\'est pas valide ou a expiré.');
+              setState('error', '❌', t('notfound_title'), t('notfound_sub'));
               renderActions({}, false);
               return;
             }
@@ -355,12 +504,8 @@
 
           if (s === 'completed') {
             setState('success', '✓',
-              data.isTopup ? 'Recharge confirmée' : data.isDonation ? 'Don confirmé' : 'Paiement confirmé',
-              data.isTopup
-                ? 'Le solde de votre école a bien été crédité. Le reçu est ci-dessous.'
-                : data.isDonation
-                  ? 'Merci pour votre don. Le daara a bien reçu votre soutien. Le reçu est ci-dessous.'
-                  : 'Votre paiement a bien été reçu par l\'école. Le reçu officiel est ci-dessous.');
+              data.isTopup ? t('ok_title_topup') : data.isDonation ? t('ok_title_donation') : t('ok_title_payment'),
+              data.isTopup ? t('ok_sub_topup') : data.isDonation ? t('ok_sub_donation') : t('ok_sub_payment'));
             // Affiche le PDF en iframe.
             // Aperçu image du reçu ; un appui ouvre le PDF complet.
             pdfFrame.src = `/pay/${paymentId}/${token}/receipt.png`;
@@ -370,17 +515,17 @@
             return; // stop polling
           }
           if (s === 'failed' || s === 'cancelled' || s === 'expired') {
+            // failureReason vient du PSP et n'est pas traduit : mieux vaut la
+            // cause exacte en francais qu'un message generique en arabe.
             setState('error', '❌',
-              s === 'expired' ? 'Paiement expiré' : 'Paiement échoué',
-              data.failureReason || 'Le paiement n\'a pas pu être traité. Vous pouvez réessayer.');
+              s === 'expired' ? t('expired_title') : t('failed_title'),
+              data.failureReason || t('failed_sub'));
             renderActions(data, false);
             return; // stop polling
           }
           // Status pending : continue à poll
           if (pollCount > POLL_MAX_TICKS) {
-            setState('warning', '⏱',
-              'Paiement en cours de traitement',
-              'La confirmation prend plus de temps que prévu. Le reçu apparaîtra dans votre historique Idara dès que le paiement est confirmé.');
+            setState('warning', '⏱', t('slow_title'), t('slow_sub'));
             renderActions(data, false);
             return;
           }
@@ -388,8 +533,7 @@
         } catch (e) {
           // Erreur réseau ponctuelle : continue le poll, jusqu'au timeout.
           if (pollCount > POLL_MAX_TICKS) {
-            setState('error', '❌', 'Connexion perdue',
-              'Vérifiez votre connexion internet et rechargez la page.');
+            setState('error', '❌', t('offline_title'), t('offline_sub'));
             return;
           }
           setTimeout(poll, POLL_INTERVAL_MS);

@@ -184,7 +184,7 @@
     ar: {
       title: 'Idara — دفع الرسوم الدراسية', loading: 'جارٍ التحميل…',
       due_title: 'المبلغ المستحق', free_title: 'المبلغ المراد دفعه', total: 'المجموع',
-      free_hint: 'أدخل المبلغ لكل طفل (بالفرنك CFA).',
+      free_hint: 'أدخل المبلغ لكل طفل (بـ FCFA).',
       nothing_title: 'كل شيء مسدَّد',
       nothing_hint: 'لا توجد فاتورة مستحقة حاليًا. احتفظ بهذا الرابط: سيُستخدم للأقساط الشهرية القادمة.',
       pending_title: 'هناك عملية دفع جارية',
@@ -201,7 +201,7 @@
       start_error: 'تعذّر بدء الدفع. حاول مرة أخرى.', net_error: 'لا يوجد اتصال. حاول مرة أخرى.',
       rate_limited: 'محاولات كثيرة. انتظر دقيقة ثم حاول مرة أخرى.',
       pending_exists: 'هناك عملية دفع جارية بالفعل. انتظر تأكيدها أو إلغاءها قبل المحاولة مجددًا.',
-      fcfa: 'فرنك', lang_button: 'Français'
+      fcfa: 'FCFA', lang_button: 'Français'
     }
   };
   var lang = (function () {
@@ -239,6 +239,10 @@
 
   function $(id) { return document.getElementById(id); }
   function show(id, on) { $(id).classList.toggle('hidden', !on); }
+  // L'argent ne se traduit JAMAIS (decision produit 2026-09-05) : chiffres
+  // latins et « FCFA » dans les deux langues. La cle reste traversee par t()
+  // pour que le dictionnaire demeure la source unique — elle vaut « FCFA »
+  // partout, et Tools/check-i18n-pages.js garde cela vrai.
   function fmt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + t('fcfa'); }
   function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
   function isInApp() { var ua = navigator.userAgent || ''; return /whatsapp|fban|fbav|fb_iab|instagram|messenger|line\//i.test(ua); }

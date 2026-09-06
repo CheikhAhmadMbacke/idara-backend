@@ -195,6 +195,32 @@ namespace Idara.API.Services.Notifications
 
                 var text = req.Message.Compose(bilingual, lang);
 
+                // ===== §225 — l'alphabet GSM-7 est une question d'ARGENT =====
+                // Un SEUL caractère hors alphabet bascule le message ENTIER en
+                // UCS-2 : le segment tombe de 160 à 70 caractères et la facture
+                // DOUBLE. Or « ë », « ï », « ó », « ŋ » et « ç » minuscule n'en
+                // font pas partie — autrement dit Maïmouna, Aïssatou, Ndoyë et
+                // Françoise, qui sont des noms courants ici. Mesuré en prod :
+                // 8 élèves sur 186 et 4 comptes sur 145 sont concernés, et ces
+                // familles-là payaient 2× sur CHAQUE rappel, depuis toujours.
+                // Rien ne le signalait : le SMS s'affiche normalement, seule la
+                // facture le dit, un mois plus tard.
+                //
+                // 🔴 On n'assainit QUE un corps sans arabe, et la garde n'est pas
+                // cosmétique : passer Gsm7Text.Sanitize sur de l'arabe VIDERAIT
+                // le message. Aucun caractère arabe n'appartient à l'alphabet
+                // GSM-7 et aucun ne se décompose en lettre latine — ils seraient
+                // tous supprimés. Un corps arabe ou bilingue est de toute façon
+                // déjà en UCS-2 : il n'y a rien à y gagner. Le test porte sur le
+                // CONTENU et non sur la langue demandée, pour couvrir aussi les
+                // corps PreComposed, que Compose rend sans regarder `lang`.
+                //
+                // Placé ici plutôt que dans les gabarits : les mêmes
+                // BilingualMessage servent aussi les notifications PUSH, où
+                // l'écran affiche « Maïmouna » sans le moindre surcoût. La
+                // substitution est une propriété du CANAL SMS, pas du message.
+                text = BodyForSms(text);
+
                 // ===== Garde-fou de dépense — LE point de passage unique =====
                 // Placé ici et nulle part ailleurs : c'est par cette méthode que
                 // passent TOUS les SMS d'Idara, donc c'est le seul endroit où un
@@ -311,6 +337,53 @@ namespace Idara.API.Services.Notifications
 
         private static string Mask(string phone) =>
             string.IsNullOrEmpty(phone) || phone.Length < 4 ? "***" : phone[..^4] + "****";
+
+        /// <summary>
+        /// Le corps tel qu'il partira réellement par SMS.
+        ///
+        /// <para>Publique et pure exprès, pour la même raison que
+        /// <see cref="PriorityOf"/> (§133) : ce qui décide du PRIX d'un envoi
+        /// doit pouvoir se vérifier sans base de données ni fournisseur SMS.
+        /// Une règle de facturation qu'on ne peut éprouver qu'en production
+        /// n'est pas éprouvée.</para>
+        /// </summary>
+        public static string BodyForSms(string body) =>
+            string.IsNullOrEmpty(body) || ContainsArabic(body)
+                ? body
+                : Gsm7Text.Sanitize(body);
+
+        /// <summary>
+        /// Le corps contient-il de l'écriture arabe ? Garde-fou du §225 : c'est
+        /// ce test qui empêche <see cref="Gsm7Text.Sanitize"/> de VIDER un
+        /// message arabe — aucun caractère arabe n'est dans l'alphabet GSM-7 et
+        /// aucun ne se décompose en lettre latine, ils seraient donc tous
+        /// supprimés un à un.
+        /// </summary>
+        /// <remarks>
+        /// Couvre le bloc arabe (U+0600–U+06FF) et le supplément (U+0750–U+077F),
+        /// ainsi que les formes de présentation (U+FB50–U+FDFF, U+FE70–U+FEFF)
+        /// que produisent certains claviers et copier-coller.
+        /// </remarks>
+        private static bool ContainsArabic(string text)
+        {
+            foreach (var c in text)
+            {
+                // Points de code écrits en clair plutôt qu'en littéraux arabes :
+                // les bornes resteraient invisibles à la relecture, et un éditeur
+                // en RTL peut les réordonner à l'affichage. U+FEFF (BOM) est
+                // volontairement EXCLU — ce n'est pas de l'arabe, et le prendre
+                // pour tel désactiverait la parade sur un fichier à BOM.
+                if ((c >= '؀' && c <= 'ۿ')   // arabe
+                    || (c >= 'ݐ' && c <= 'ݿ') // supplement
+                    || (c >= 'ࢠ' && c <= 'ࣿ') // arabe etendu-A
+                    || (c >= 'ﭐ' && c <= '﷿') // formes de presentation A
+                    || (c >= 'ﹰ' && c <= 'ﻼ')) // formes de presentation B
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         // ===================== Push uniquement =====================
 
