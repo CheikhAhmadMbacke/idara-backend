@@ -377,13 +377,12 @@ namespace Idara.API.Services.Notifications
             var nom = Gsm7Text.Sanitize(guardianName).Trim();
 
             const string fr = "Vous pouvez utiliser le lien ci-dessous pour payer la scolarite de vos enfants, chaque fin de mois.";
-            // ⚠️ Texte de Cheikh, mot pour mot. UN SEUL caractere a change :
-            // « bëss » -> « bess », parce que le tréma est le seul caractere de
-            // la phrase absent de l'alphabet GSM-7 et qu'il ferait passer le
-            // message de 2 a 5 segments (substitution qu'il a validee). Les
-            // accents aigus de « wér » et « dé », eux, sont dans l'alphabet :
-            // ils restent.
-            const string wo = "Man nga bess ci lien bi ci Souf ngir fayal say doom wér wou dé.";
+            // ⚠️ CORPS VALIDE PAR CHEIKH le 2026-09-06, mot pour mot. Ne pas le
+            // retoucher sans le lui redemander — et sans REMESURER : le message
+            // tient en 2 segments GSM-7 (306 caracteres), il en reste 38 de
+            // marge, et un seul caractere hors alphabet (ë, ï, ç) le ferait
+            // passer a 5 segments, soit 2,5x le prix de toute la campagne. §225
+            const string wo = "Man nga bess ci lien bi ci Suuf ngir fayal say doom wer wu nekk.";
 
             var salutation = nom.Length > 0 ? $"Salam {nom}," : "Salam,";
             var titre = ecole.Length > 0 ? ecole + "\n\n" : string.Empty;
