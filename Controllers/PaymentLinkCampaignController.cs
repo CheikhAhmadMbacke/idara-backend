@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -104,11 +104,12 @@ namespace Idara.API.Controllers
                     if (r.AlreadySent) { ligne.AlreadySent++; continue; }
                     ligne.Pending++;
 
-                    var (segments, cost, network) = Chiffrer(ecole, r.PhoneE164, settings);
+                    var (segments, cost, network, encoding) = Chiffrer(ecole, r, settings);
                     ligne.PendingSegments += segments;
                     ligne.PendingCostFcfa += cost;
                     if (network == SmsNetwork.OnNet) ligne.OnNetRecipients++;
                     else ligne.OffNetRecipients++;
+                    if (encoding == SmsEncoding.Ucs2) ligne.Ucs2Recipients++;
                 }
 
                 // Les centimes ne s'arrondissent qu'une fois, sur le total (§208).
@@ -123,6 +124,7 @@ namespace Idara.API.Controllers
                 dto.PendingCostFcfa += ligne.PendingCostFcfa;
                 dto.OnNetRecipients += ligne.OnNetRecipients;
                 dto.OffNetRecipients += ligne.OffNetRecipients;
+                dto.Ucs2Recipients += ligne.Ucs2Recipients;
             }
 
             dto.Schools = dto.BySchool.Count;
@@ -132,8 +134,10 @@ namespace Idara.API.Controllers
             // message affiché à l'écran doit être celui qui partira, pas une
             // maquette qui pourrait diverger.
             var modele = cibles.FirstOrDefault(e => e.Recipients.Any(r => !r.AlreadySent)) ?? cibles.FirstOrDefault();
+            var modeleDest = modele?.Recipients.FirstOrDefault(r => !r.AlreadySent)
+                             ?? modele?.Recipients.FirstOrDefault();
             var exemple = NotificationTemplates
-                .PaymentLinkShare(modele?.SchoolName, modele?.SchoolNameAr, BuildUrl(TokenGabarit))
+                .PaymentLinkShare(modele?.SchoolName, modeleDest?.FullName, BuildUrl(TokenGabarit))
                 .Compose(bilingual: true);
             var mesure = SmsSegmentCalculator.Measure(exemple);
             dto.SampleMessage = exemple;
@@ -179,7 +183,7 @@ namespace Idara.API.Controllers
                         goto fin;
                     }
 
-                    var (_, cout, _) = Chiffrer(ecole, r.PhoneE164, settings);
+                    var (_, cout, _, _) = Chiffrer(ecole, r, settings);
                     if ((depensePrevue + cout + 99) / 100 > dto.MaxCostFcfa)
                     {
                         result.StoppedReason = "budget";
@@ -190,7 +194,7 @@ namespace Idara.API.Controllers
                     if (lien.venaitDetreCree) result.LinksCreated++;
 
                     var message = NotificationTemplates.PaymentLinkShare(
-                        ecole.SchoolName, ecole.SchoolNameAr, BuildUrl(lien.link.Token));
+                        ecole.SchoolName, r.FullName, BuildUrl(lien.link.Token));
 
                     var parti = await _notifications.SendSmsAsync(new NotificationSmsRequest(
                         UserId: r.GuardianId,
@@ -252,13 +256,193 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<PaymentLinkCampaignRunResultDto>.Ok(result));
         }
 
+
+        /// <summary>
+        /// `GET /api/superadmin/payment-link-campaign/stats` — ce que la campagne
+        /// a produit, et ce que les familles utilisent réellement pour payer.
+        ///
+        /// <para><b>Ce qu'on cherche à savoir n'est pas « combien de SMS sont
+        /// partis » — ça, le registre le dit déjà.</b> C'est : est-ce que les gens
+        /// ouvrent, au bout de combien de temps, et est-ce qu'ils paient. Et
+        /// surtout, à côté : est-ce que le lien prend le pas sur l'application.
+        /// Un canal qu'on n'a pas mesuré ne se décide pas, il se devine.</para>
+        ///
+        /// <para>Tout est <b>dérivé</b> — registre des envois, compteurs
+        /// d'ouverture du lien, paiements terminés — jamais stocké dans un
+        /// compteur à part qui finirait par mentir (même discipline que §112
+        /// et §191).</para>
+        /// </summary>
+        /// <param name="days">Fenêtre de la comparaison lien / application / espèces.</param>
+        [HttpGet("stats")]
+        public async Task<ActionResult<ApiResponse<PaymentLinkCampaignStatsDto>>> Stats(
+            [FromQuery] int days = 30, CancellationToken ct = default)
+        {
+            var fenetre = Math.Clamp(days, 1, 365);
+            var depuis = DateTime.UtcNow.AddDays(-fenetre);
+            var dto = new PaymentLinkCampaignStatsDto { ComparisonDays = fenetre };
+
+            // ----- 1. Quand chaque lien a-t-il reçu son SMS -----
+            // Le PREMIER envoi réussi fait foi : c'est lui qui a mis le lien dans
+            // la main de la famille. Un renvoi ultérieur ne remet pas le compteur
+            // à zéro, sinon une relance effacerait l'ouverture qu'elle a produite.
+            var envois = await _context.NotificationLogs
+                .Where(n => n.TemplateCode == NotificationTemplates.PaymentLinkShareCode
+                            && n.Channel == "Sms"
+                            && n.Success
+                            && n.RelatedEntityId != null)
+                .GroupBy(n => n.RelatedEntityId!.Value)
+                .Select(g => new { LinkId = g.Key, SmsAt = g.Min(x => x.CreatedAt) })
+                .ToListAsync(ct);
+
+            if (envois.Count == 0)
+            {
+                await RemplirComparaisonAsync(dto, depuis, ct);
+                return Ok(ApiResponse<PaymentLinkCampaignStatsDto>.Ok(dto));
+            }
+
+            var smsParLien = envois.ToDictionary(e => e.LinkId, e => e.SmsAt);
+            var lienIds = smsParLien.Keys.ToList();
+
+            var liens = await _context.PaymentLinks
+                .Where(l => lienIds.Contains(l.Id))
+                .Select(l => new
+                {
+                    l.Id,
+                    l.SchoolId,
+                    SchoolName = l.School.Name ?? l.School.NameAr ?? string.Empty,
+                    l.FirstOpenedAt,
+                    l.LastOpenedAt,
+                    l.OpenCount,
+                })
+                .ToListAsync(ct);
+
+            // ----- 2. Paiements passés par ces liens, APRÈS leur SMS -----
+            var paiements = await _context.Payments
+                .Where(p => p.PaymentLinkId != null
+                            && lienIds.Contains(p.PaymentLinkId!.Value)
+                            && p.Status == PaymentStatus.Completed
+                            && p.PaidAt != null)
+                .Select(p => new
+                {
+                    LinkId = p.PaymentLinkId!.Value,
+                    p.PaidAt,
+                    Montant = p.TargetAmountFcfa > 0 ? p.TargetAmountFcfa : p.AmountFcfa,
+                })
+                .ToListAsync(ct);
+
+            var parEcole = new Dictionary<int, PaymentLinkFunnelSchoolDto>();
+            var delais = new List<double>();
+
+            foreach (var l in liens)
+            {
+                var smsAt = smsParLien[l.Id];
+
+                if (!parEcole.TryGetValue(l.SchoolId, out var ligne))
+                {
+                    ligne = new PaymentLinkFunnelSchoolDto
+                    {
+                        SchoolId = l.SchoolId,
+                        SchoolName = l.SchoolName,
+                    };
+                    parEcole[l.SchoolId] = ligne;
+                }
+
+                ligne.SmsSent++;
+                dto.SmsSent++;
+                dto.TotalOpens += l.OpenCount;
+
+                // « Ouvert » se juge sur la DERNIÈRE ouverture : un lien déjà
+                // connu avant la campagne compte s'il a été rouvert depuis.
+                if (l.LastOpenedAt != null && l.LastOpenedAt >= smsAt)
+                {
+                    ligne.Opened++;
+                    dto.Opened++;
+                }
+                else
+                {
+                    dto.NeverOpened++;
+                }
+
+                // Le délai ne se mesure que sur les liens qui n'avaient JAMAIS
+                // été ouverts : ailleurs, la première ouverture est antérieure au
+                // SMS et le délai ne voudrait rien dire.
+                if (l.FirstOpenedAt != null && l.FirstOpenedAt >= smsAt)
+                {
+                    delais.Add((l.FirstOpenedAt.Value - smsAt).TotalHours);
+                }
+            }
+
+            foreach (var p in paiements)
+            {
+                if (!smsParLien.TryGetValue(p.LinkId, out var smsAt)) continue;
+                if (p.PaidAt < smsAt) continue;
+
+                dto.Payments++;
+                dto.PaidFcfa += p.Montant;
+
+                var ecoleId = liens.FirstOrDefault(l => l.Id == p.LinkId)?.SchoolId;
+                if (ecoleId != null && parEcole.TryGetValue(ecoleId.Value, out var ligne))
+                {
+                    ligne.Payments++;
+                    ligne.PaidFcfa += p.Montant;
+                }
+            }
+
+            if (delais.Count > 0)
+            {
+                dto.AvgHoursToFirstOpen = Math.Round(delais.Average(), 1);
+                dto.DelaySampleSize = delais.Count;
+            }
+
+            dto.BySchool = parEcole.Values
+                .OrderByDescending(s => s.Payments)
+                .ThenByDescending(s => s.Opened)
+                .ToList();
+
+            await RemplirComparaisonAsync(dto, depuis, ct);
+            return Ok(ApiResponse<PaymentLinkCampaignStatsDto>.Ok(dto));
+        }
+
+        /// <summary>
+        /// Par où l'argent de la scolarité entre réellement : lien, application,
+        /// ou guichet. Trois chemins mutuellement exclusifs, dans cet ordre —
+        /// l'encaissement en espèces se reconnaît à l'agent qui l'a saisi (§182),
+        /// et il ne passe jamais par un lien.
+        /// </summary>
+        private async Task RemplirComparaisonAsync(
+            PaymentLinkCampaignStatsDto dto, DateTime depuis, CancellationToken ct)
+        {
+            var lignes = await _context.Payments
+                .Where(p => p.Purpose == PaymentPurpose.SchoolFee
+                            && p.Status == PaymentStatus.Completed
+                            && p.PaidAt != null
+                            && p.PaidAt >= depuis)
+                .Select(p => new
+                {
+                    Canal = p.CollectedById != null ? 2 : (p.PaymentLinkId != null ? 1 : 0),
+                    Montant = p.TargetAmountFcfa > 0 ? p.TargetAmountFcfa : p.AmountFcfa,
+                })
+                .GroupBy(x => x.Canal)
+                .Select(g => new { Canal = g.Key, Nombre = g.Count(), Total = g.Sum(x => x.Montant) })
+                .ToListAsync(ct);
+
+            foreach (var l in lignes)
+            {
+                switch (l.Canal)
+                {
+                    case 1: dto.ViaLinkCount = l.Nombre; dto.ViaLinkFcfa = l.Total; break;
+                    case 2: dto.ViaCashCount = l.Nombre; dto.ViaCashFcfa = l.Total; break;
+                    default: dto.ViaAppCount = l.Nombre; dto.ViaAppFcfa = l.Total; break;
+                }
+            }
+        }
+
         // ===================== Interne =====================
 
         private sealed class Cible
         {
             public int SchoolId { get; init; }
             public string SchoolName { get; init; } = string.Empty;
-            public string? SchoolNameAr { get; init; }
             public List<Destinataire> Recipients { get; } = new();
             public int SkippedNoPhone { get; set; }
         }
@@ -267,6 +451,12 @@ namespace Idara.API.Controllers
         {
             public int GuardianId { get; init; }
             public string PhoneE164 { get; init; } = string.Empty;
+
+            /// <summary>Nom du responsable : il entre dans le message, donc dans
+            /// sa longueur, donc dans son prix. Le chiffrage se fait DESTINATAIRE
+            /// PAR DESTINATAIRE depuis que le message est nominatif.</summary>
+            public string FullName { get; init; } = string.Empty;
+
             public bool AlreadySent { get; set; }
         }
 
@@ -307,7 +497,13 @@ namespace Idara.API.Controllers
                              && sg.Guardian.Role == UserRoles.Guardian)
                 .Where(sg => !sg.Student.IsDeleted
                              && (sg.Student.ExitDate == null || sg.Student.ExitDate > DateTime.UtcNow.Date))
-                .Select(sg => new { sg.Student.SchoolId, sg.GuardianId, sg.Guardian.PhoneNumber })
+                .Select(sg => new
+                {
+                    sg.Student.SchoolId,
+                    sg.GuardianId,
+                    sg.Guardian.PhoneNumber,
+                    sg.Guardian.FullName,
+                })
                 .Distinct()
                 .ToListAsync(ct);
 
@@ -332,7 +528,6 @@ namespace Idara.API.Controllers
                 {
                     SchoolId = e.Id,
                     SchoolName = e.Name ?? e.NameAr ?? string.Empty,
-                    SchoolNameAr = e.NameAr,
                 };
 
                 foreach (var c in couples.Where(c => c.SchoolId == e.Id)
@@ -349,6 +544,7 @@ namespace Idara.API.Controllers
                     {
                         GuardianId = c.GuardianId,
                         PhoneE164 = phone,
+                        FullName = c.FullName ?? string.Empty,
                         AlreadySent = dejaSet.Contains((e.Id, c.GuardianId)),
                     });
                 }
@@ -359,20 +555,27 @@ namespace Idara.API.Controllers
             return result;
         }
 
-        /// <summary>Segments, coût en centimes et réseau du message qui partirait.</summary>
-        private (int segments, long costCentimes, SmsNetwork network) Chiffrer(
-            Cible ecole, string phoneE164, PlatformSettings settings)
+        /// <summary>
+        /// Segments, coût et réseau du message qui partirait à CE destinataire.
+        ///
+        /// <para>Le chiffrage est nominatif depuis que le message l'est : « Salam
+        /// Mouhamadou Moustapha Mbacke » ne pèse pas le même prix que « Salam
+        /// Modou ». Un total calculé sur un message type serait faux, et faux
+        /// dans le sens qui coûte.</para>
+        /// </summary>
+        private (int segments, long costCentimes, SmsNetwork network, SmsEncoding encoding) Chiffrer(
+            Cible ecole, Destinataire dest, PlatformSettings settings)
         {
             var texte = NotificationTemplates
-                .PaymentLinkShare(ecole.SchoolName, ecole.SchoolNameAr, BuildUrl(TokenGabarit))
+                .PaymentLinkShare(ecole.SchoolName, dest.FullName, BuildUrl(TokenGabarit))
                 .Compose(bilingual: true);
             var mesure = SmsSegmentCalculator.Measure(texte);
-            var network = SmsSegmentCalculator.NetworkOf(phoneE164);
+            var network = SmsSegmentCalculator.NetworkOf(dest.PhoneE164);
             var cout = SmsSegmentCalculator.CostCentimes(
                 mesure.Segments, network,
                 settings.SmsOnNetPriceCentimes, settings.SmsOffNetPriceCentimes,
                 settings.SmsInternationalPriceCentimes);
-            return (mesure.Segments, cout, network);
+            return (mesure.Segments, cout, network, mesure.Encoding);
         }
 
         private async Task<(PaymentLink link, bool venaitDetreCree)> GetOrCreateLinkAsync(

@@ -1,4 +1,4 @@
-namespace Idara.API.DTOs.Payment
+﻿namespace Idara.API.DTOs.Payment
 {
     /// <summary>
     /// Ce que coûterait — ou ce qu'a coûté — la diffusion du lien de paiement à
@@ -33,6 +33,14 @@ namespace Idara.API.DTOs.Payment
 
         /// <summary>Destinataires sur les autres réseaux (70/75/76) — tarif off-net.</summary>
         public int OffNetRecipients { get; set; }
+
+        /// <summary>
+        /// Destinataires dont le message bascule en UCS-2 — un caractère hors
+        /// alphabet GSM-7 dans leur nom (ï de Maïmouna, ë, ç…). Leur SMS coûte
+        /// ~2,5× celui des autres. Compté à part pour que ce surcoût se VOIE :
+        /// il est autrement parfaitement invisible.
+        /// </summary>
+        public int Ucs2Recipients { get; set; }
     }
 
     /// <summary>Recensement complet, école par école, AVANT le moindre envoi.</summary>
@@ -50,6 +58,10 @@ namespace Idara.API.DTOs.Payment
 
         public int OnNetRecipients { get; set; }
         public int OffNetRecipients { get; set; }
+
+        /// <summary>Destinataires dont le nom fait basculer le message en UCS-2
+        /// (~2,5× le prix). Zéro est la valeur attendue.</summary>
+        public int Ucs2Recipients { get; set; }
 
         /// <summary>Prix unitaires en vigueur, pour que le total soit vérifiable
         /// à la main et non à croire sur parole.</summary>
@@ -102,5 +114,79 @@ namespace Idara.API.DTOs.Payment
         /// <summary>Pourquoi l'envoi s'est arrêté : "done", "max_recipients",
         /// "budget", "too_many_failures".</summary>
         public string StoppedReason { get; set; } = string.Empty;
+    }
+
+    /// <summary>Ce qu'une école a fait du lien qu'on lui a envoyé.</summary>
+    public class PaymentLinkFunnelSchoolDto
+    {
+        public int SchoolId { get; set; }
+        public string SchoolName { get; set; } = string.Empty;
+
+        /// <summary>SMS de campagne réellement partis.</summary>
+        public int SmsSent { get; set; }
+
+        /// <summary>Liens ouverts au moins une fois DEPUIS leur SMS.</summary>
+        public int Opened { get; set; }
+
+        /// <summary>Paiements terminés passés par un lien depuis son SMS.</summary>
+        public int Payments { get; set; }
+
+        /// <summary>Montant encaissé par ces paiements.</summary>
+        public long PaidFcfa { get; set; }
+    }
+
+    /// <summary>
+    /// Résultats de la campagne, et la réponse à la question produit : le lien
+    /// sert-il plus que l'application ?
+    /// </summary>
+    public class PaymentLinkCampaignStatsDto
+    {
+        // ----- Entonnoir de la campagne -----
+
+        /// <summary>SMS partis (registre des envois, jamais une estimation).</summary>
+        public int SmsSent { get; set; }
+
+        /// <summary>Liens ouverts au moins une fois depuis leur SMS.</summary>
+        public int Opened { get; set; }
+
+        /// <summary>Liens jamais ouverts depuis leur SMS.</summary>
+        public int NeverOpened { get; set; }
+
+        /// <summary>Ouvertures totales (un même responsable peut revenir).</summary>
+        public int TotalOpens { get; set; }
+
+        /// <summary>Paiements terminés passés par un lien depuis son SMS.</summary>
+        public int Payments { get; set; }
+        public long PaidFcfa { get; set; }
+
+        /// <summary>
+        /// Délai moyen entre le SMS et la PREMIÈRE ouverture, en heures, calculé
+        /// sur les seuls liens qui n'avaient jamais été ouverts avant. C'est lui
+        /// qui dit si le canal fonctionne : une ouverture dans l'heure, c'est un
+        /// message lu ; trois jours après, c'est un message retrouvé.
+        /// </summary>
+        public double? AvgHoursToFirstOpen { get; set; }
+
+        /// <summary>Nombre de liens sur lesquels ce délai a pu être mesuré.</summary>
+        public int DelaySampleSize { get; set; }
+
+        // ----- Lien contre application, sur la même période -----
+
+        /// <summary>Jours observés pour la comparaison ci-dessous.</summary>
+        public int ComparisonDays { get; set; }
+
+        /// <summary>Paiements de scolarité passés par un LIEN.</summary>
+        public int ViaLinkCount { get; set; }
+        public long ViaLinkFcfa { get; set; }
+
+        /// <summary>Paiements de scolarité faits depuis l'APPLICATION (parent connecté).</summary>
+        public int ViaAppCount { get; set; }
+        public long ViaAppFcfa { get; set; }
+
+        /// <summary>Encaissements en ESPÈCES au guichet de l'école (§182).</summary>
+        public int ViaCashCount { get; set; }
+        public long ViaCashFcfa { get; set; }
+
+        public List<PaymentLinkFunnelSchoolDto> BySchool { get; set; } = new();
     }
 }

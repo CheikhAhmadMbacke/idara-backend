@@ -1,4 +1,4 @@
-namespace Idara.API.Models
+﻿namespace Idara.API.Models
 {
     /// <summary>
     /// Lien de paiement PERMANENT envoyé par l'école à un responsable (WhatsApp).
@@ -41,6 +41,17 @@ namespace Idara.API.Models
         /// <summary>Dernière ouverture de la page publique (null = jamais ouvert).</summary>
         public DateTime? LastOpenedAt { get; set; }
         public int OpenCount { get; set; }
+
+        /// <summary>
+        /// PREMIÈRE ouverture de la page publique.
+        ///
+        /// <para>Distincte de <see cref="LastOpenedAt"/> et elle répond à une
+        /// autre question : combien de temps s'écoule entre le SMS et le moment
+        /// où la famille clique. C'est la mesure qui dit si le lien fonctionne —
+        /// une ouverture dans l'heure, c'est un canal qui marche ; trois jours
+        /// après, c'est un message qu'on retrouve en fouillant.</para>
+        /// </summary>
+        public DateTime? FirstOpenedAt { get; set; }
 
         /// <summary>Dernière fois que l'école a (re)demandé le lien (renvoi).</summary>
         public DateTime? LastSharedAt { get; set; }

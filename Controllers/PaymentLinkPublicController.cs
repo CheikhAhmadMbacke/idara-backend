@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -105,7 +105,9 @@ namespace Idara.API.Controllers
             // d'un Pending : on ne compte qu'une fois par minute.
             if (link.LastOpenedAt == null || link.LastOpenedAt < DateTime.UtcNow.AddMinutes(-1))
             {
-                link.LastOpenedAt = DateTime.UtcNow;
+                var maintenant = DateTime.UtcNow;
+                link.FirstOpenedAt ??= maintenant;
+                link.LastOpenedAt = maintenant;
                 link.OpenCount++;
                 await _context.SaveChangesAsync(ct);
             }

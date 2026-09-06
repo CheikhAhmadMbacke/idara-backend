@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.DTOs.Alerts;
 using Idara.API.Enums;
@@ -14,17 +14,37 @@ namespace Idara.API.Services.Alerts
     {
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly OpsAlertSettings _settings;
+        private readonly IHostEnvironment _env;
         private readonly ILogger<OpsAlertService> _logger;
 
         public OpsAlertService(
             IServiceScopeFactory scopeFactory,
             IOptions<OpsAlertSettings> settings,
+            IHostEnvironment env,
             ILogger<OpsAlertService> logger)
         {
             _scopeFactory = scopeFactory;
             _settings = settings.Value;
+            _env = env;
             _logger = logger;
         }
+
+        /// <summary>
+        /// Préfixe apposé au sujet quand l'alerte NE vient PAS de la production.
+        ///
+        /// <para>🔴 Motif vécu, le 2026-09-06 : un banc d'essai local a mis le
+        /// palier de dépense SMS à zéro pour prouver qu'il coupait bien les
+        /// envois. L'alerte est partie — vers la vraie adresse d'alerte, avec le
+        /// même sujet qu'en production : « Envoi de SMS TOTALEMENT suspendu ».
+        /// Cheikh l'a reçue et a cru la plateforme à l'arrêt. Les chiffres du
+        /// corps (0 FCFA dépensés, écoles de test) le démentaient, mais il faut
+        /// les lire — un sujet alarmant se croit avant de se vérifier.</para>
+        ///
+        /// <para>On ne SUPPRIME pas l'alerte hors production : un banc d'essai
+        /// qui n'alerte pas ne prouve rien. On la rend impossible à confondre.</para>
+        /// </summary>
+        private string SubjectPrefix =>
+            _env.IsProduction() ? "[Idara] " : $"[Idara — {_env.EnvironmentName} — PAS la production] ";
 
         public void Queue(OpsAlertRequest request)
         {
@@ -129,7 +149,7 @@ namespace Idara.API.Services.Alerts
                 Urgent = IsUrgent(request.Kind),
                 KindLabel = KindLabel(request.Kind),
                 Heading = request.Subject,
-                Subject = "[Idara] " + request.Subject,
+                Subject = SubjectPrefix + request.Subject,
                 Facts = request.Facts.Select(f => (f.Label, f.Value)).ToList(),
                 Advice = request.Advice,
                 CreatedAt = now,

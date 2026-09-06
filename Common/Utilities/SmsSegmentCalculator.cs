@@ -90,6 +90,15 @@ namespace Idara.API.Common.Utilities
         private static readonly Regex SenegalE164 = new(@"^\+221[0-9]{9}$", RegexOptions.Compiled);
 
         /// <summary>
+        /// Vrai si ce caractère tient dans l'alphabet GSM-7 (extension comprise).
+        /// Exposé parce qu'un seul caractère absent bascule le message ENTIER en
+        /// UCS-2 : c'est la question qu'on se pose avant d'insérer un nom propre
+        /// dans un SMS. Voir <see cref="Gsm7Text"/>.
+        /// </summary>
+        public static bool IsGsm7Char(char c) =>
+            Gsm7Basic.IndexOf(c) >= 0 || Gsm7Extension.IndexOf(c) >= 0;
+
+        /// <summary>
         /// Découpe un message. Ne lève jamais : un message vide vaut 0 segment
         /// (un envoi vide est refusé bien plus haut, mais le registre doit
         /// pouvoir enregistrer n'importe quoi sans casser).
