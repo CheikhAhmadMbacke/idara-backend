@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Idara.API.Enums;
 using Idara.API.Models;
 
@@ -857,6 +857,15 @@ namespace Idara.API.Data
             // Index de recherche : "tokens actifs d'un user".
             modelBuilder.Entity<RefreshToken>()
                 .HasIndex(r => new { r.UserId, r.RevokedAt });
+
+            // Une famille = une connexion sur un appareil. Indexée parce qu'un
+            // rejeu détecté doit pouvoir brûler la chaîne entière en une requête.
+            modelBuilder.Entity<RefreshToken>()
+                .Property(r => r.FamilyId)
+                .HasMaxLength(32)
+                .IsRequired();
+            modelBuilder.Entity<RefreshToken>()
+                .HasIndex(r => r.FamilyId);
 
             // ============================================================
             // ===== Paiement (Phase 1) — fondations payin =====

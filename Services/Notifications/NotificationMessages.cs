@@ -16,7 +16,17 @@ namespace Idara.API.Services.Notifications
     /// sans redéploiement ; et le SMS d'identifiants force le bilingue pour un
     /// compte JAMAIS connecté (sa « préférence » n'est qu'un héritage).
     /// </summary>
-    public sealed record BilingualMessage(string Fr, string Ar)
+    /// <param name="PreComposed">Le corps est DÉJÀ dans sa forme finale (les deux
+    /// langues assemblées à la main) : <see cref="Compose"/> le rend tel quel,
+    /// quelle que soit la langue demandée.
+    ///
+    /// <para>Utile quand un élément ne doit apparaître qu'UNE fois pour les deux
+    /// langues — typiquement un lien. Le mettre dans chaque version le ferait
+    /// figurer deux fois dans le SMS bilingue : 62 caractères de plus, soit deux
+    /// segments facturés en pure perte. Et le mettre dans une seule des deux
+    /// versions, c'est le voir disparaître le jour où le message part en une
+    /// seule langue.</para></param>
+    public sealed record BilingualMessage(string Fr, string Ar, bool PreComposed = false)
     {
         /// <summary>Séparateur visuel entre les deux langues d'un SMS bilingue
         /// (validé utilisateur 2026-08-18). Caractères sûrs partout.</summary>
@@ -24,6 +34,7 @@ namespace Idara.API.Services.Notifications
 
         public string Compose(bool bilingual, string preferredLanguage = "fr")
         {
+            if (PreComposed) return Fr;
             if (bilingual)
                 return Fr + BilingualSeparator + Ar;
             return string.Equals(preferredLanguage, "ar", System.StringComparison.OrdinalIgnoreCase)
@@ -323,5 +334,77 @@ namespace Idara.API.Services.Notifications
         public static BilingualMessage ChildCoranCycleReady(string eleve) => new(
             Fr: $"Le suivi Coran de {eleve} (cycle termine) est disponible dans l'application.",
             Ar: $"متابعة القرآن لـ {eleve} (انتهت الدورة) متاحة في التطبيق.");
+
+        // ===== Diffusion du lien de paiement permanent (campagne, 2026-09-06) =====
+        //
+        // Recensement des responsables : chacun recoit SON lien permanent, celui
+        // qui recalcule la dette de toute sa fratrie a chaque ouverture (§161).
+        // Les ecoles ne savaient pas le faire elles-memes ; on le fait pour elles.
+        //
+        // 🔴 CE GABARIT EST CALIBRE AU SEGMENT, et c'est volontaire. En bilingue
+        // tout le corps bascule en UCS-2 : 67 caracteres par segment, donc 201
+        // pour trois segments — et le lien en mange deja 62, le separateur 24. Un
+        // seul caractere de trop fait passer TOUTE la campagne de 10,50 F a 14 F
+        // par famille, soit +33 % sur des milliers d'envois pour une virgule.
+        // D'ou le choix de la variante par la MESURE et non a l'oeil (§192).
+        public const string PaymentLinkShareCode = "PAYMENT_LINK_SHARE";
+
+        /// <summary>
+        /// Message de diffusion du lien de paiement, calibre pour tenir en
+        /// 3 segments SMS une fois compose en bilingue.
+        ///
+        /// <para>On essaie les formulations de la plus riche a la plus sobre et on
+        /// garde la PREMIERE qui tient : une ecole au nom court garde son nom dans
+        /// le message (ce qui rassure : le parent voit de qui vient le lien), une
+        /// ecole au nom long le perd plutot que de couter un segment de plus a
+        /// toutes ses familles. Le repli final ne depend d'aucune longueur
+        /// variable — il tient toujours.</para>
+        /// </summary>
+        /// <param name="schoolFr">Nom de l'ecole (peut etre vide).</param>
+        /// <param name="schoolAr">Nom arabe (repli sur <paramref name="schoolFr"/>).</param>
+        /// <param name="url">Lien permanent du responsable.</param>
+        /// <param name="maxSegments">Budget en segments. 3 = 10,50 F on-net.</param>
+        public static BilingualMessage PaymentLinkShare(
+            string? schoolFr, string? schoolAr, string url, int maxSegments = 3)
+        {
+            var fr = (schoolFr ?? string.Empty).Trim();
+            var ar = string.IsNullOrWhiteSpace(schoolAr) ? fr : schoolAr!.Trim();
+
+            // Le lien est posé UNE seule fois, à la fin, hors des deux langues :
+            // il ne se traduit pas, et le répéter coûterait deux segments.
+            static BilingualMessage Body(string frText, string arText, string link) =>
+                new(frText + BilingualMessage.BilingualSeparator + arText + "\n" + link,
+                    string.Empty, PreComposed: true);
+
+            var candidats = new List<BilingualMessage>();
+            if (fr.Length > 0)
+            {
+                // 1. La plus complete : nom de l'ecole + « a garder ».
+                candidats.Add(Body(
+                    $"{fr} : votre lien Idara pour payer la scolarite. A garder :",
+                    $"{ar}: رابطكم عبر Idara لدفع الدراسة. احتفظوا به:", url));
+                // 2. Nom de l'ecole, formulation resserree.
+                candidats.Add(Body(
+                    $"{fr} : votre lien Idara pour payer la scolarite :",
+                    $"{ar}: رابط Idara لدفع الدراسة:", url));
+            }
+            // 3. Repli sans nom : aucune longueur variable, il tient toujours.
+            //
+            // ⚠️ Formulation VOLONTAIREMENT courte. La version « de vos enfants »
+            // pesait 201 caracteres — exactement la limite des 3 segments, donc
+            // zero marge : il aurait suffi que l'adresse publique gagne un
+            // caractere (un sous-domaine, un chemin) pour que TOUTE la campagne
+            // passe a 4 segments, soit +33 % de facture, sans que rien ne le
+            // signale. On garde ~20 caracteres d'avance.
+            candidats.Add(Body(
+                "Votre lien Idara pour payer la scolarite. A garder :",
+                "رابطكم عبر Idara لدفع الدراسة. احتفظوا به:", url));
+
+            foreach (var c in candidats)
+            {
+                if (SmsSegmentCalculator.Measure(c.Fr).Segments <= maxSegments) return c;
+            }
+            return candidats[^1];
+        }
     }
 }

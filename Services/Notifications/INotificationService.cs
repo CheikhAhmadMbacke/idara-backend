@@ -1,4 +1,4 @@
-namespace Idara.API.Services.Notifications
+﻿namespace Idara.API.Services.Notifications
 {
     /// <summary>
     /// Demande d'envoi d'une notification SMS (+ push en fan-out).
@@ -40,6 +40,10 @@ namespace Idara.API.Services.Notifications
     /// écrit ici une ligne « compagnon » par entité couverte, à coût nul et sur
     /// le canal <c>SmsGrouped</c> : la déduplication reste exacte, et le budget
     /// ne compte qu'une fois ce qui n'est parti qu'une fois.</para></param>
+    /// <param name="AuthorizedCampaign">Envoi de masse chiffré et confirmé à
+    /// l'avance par le SuperAdmin : il échappe aux plafonds par école et au
+    /// palier souple, jamais au palier absolu ni au plafond par destinataire.
+    /// Voir <see cref="SmsGuardContext"/>.</param>
     public record NotificationSmsRequest(
         int? UserId,
         string? RawPhone,
@@ -53,7 +57,8 @@ namespace Idara.API.Services.Notifications
         Enums.SmsPriority? Priority = null,
         string? TriggerSource = null,
         int? TriggerUserId = null,
-        IReadOnlyList<int>? GroupedEntityIds = null);
+        IReadOnlyList<int>? GroupedEntityIds = null,
+        bool AuthorizedCampaign = false);
 
     /// <summary>
     /// Demande d'envoi d'une notification PUSH UNIQUEMENT (pas de SMS) à un

@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -200,7 +200,8 @@ namespace Idara.API.Services.Notifications
                 // passent TOUS les SMS d'Idara, donc c'est le seul endroit où un
                 // plafond ne peut pas être contourné par un appelant futur.
                 var verdict = await _guard.EvaluateAsync(
-                    new SmsGuardContext(schoolId, phone, text, priority), ct);
+                    new SmsGuardContext(schoolId, phone, text, priority,
+                        req.AuthorizedCampaign), ct);
 
                 if (!verdict.Allowed)
                 {

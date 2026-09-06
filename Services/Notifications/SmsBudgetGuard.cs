@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.Enums;
@@ -133,6 +133,7 @@ namespace Idara.API.Services.Notifications
                 }
 
                 if (ctx.Priority != SmsPriority.Critical
+                    && !ctx.AuthorizedCampaign
                     && (afterDay > p.SmsSoftDailyCapFcfa * 100 || afterMonth > p.SmsSoftMonthlyCapFcfa * 100))
                 {
                     await RaiseCapAsync(OpsAlertKind.SmsSoftCapReached, "sms-soft-cap",
@@ -164,7 +165,11 @@ namespace Idara.API.Services.Notifications
                 // paie. Les envois critiques échappent à ces plafonds : on isole
                 // une école qui s'emballe, on ne l'enferme pas dehors.
                 // ============================================================
-                if (ctx.SchoolId is int schoolId && ctx.Priority != SmsPriority.Critical)
+                // Une campagne autorisee y echappe : ses plafonds a elle sont le
+                // budget confirme par le SuperAdmin et le palier ABSOLU ci-dessus.
+                if (ctx.SchoolId is int schoolId
+                    && ctx.Priority != SmsPriority.Critical
+                    && !ctx.AuthorizedCampaign)
                 {
                     var school = await db.Schools.AsNoTracking()
                         .Where(s => s.Id == schoolId)

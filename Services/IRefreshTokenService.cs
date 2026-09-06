@@ -22,5 +22,12 @@ namespace Idara.API.Services
 
         /// <summary>Révoque tous les refresh tokens actifs d'un utilisateur (logout from all devices).</summary>
         Task RevokeAllForUserAsync(int userId, string reason = "RevokeAll");
+
+        /// <summary>
+        /// Révoque la CHAÎNE de rotation (une connexion, sur un appareil). C'est
+        /// la sanction d'un rejeu : elle ferme l'appareil concerné sans toucher
+        /// aux autres sessions du compte. §223
+        /// </summary>
+        Task RevokeFamilyAsync(string familyId, string reason = "RevokeFamily");
     }
 }

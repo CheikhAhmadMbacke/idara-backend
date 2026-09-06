@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Idara.API.Models;
@@ -48,11 +48,12 @@ namespace Idara.API.Services
             if (user.SchoolId.HasValue)
                 claims.Add(new Claim("SchoolId", user.SchoolId.Value.ToString()));
 
-            // Compat : si l'ancienne clé ExpirationDays est définie, on l'utilise
-            // (en jours). Sinon on prend la nouvelle clé en minutes.
-            var expires = _settings.ExpirationDays.HasValue
-                ? DateTime.UtcNow.AddDays(_settings.ExpirationDays.Value)
-                : DateTime.UtcNow.AddMinutes(_settings.AccessTokenExpirationMinutes);
+            // Durée COURTE, sans aucune exception. La session longue est portée
+            // par le refresh token, qui glisse à chaque rotation. Un access token
+            // long paraissait confortable ; il rendait en réalité la rotation
+            // impossible (le refresh expirait le même jour) et retardait d'autant
+            // la prise d'effet d'une suspension de compte. §223
+            var expires = DateTime.UtcNow.AddMinutes(_settings.AccessTokenExpirationMinutes);
 
             var token = new JwtSecurityToken(
                 issuer: _settings.Issuer,

@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.Enums;
 
 namespace Idara.API.Services.Notifications
@@ -8,11 +8,26 @@ namespace Idara.API.Services.Notifications
     /// <param name="RecipientE164">Destinataire déjà normalisé.</param>
     /// <param name="Message">Le texte exact qui partirait — c'est lui qui décide du coût.</param>
     /// <param name="Priority">Ce que l'envoi vaut la peine de coûter.</param>
+    /// <param name="AuthorizedCampaign">Envoi de masse DECIDE, chiffre et
+    /// confirme a l'avance par la plateforme (campagne SuperAdmin).
+    ///
+    /// <para>Les plafonds par ecole et le palier souple existent pour attraper ce
+    /// que PERSONNE n'a decide : une boucle, un cron emballe, un compte detourne
+    /// (§191). Une campagne est l'exact contraire — son volume et son cout sont
+    /// affiches et valides avant le premier envoi. Les lui appliquer ne
+    /// protegerait de rien et la couperait au tiers du parcours, en laissant la
+    /// moitie des familles sans leur lien et sans qu'on sache lesquelles.</para>
+    ///
+    /// <para>Ce qui reste en vigueur, sans exception : la destination
+    /// senegalaise, le coupe-circuit, le palier ABSOLU de la plateforme et le
+    /// plafond par DESTINATAIRE. Autrement dit, tout ce qui protege de la
+    /// facture catastrophique et du harcelement d'une personne.</para></param>
     public record SmsGuardContext(
         int? SchoolId,
         string RecipientE164,
         string Message,
-        SmsPriority Priority);
+        SmsPriority Priority,
+        bool AuthorizedCampaign = false);
 
     /// <summary>
     /// Verdict du garde-fou, accompagné du chiffrage — calculé une seule fois et
