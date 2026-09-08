@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Idara.API.Common.Utilities;
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -28,6 +29,10 @@ namespace Idara.API.Controllers
         private readonly Services.Vision.IPhotoImportService _photo;
         private readonly Services.Vision.IOcrBudgetGuard _ocrGuard;
         private readonly Services.Vision.IDocumentVisionService _vision;
+        private readonly Services.Vision.IOcrPricingService _pricing;
+        private readonly ISenePayClient _senepay;
+        private readonly Options.SenePaySettings _senepaySettings;
+        private readonly ILogger<ImportController> _logger;
         private readonly AppDbContext _context;
 
         public ImportController(
@@ -36,6 +41,10 @@ namespace Idara.API.Controllers
             Services.Vision.IPhotoImportService photo,
             Services.Vision.IOcrBudgetGuard ocrGuard,
             Services.Vision.IDocumentVisionService vision,
+            Services.Vision.IOcrPricingService pricing,
+            ISenePayClient senepay,
+            Microsoft.Extensions.Options.IOptions<Options.SenePaySettings> senepaySettings,
+            ILogger<ImportController> logger,
             AppDbContext context)
         {
             _import = import;
@@ -43,6 +52,10 @@ namespace Idara.API.Controllers
             _photo = photo;
             _ocrGuard = ocrGuard;
             _vision = vision;
+            _pricing = pricing;
+            _senepay = senepay;
+            _senepaySettings = senepaySettings.Value;
+            _logger = logger;
             _context = context;
         }
 
@@ -249,10 +262,20 @@ namespace Idara.API.Controllers
 
         public class PhotoUploadDto
         {
-            /// <summary>Les photos, en base64. Une par page du cahier.</summary>
+            /// <summary>
+            /// Les fichiers déposés, en base64 : photos du cahier et/ou PDF.
+            ///
+            /// <para>⚠️ Le nom du champ dit « images » et ne changera pas : il est
+            /// figé depuis la première application publiée (§220). Une application
+            /// déjà installée continue d'envoyer <c>imagesBase64</c> ; la renommer
+            /// couperait la lecture sur tout le parc, en silence.</para>
+            /// </summary>
             public List<string> ImagesBase64 { get; set; } = new();
 
-            /// <summary>Types MIME, dans le même ordre. Facultatif — JPEG par défaut.</summary>
+            /// <summary>
+            /// Types MIME, dans le même ordre. Purement indicatif : c'est la
+            /// SIGNATURE du contenu qui décide (§216).
+            /// </summary>
             public List<string>? MediaTypes { get; set; }
         }
 
@@ -297,24 +320,37 @@ namespace Idara.API.Controllers
                 : ImportKind.Students;
 
             if (dto.ImagesBase64.Count == 0)
-                return BadRequest(ApiResponse<bool>.Fail("Aucune photo reçue."));
+                return BadRequest(ApiResponse<bool>.Fail("Aucun fichier reçu."));
 
-            var images = new List<Services.Vision.VisionImage>();
+            var files = new List<Services.Vision.VisionFile>();
             for (int i = 0; i < dto.ImagesBase64.Count; i++)
             {
-                if (!TryDecodeImage(dto.ImagesBase64[i], out var bytes, out var err))
-                    return BadRequest(ApiResponse<bool>.Fail($"Photo {i + 1} : {err}"));
-
-                var mime = dto.MediaTypes != null && i < dto.MediaTypes.Count
+                var declared = dto.MediaTypes != null && i < dto.MediaTypes.Count
                     ? dto.MediaTypes[i]
-                    : "image/jpeg";
-                images.Add(new Services.Vision.VisionImage(bytes, mime));
+                    : null;
+
+                // 🔴 C'est le CONTENU qui décide, jamais la déclaration du client
+                // (§216). Ce chemin utilisait jusqu'ici un décodeur maison qui ne
+                // reniflait rien : n'importe quel binaire annoncé « image/jpeg »
+                // partait à l'IA — donc était PAYÉ — pour ne rien rendre.
+                var decoded = FileUploadValidator.DecodeAndValidate(
+                    dto.ImagesBase64[i],
+                    maxSizeMb: PhotoMaxFileSizeMb,
+                    allowedMimeTypes: PhotoAllowedMimeTypes,
+                    declaredContentType: declared);
+
+                if (decoded == null)
+                    return BadRequest(ApiResponse<bool>.Fail(
+                        $"Fichier {i + 1} : illisible, trop lourd (plus de {PhotoMaxFileSizeMb} Mo) "
+                        + "ou dans un format non accepté. Formats acceptés : photo (JPEG, PNG, WEBP) ou PDF."));
+
+                files.Add(new Services.Vision.VisionFile(decoded.Bytes, decoded.ContentType));
             }
 
             try
             {
                 var r = await _photo.AnalyzePhotosAsync(
-                    schoolId.Value, userId.Value, importKind, images, ct);
+                    schoolId.Value, userId.Value, importKind, files, ct);
 
                 return Ok(ApiResponse<object>.Ok(new
                 {
@@ -334,34 +370,222 @@ namespace Idara.API.Controllers
             }
         }
 
+        // ===============================================================
+        //  💰 Acheter des pages de lecture
+        // ===============================================================
+
         /// <summary>
-        /// Décode UNE photo. Bornes propres aux images : 8 Mo par photo, ce qui
-        /// est très au-delà d'une page redimensionnée par le téléphone (~300 Ko)
-        /// et assez bas pour qu'un envoi aberrant ne fasse pas tomber l'API.
+        /// Ce qu'une page coûte À CETTE ÉCOLE, avant qu'elle ne demande à
+        /// acheter. Le prix dépend de la densité de SON cahier — annoncer un
+        /// prix moyen ferait payer quatre fois trop au daara qui tient une fiche
+        /// par élève, celui-là même pour qui la fonction existe.
         /// </summary>
-        private static bool TryDecodeImage(string raw, out byte[] bytes, out string? error)
+        [HttpGet("photo/pricing")]
+        public async Task<IActionResult> PhotoPricing(CancellationToken ct)
         {
-            bytes = Array.Empty<byte>();
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Forbid();
+
+            var q = await _pricing.QuoteAsync(schoolId.Value, ct);
+            var guard = await _ocrGuard.DescribeAsync(schoolId.Value, ct);
+
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                available = _vision.IsConfigured,
+                purchaseEnabled = q.PurchaseEnabled,
+                pricePerPageFcfa = q.PricePerPageFcfa,
+                studentsPerPage = q.StudentsPerPage,
+                // 🔴 Ce drapeau commande la PHRASE affichée : un prix calibré
+                // s'annonce (« 102 F la page »), un prix non calibré s'annonce
+                // comme un plancher (« à partir de … »). Confondre les deux,
+                // c'est promettre un prix qu'on ne tiendra pas.
+                calibrated = q.Calibrated,
+                measuredOnPages = q.MeasuredOnPages,
+                maxPagesPerPurchase = q.MaxPagesPerPurchase,
+                remainingPages = guard.RemainingPages,
+                allowancePages = guard.AllowancePages,
+            }, "OK"));
+        }
+
+        public class BuyPagesDto
+        {
+            /// <summary>Pages achetées.</summary>
+            public int Pages { get; set; }
+        }
+
+        /// <summary>
+        /// Achète des pages de lecture. Wave uniquement, montant figé, numéro
+        /// repris en base — aucune saisie, comme le parcours parent à montant
+        /// fixe.
+        ///
+        /// <para>🔴 Rien n'est octroyé ici : les pages arrivent au webhook, dans
+        /// la transaction qui bascule le paiement. Un octroi à l'initiation
+        /// donnerait les pages à qui ouvre le formulaire.</para>
+        /// </summary>
+        [HttpPost("photo/purchase")]
+        public async Task<IActionResult> BuyPages([FromBody] BuyPagesDto dto, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            var userId = User.GetUserId();
+            if (schoolId == null || userId == null) return Forbid();
+
+            var q = await _pricing.QuoteAsync(schoolId.Value, ct);
+            if (!q.PurchaseEnabled)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "L'achat de pages n'est pas disponible pour l'instant."));
+
+            // La porte du garde-fou vaut pour l'achat comme pour la lecture :
+            // une école dont le dossier n'est pas validé ne doit pas pouvoir
+            // acheter un service qu'elle ne pourra pas utiliser.
+            var guard = await _ocrGuard.DescribeAsync(schoolId.Value, ct);
+            if (guard.BlockedReason is "kyc_not_validated" or "school_unknown" or "disabled")
+                return BadRequest(ApiResponse<bool>.Fail(
+                    guard.UserMessage ?? "L'achat de pages n'est pas disponible pour l'instant."));
+
+            if (dto.Pages <= 0)
+                return BadRequest(ApiResponse<bool>.Fail("Indiquez combien de pages vous voulez acheter."));
+            if (dto.Pages > q.MaxPagesPerPurchase)
+                return BadRequest(ApiResponse<bool>.Fail(
+                    $"Vous pouvez acheter au maximum {q.MaxPagesPerPurchase} pages à la fois."));
+
+            var payerPhone = await _context.Users.Where(u => u.Id == userId.Value)
+                .Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct);
+            if (string.IsNullOrWhiteSpace(payerPhone))
+                payerPhone = await _context.Schools.Where(s => s.Id == schoolId.Value)
+                    .Select(s => s.PhoneNumber).FirstOrDefaultAsync(ct);
+            if (string.IsNullOrWhiteSpace(payerPhone))
+                return BadRequest(ApiResponse<bool>.Fail(
+                    "Aucun numéro de téléphone n'est associé à votre compte ni à votre école. "
+                    + "Ajoutez-en un dans les paramètres de l'école."));
+
+            var amount = q.PricePerPageFcfa * dto.Pages;
+
+            // 🔴 FeesPayer = School et TargetAmountFcfa = 0, et ce n'est pas un
+            // détail de forme :
+            //   - l'article 8.2 du contrat Wave interdit de facturer des frais
+            //     au payeur (§145) — donc pas de majoration : l'école paie le
+            //     prix affiché, la plateforme absorbe la commission ;
+            //   - ce couple exclut mécaniquement ce paiement du calcul de la
+            //     marge +8 % dans P (§112), qui exige FeesPayer=Parent ET
+            //     TargetAmountFcfa > 0. Sans quoi la recette serait comptée deux
+            //     fois.
+            var payment = new Models.Payment
+            {
+                SchoolId = schoolId.Value,
+                Purpose = PaymentPurpose.OcrPages,
+                OcrPagesPurchased = dto.Pages,
+                OcrPricePerPageFcfa = q.PricePerPageFcfa,
+                AmountFcfa = amount,
+                TargetAmountFcfa = 0,
+                FeesFcfa = 0,
+                NetCreditedFcfa = 0,
+                Operator = PaymentOperator.Wave,
+                FeesPayer = FeesPayer.School,
+                Status = PaymentStatus.Pending,
+                InitiatedAt = DateTime.UtcNow,
+                PublicResultToken = Guid.NewGuid().ToString("N"),
+            };
+            _context.Payments.Add(payment);
+            await _context.SaveChangesAsync(ct);
+
+            DTOs.Senepay.SenePayInitiatePaymentResponse resp;
             try
             {
-                var s = raw ?? string.Empty;
-                var comma = s.IndexOf(",", StringComparison.Ordinal);
-                if (s.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0)
-                    s = s[(comma + 1)..];
-                bytes = Convert.FromBase64String(s);
+                var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
+                var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
+                resp = await _senepay.InitiatePaymentAsync(new DTOs.Senepay.SenePayInitiatePaymentRequest
+                {
+                    Amount = payment.AmountFcfa,
+                    Currency = "XOF",
+                    CountryCode = "SN",
+                    Operator = "wave",
+                    CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
+                    OtpCode = null,
+                    OrderId = payment.Id.ToString(),
+                    CustomerName = User.GetEmail(),
+                    WebhookUrl = _senepaySettings.WebhookPayinUrl,
+                    ReturnUrl = $"{resultBase}?status=success",
+                    CancelUrl = $"{resultBase}?status=cancel",
+                }, ct);
             }
-            catch (FormatException)
+            catch (SenePayApiException ex)
             {
-                error = "cette photo n'a pas pu être lue.";
-                return false;
+                _logger.LogError(ex, "[ocr/purchase] SenePay indisponible pour Payment {PaymentId}", payment.Id);
+                return StatusCode(502, ApiResponse<bool>.Fail(
+                    "Le paiement est temporairement indisponible. Réessayez dans quelques secondes."));
             }
 
-            if (bytes.Length == 0) { error = "photo vide."; return false; }
-            if (bytes.Length > 8 * 1024 * 1024) { error = "photo trop lourde (8 Mo maximum)."; return false; }
+            payment.SenePayInternalId = resp.InternalId;
+            payment.SenePayTransactionId = resp.Token;
+            await _context.SaveChangesAsync(ct);
 
-            error = null;
-            return true;
+            if (string.Equals(resp.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                payment.Status = string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                    ? PaymentStatus.Cancelled : PaymentStatus.Failed;
+                payment.FailedAt = DateTime.UtcNow;
+                payment.FailureReason = resp.FailedReason ?? resp.ErrorCode;
+                await _context.SaveChangesAsync(ct);
+            }
+
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                paymentId = payment.Id,
+                status = resp.Status ?? "Pending",
+                nextAction = resp.NextAction ?? "NONE",
+                redirectUrl = resp.RedirectUrl,
+                errorCode = resp.ErrorCode,
+                failureReason = resp.FailedReason,
+                pages = dto.Pages,
+                pricePerPageFcfa = q.PricePerPageFcfa,
+                amountFcfa = amount,
+            }, "Paiement initié."));
         }
+
+        /// <summary>
+        /// Où en est l'achat. L'application interroge après le retour de Wave —
+        /// c'est le webhook qui fait foi, ce poll ne fait que le lire.
+        /// </summary>
+        [HttpGet("photo/purchase/{id:int}")]
+        public async Task<IActionResult> PurchaseStatus(int id, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return Forbid();
+
+            var p = await _context.Payments.FirstOrDefaultAsync(
+                x => x.Id == id && x.SchoolId == schoolId.Value
+                     && x.Purpose == PaymentPurpose.OcrPages, ct);
+            if (p == null) return NotFound(ApiResponse<bool>.Fail("Achat introuvable."));
+
+            var guard = await _ocrGuard.DescribeAsync(schoolId.Value, ct);
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                paymentId = p.Id,
+                status = p.Status.ToString(),
+                pages = p.OcrPagesPurchased,
+                amountFcfa = p.AmountFcfa,
+                failureReason = p.FailureReason,
+                remainingPages = guard.RemainingPages,
+                allowancePages = guard.AllowancePages,
+            }, "OK"));
+        }
+
+        /// <summary>
+        /// 20 Mo par fichier. Très au-delà d'une photo redimensionnée par le
+        /// téléphone (~300 Ko), et calibré sur le vrai cas limite : un ancien
+        /// cahier scanné en PDF, qui porte une image par page.
+        /// </summary>
+        private const int PhotoMaxFileSizeMb = 20;
+
+        /// <summary>
+        /// Les cinq formats acceptés portent TOUS une signature universelle —
+        /// exiger qu'elle soit reconnue ne refuse aucun fichier légitime (§216).
+        /// </summary>
+        private static readonly string[] PhotoAllowedMimeTypes =
+        {
+            "image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf",
+        };
 
         // ===============================================================
 

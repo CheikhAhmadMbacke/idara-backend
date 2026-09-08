@@ -88,6 +88,11 @@ namespace Idara.API.Controllers
             // FeesPayer=Parent + sans élève).
             var isTopup = payment.Purpose == PaymentPurpose.WalletTopup;
             var isDonation = payment.Purpose == PaymentPurpose.Donation;
+            // Achat de pages de lecture : sans ce drapeau, la page de retour
+            // annoncerait « votre paiement a bien été reçu par l'école » à
+            // l'école elle-même, qui vient de PAYER. Une page de confirmation
+            // qui décrit la mauvaise opération est pire qu'aucune page.
+            var isOcrPages = payment.Purpose == PaymentPurpose.OcrPages;
             var donor = isDonation && payment.DonorId.HasValue
                 ? await _context.Users.FirstOrDefaultAsync(u => u.Id == payment.DonorId.Value, ct)
                 : null;
@@ -107,6 +112,8 @@ namespace Idara.API.Controllers
                 studentName = student != null ? $"{student.FirstName} {student.LastName}" : null,
                 isTopup,
                 isDonation,
+                isOcrPages,
+                ocrPages = payment.OcrPagesPurchased,
                 donorName = donor?.FullName,
             });
         }

@@ -141,6 +141,25 @@ namespace Idara.API.Services
         /// </summary>
         private void CreditWalletAndInvoice(Payment payment, SchoolWallet? wallet)
         {
+            // 🔴 ACHAT DE PAGES DE LECTURE — le seul paiement entrant qui ne
+            // doit RIEN créditer.
+            //
+            // L'école ne se paie pas elle-même : elle achète un service à la
+            // plateforme. Créditer son wallet lui rendrait l'argent qu'elle
+            // vient de dépenser, et casserait l'identité R = D + P (§112) — la
+            // réserve monterait du net encaissé, et la dette envers les écoles
+            // monterait d'autant, laissant P inchangé alors que la plateforme a
+            // bel et bien gagné cette somme.
+            //
+            // L'octroi des pages est fait ici même, dans LA MÊME transaction que
+            // la bascule du paiement : payer et recevoir ses pages sont un seul
+            // fait, ils ne peuvent pas diverger.
+            if (payment.Purpose == PaymentPurpose.OcrPages)
+            {
+                GrantPurchasedPages(payment);
+                return;
+            }
+
             var netAmount = payment.NetCreditedFcfa;
 
             // FeesPayer=Parent : créditer le montant CIBLE (l'école reçoit ce
@@ -239,6 +258,60 @@ namespace Idara.API.Services
             }
         }
 
+        /// <summary>
+        /// Octroie les pages achetées. Appelé dans la transaction du règlement.
+        ///
+        /// <para><b>Idempotent par construction</b> : un octroi porte le
+        /// <c>PaymentId</c>, sous index unique filtré. SenePay rejoue son
+        /// webhook jusqu'à trois fois (§50) ; sans cela, un rejeu offrirait les
+        /// pages une deuxième fois, en silence. La vérification en mémoire
+        /// ci-dessous évite l'aller-retour en base dans le cas normal ; l'index,
+        /// lui, tient même en cas de course.</para>
+        ///
+        /// <para>Le nombre de pages et le prix unitaire ont été FIGÉS à
+        /// l'initiation, sur le paiement. On ne les recalcule pas ici : entre
+        /// l'initiation et le webhook, l'école a pu faire lire d'autres pages —
+        /// donc changer sa calibration, donc son prix. Elle doit recevoir ce
+        /// qu'elle a acheté, pas ce que le tarif du jour lui donnerait.</para>
+        /// </summary>
+        private void GrantPurchasedPages(Payment payment)
+        {
+            var pages = payment.OcrPagesPurchased;
+            if (pages <= 0)
+            {
+                _logger.LogError(
+                    "[payin-settle] Achat de pages sans quantité : Payment.Id={Id} — aucune page octroyée",
+                    payment.Id);
+                return;
+            }
+
+            var already = _context.OcrPageGrants.Local.Any(g => g.PaymentId == payment.Id)
+                || _context.OcrPageGrants.Any(g => g.PaymentId == payment.Id);
+            if (already)
+            {
+                _logger.LogInformation(
+                    "[payin-settle] Pages déjà octroyées pour Payment.Id={Id} — rejeu ignoré", payment.Id);
+                return;
+            }
+
+            _context.OcrPageGrants.Add(new OcrPageGrant
+            {
+                SchoolId = payment.SchoolId,
+                Pages = pages,
+                Reason = $"Achat de {pages} page(s) de lecture — paiement {payment.Id}",
+                GrantedByUserId = null,
+                PaymentId = payment.Id,
+                PricePerPageFcfa = payment.OcrPricePerPageFcfa,
+                AmountFcfa = payment.AmountFcfa,
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            _logger.LogInformation(
+                "[payin-settle] {Pages} page(s) de lecture octroyées à l'école {SchoolId} "
+                + "(paiement {Id}, {Amount} FCFA)",
+                pages, payment.SchoolId, payment.Id, payment.AmountFcfa);
+        }
+
         public async Task RunPostCompletionEffectsAsync(int paymentId, string source, CancellationToken ct = default)
         {
             // Re-lecture fraîche du Payment complété.
@@ -295,6 +368,20 @@ namespace Idara.API.Services
 
             var shownAmount = payment.TargetAmountFcfa > 0 ? payment.TargetAmountFcfa : payment.AmountFcfa;
             var isTopup = payment.Purpose == PaymentPurpose.WalletTopup;
+
+            // ============ ACHAT DE PAGES DE LECTURE ============
+            //
+            // Sortie ANTICIPÉE, et c'est le fond du sujet : tout ce qui suit est
+            // écrit pour de l'argent qui ENTRE chez l'école. Ici l'argent en
+            // SORT. Laisser passer, c'était annoncer « paiement de 5 100 FCFA
+            // reçu pour un eleve. Votre solde a ete credite. » — trois
+            // affirmations fausses — et, pour une école ayant activé le SMS de
+            // paiement, le lui FACTURER par-dessus.
+            if (payment.Purpose == PaymentPurpose.OcrPages)
+            {
+                await NotifyOcrPagesPurchasedAsync(payment, ct);
+                return;
+            }
 
             // ==================== DON ====================
             if (payment.Purpose == PaymentPurpose.Donation)
@@ -497,6 +584,43 @@ namespace Idara.API.Services
 
             // -------- Retry abonnement plateforme (scope DI séparé, best-effort) --------
             await RetrySubscriptionAsync(payment.SchoolId, payment.Id);
+        }
+
+        /// <summary>
+        /// Prévient la direction que ses pages sont créditées. Push seulement :
+        /// l'école vient de payer, lui facturer un SMS par-dessus pour lui
+        /// annoncer son propre achat serait indéfendable.
+        /// </summary>
+        private async Task NotifyOcrPagesPurchasedAsync(Payment payment, CancellationToken ct)
+        {
+            try
+            {
+                var admins = await _context.Users
+                    .Where(u => u.SchoolId == payment.SchoolId && !u.IsDeleted
+                                && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync(ct);
+
+                var msg = NotificationTemplates.OcrPagesPurchased(
+                    payment.OcrPagesPurchased, payment.AmountFcfa);
+
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: "OCR_PAGES_PURCHASED",
+                        RelatedEntityId: payment.Id,
+                        PushRoute: "/students/import"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[payin-settle] Échec notification achat de pages Payment.Id={Id} — pas bloquant",
+                    payment.Id);
+            }
         }
 
         /// <summary>Première valeur non vide, ou null. Le donateur a trois provenances possibles.</summary>

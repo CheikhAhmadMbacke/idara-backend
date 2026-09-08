@@ -68,6 +68,25 @@ namespace Idara.API.Services
                 .Where(i => i.Status == SubscriptionInvoiceStatus.Paid)
                 .SumAsync(i => i.AmountFcfa, ct);
 
+            // Pages de lecture de cahier achetées par les écoles.
+            //
+            // 🔴 Le NET, et sa TOTALITÉ. C'est la seule recette entrante dont
+            // rien ne va à l'école : le webhook ne crédite aucun wallet (cf.
+            // PayinSettlementService), donc D ne bouge pas pendant que la
+            // réserve R monte du net encaissé. Pour que R = D + P tienne, P doit
+            // donc monter exactement de ce net.
+            //
+            // Aucun double comptage avec `surplus8` : un achat de pages est
+            // initié en FeesPayer=School avec TargetAmountFcfa = 0 (la
+            // plateforme absorbe les frais du prestataire — l'article 8.2 du
+            // contrat Wave interdit de les facturer au payeur, §145), et le
+            // filtre de `surplus8` exige FeesPayer=Parent ET TargetAmountFcfa>0.
+            var ocrPageRevenue = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Completed
+                            && p.Operator != PaymentOperator.Cash
+                            && p.Purpose == PaymentPurpose.OcrPages)
+                .SumAsync(p => p.NetCreditedFcfa, ct);
+
             // Frais de payout des retraits ÉCOLE complétés (absorbés par la plateforme).
             // On exclut les retraits plateforme (comptés séparément ci-dessous).
             var schoolPayoutFees = await _db.Withdrawals
@@ -107,11 +126,13 @@ namespace Idara.API.Services
             {
                 SubscriptionRevenueFcfa = subscriptionRevenue,
                 Surplus8PercentFcfa = surplus8,
+                OcrPageRevenueFcfa = ocrPageRevenue,
                 SchoolPayoutFeesFcfa = schoolPayoutFees,
                 PlatformOutflowsFcfa = platformOutflows,
                 CapitalInjectionsFcfa = capitalInjections,
                 SchoolDebitReturnsFcfa = schoolDebitReturns,
-                TotalFcfa = surplus8 + subscriptionRevenue + capitalInjections + schoolDebitReturns
+                TotalFcfa = surplus8 + subscriptionRevenue + ocrPageRevenue
+                    + capitalInjections + schoolDebitReturns
                     - schoolPayoutFees - platformOutflows
             };
 
@@ -419,7 +440,8 @@ namespace Idara.API.Services
                     p.AmountFcfa,
                     p.FeesPayer,
                     p.TargetAmountFcfa,
-                    p.NetCreditedFcfa
+                    p.NetCreditedFcfa,
+                    p.Purpose
                 })
                 .ToListAsync(ct);
 
@@ -471,9 +493,17 @@ namespace Idara.API.Services
                     var end = m.AddMonths(1);
                     bool In(DateTime d) => d >= m && d < end;
 
-                    var online = payments
+                    // 🔴 Le GMV, c'est ce que les FAMILLES versent aux écoles.
+                    // Un achat de pages de lecture est une école qui paie la
+                    // plateforme : le compter ici gonflerait le volume d'affaires
+                    // du produit avec notre propre chiffre d'affaires — la
+                    // mesure la plus trompeuse qu'on puisse montrer à un
+                    // investisseur, puisqu'elle grossit d'autant plus que le
+                    // produit se vend mal aux familles.
+                    var famille = payments.Where(p => p.Purpose != PaymentPurpose.OcrPages).ToList();
+                    var online = famille
                         .Where(p => p.Operator != PaymentOperator.Cash && In(p.When)).ToList();
-                    var cash = payments
+                    var cash = famille
                         .Where(p => p.Operator == PaymentOperator.Cash && In(p.When)).ToList();
                     // Marge sur paiements = excédent net − cible des payins en
                     // mode FeesPayer=Parent — MÊME formule que P (§112).
@@ -481,6 +511,12 @@ namespace Idara.API.Services
                         .Where(p => p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0)
                         .Sum(p => p.NetCreditedFcfa - p.TargetAmountFcfa);
                     var subRev = subInvoices.Where(i => In(i.When)).Sum(i => i.AmountFcfa);
+                    // Pages de lecture vendues : le net encaissé, en entier —
+                    // même règle que dans P.
+                    var ocrRev = payments
+                        .Where(p => p.Purpose == PaymentPurpose.OcrPages
+                                    && p.Operator != PaymentOperator.Cash && In(p.When))
+                        .Sum(p => p.NetCreditedFcfa);
                     var fees = payoutFees.Where(f => In(f.When)).Sum(f => f.FeesFcfa);
 
                     months.Add(new InvestorMonthDto
@@ -490,9 +526,10 @@ namespace Idara.API.Services
                         IsCurrentPartialMonth = m == currentMonth,
                         SubscriptionRevenueFcfa = subRev,
                         PaymentMarginFcfa = margin,
-                        GrossRevenueFcfa = subRev + margin,
+                        OcrPageRevenueFcfa = ocrRev,
+                        GrossRevenueFcfa = subRev + margin + ocrRev,
                         PayoutFeesFcfa = fees,
-                        NetRevenueFcfa = subRev + margin - fees,
+                        NetRevenueFcfa = subRev + margin + ocrRev - fees,
                         GmvOnlineFcfa = online.Sum(p => p.AmountFcfa),
                         PaymentsOnlineCount = online.Count,
                         GmvCashFcfa = cash.Sum(p => p.AmountFcfa),

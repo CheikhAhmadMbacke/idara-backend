@@ -22,6 +22,20 @@ namespace Idara.API.Services.Vision
         /// </summary>
         private const int PagesPerCall = 4;
 
+        /// <summary>
+        /// Lots menés de front. Les lots sont indépendants — c'est NOUS qui
+        /// dictons les colonnes, donc aucun lot n'a besoin du précédent — et
+        /// c'est ce qui rend le PDF utilisable : un cahier scanné de 40 pages
+        /// fait dix appels, soit sept minutes en file indienne (au-delà de ce
+        /// qu'un téléphone accepte d'attendre) contre deux à trois ici.
+        ///
+        /// <para>Trois, et pas plus : chaque appel en vol est de l'argent engagé
+        /// que le garde-fou a déjà autorisé mais pas encore vu dépenser, et un
+        /// parallélisme large exposerait aux limitations de débit du fournisseur
+        /// — dont le remède serait de réessayer, donc de payer deux fois.</para>
+        /// </summary>
+        private const int MaxConcurrentCalls = 3;
+
         private readonly VisionSettings _settings;
         private readonly ILogger<DocumentVisionService> _logger;
         private readonly Lazy<AnthropicClient?> _client;
@@ -41,26 +55,46 @@ namespace Idara.API.Services.Vision
         public bool IsConfigured => _settings.IsConfigured;
 
         public async Task<VisionReadResult> ReadAsync(
-            IReadOnlyList<VisionImage> images, ImportKind kind, CancellationToken ct = default)
+            IReadOnlyList<VisionPage> pages, ImportKind kind, CancellationToken ct = default)
         {
             var client = _client.Value ?? throw new InvalidOperationException(
                 "La lecture d'un cahier n'est pas disponible sur cette installation. "
                 + "Utilisez le fichier Excel.");
-            if (images.Count == 0)
-                throw new InvalidOperationException("Aucune photo à lire.");
+            if (pages.Count == 0)
+                throw new InvalidOperationException("Aucune page à lire.");
 
             var columns = ImportColumns.For(kind);
             var sw = Stopwatch.StartNew();
+
+            // Les lots sont menés de front mais RANGÉS PAR INDICE : l'ordre des
+            // élèves dans l'aperçu doit être celui du cahier, pas celui dans
+            // lequel le fournisseur a répondu. Une école qui relit son aperçu
+            // suit son cahier des yeux, ligne à ligne.
+            var chunks = new List<(int Index, int Offset, List<VisionPage> Pages)>();
+            for (int offset = 0; offset < pages.Count; offset += PagesPerCall)
+                chunks.Add((chunks.Count, offset, pages.Skip(offset).Take(PagesPerCall).ToList()));
+
+            var results = new (List<(List<string> Cells, List<int> Uncertain)> Rows, int In, int Out)[chunks.Count];
+            using var gate = new SemaphoreSlim(MaxConcurrentCalls);
+
+            await Task.WhenAll(chunks.Select(async c =>
+            {
+                await gate.WaitAsync(ct);
+                try
+                {
+                    var (rows, _, i, o) = await ReadChunkAsync(client, c.Pages, kind, columns, c.Offset, ct);
+                    results[c.Index] = (rows, i, o);
+                }
+                finally { gate.Release(); }
+            }));
 
             var table = new SheetTable();
             table.Headers.AddRange(columns);
             var uncertain = new List<(int, int)>();
             int inTok = 0, outTok = 0;
 
-            for (int offset = 0; offset < images.Count; offset += PagesPerCall)
+            foreach (var (rows, i, o) in results)
             {
-                var chunk = images.Skip(offset).Take(PagesPerCall).ToList();
-                var (rows, unc, i, o) = await ReadChunkAsync(client, chunk, kind, columns, offset, ct);
                 inTok += i;
                 outTok += o;
 
@@ -87,9 +121,10 @@ namespace Idara.API.Services.Vision
 
             sw.Stop();
             _logger.LogInformation(
-                "[vision] {Pages} page(s) lues en {Ms} ms : {Rows} ligne(s), {Unc} cellule(s) douteuse(s), "
-                + "{In} tokens entrée / {Out} sortie",
-                images.Count, sw.ElapsedMilliseconds, table.Rows.Count, uncertain.Count, inTok, outTok);
+                "[vision] {Pages} page(s) lues en {Ms} ms ({Chunks} appel(s)) : {Rows} ligne(s), "
+                + "{Unc} cellule(s) douteuse(s), {In} tokens entrée / {Out} sortie",
+                pages.Count, sw.ElapsedMilliseconds, chunks.Count, table.Rows.Count,
+                uncertain.Count, inTok, outTok);
 
             return new VisionReadResult(
                 table, uncertain, inTok, outTok, _settings.Model, (int)sw.ElapsedMilliseconds);
@@ -100,20 +135,35 @@ namespace Idara.API.Services.Vision
         private async Task<(List<(List<string> Cells, List<int> Uncertain)> Rows,
                             List<int> _, int InputTokens, int OutputTokens)>
             ReadChunkAsync(
-                AnthropicClient client, List<VisionImage> chunk, ImportKind kind,
+                AnthropicClient client, List<VisionPage> chunk, ImportKind kind,
                 string[] columns, int pageOffset, CancellationToken ct)
         {
             var content = new List<ContentBlockParam>();
-            foreach (var img in chunk)
+            foreach (var page in chunk)
             {
-                content.Add(new ImageBlockParam
+                if (page.IsPdf)
                 {
-                    Source = new Base64ImageSource
+                    // Une page de PDF part en bloc « document », pas en image :
+                    // l'API en extrait à la fois le rendu visuel ET le texte
+                    // quand il y en a. Sur un ancien cahier tapé puis exporté en
+                    // PDF, c'est ce texte qui donne des numéros de téléphone
+                    // exacts là où une photo laisserait un doute.
+                    content.Add(new DocumentBlockParam
                     {
-                        Data = Convert.ToBase64String(img.Bytes),
-                        MediaType = MediaTypeOf(img.MediaType),
-                    },
-                });
+                        Source = new Base64PdfSource { Data = Convert.ToBase64String(page.Bytes) },
+                    });
+                }
+                else
+                {
+                    content.Add(new ImageBlockParam
+                    {
+                        Source = new Base64ImageSource
+                        {
+                            Data = Convert.ToBase64String(page.Bytes),
+                            MediaType = MediaTypeOf(page.MediaType),
+                        },
+                    });
+                }
             }
             content.Add(new TextBlockParam { Text = UserPrompt(chunk.Count, pageOffset) });
 
@@ -191,9 +241,9 @@ namespace Idara.API.Services.Vision
 
             return $"""
                 Tu transcris {what} d'une école coranique ou franco-arabe au Sénégal,
-                photographiée dans un cahier ou un registre papier. Le cahier peut être
-                manuscrit, en français, en arabe, ou les deux mélangés. Les noms sont
-                sénégalais (wolof, peul, arabe).
+                photographiée ou numérisée depuis un cahier, un registre papier ou un
+                ancien document. Le cahier peut être manuscrit, en français, en arabe, ou
+                les deux mélangés. Les noms sont sénégalais (wolof, peul, arabe).
 
                 Rends UNE LIGNE par personne, avec exactement {columns.Length} cellules
                 dans cet ordre :
@@ -223,8 +273,8 @@ namespace Idara.API.Services.Vision
 
         private static string UserPrompt(int count, int pageOffset) =>
             pageOffset == 0
-                ? $"Voici {count} photo(s) du cahier. Transcris toutes les personnes qui y figurent."
-                : $"Voici {count} photo(s) supplémentaire(s) du MÊME cahier "
+                ? $"Voici {count} page(s) du cahier. Transcris toutes les personnes qui y figurent."
+                : $"Voici {count} page(s) supplémentaire(s) du MÊME cahier "
                   + $"(la suite, à partir de la page {pageOffset + 1}). Les colonnes sont les mêmes ; "
                   + "ces pages n'ont peut-être pas de ligne d'en-tête. Transcris uniquement les "
                   + "personnes de ces pages.";

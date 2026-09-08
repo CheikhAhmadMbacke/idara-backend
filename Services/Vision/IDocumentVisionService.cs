@@ -3,10 +3,33 @@ using Idara.API.Enums;
 
 namespace Idara.API.Services.Vision
 {
-    /// <summary>Une image de cahier, telle qu'elle arrive du téléphone.</summary>
-    /// <param name="Bytes">Contenu binaire, déjà redimensionné côté téléphone.</param>
-    /// <param name="MediaType">« image/jpeg », « image/png »…</param>
-    public record VisionImage(byte[] Bytes, string MediaType);
+    /// <summary>
+    /// Un fichier tel qu'il arrive du téléphone : soit une photo (une page), soit
+    /// un PDF (autant de pages qu'il en contient).
+    ///
+    /// <para><b>Fichier et page sont deux choses distinctes, et c'est toute la
+    /// difficulté du PDF.</b> Une photo, c'est un fichier = une page. Un ancien
+    /// cahier scanné, c'est un fichier = quarante pages. Or le quota, le prix et
+    /// le découpage des appels se comptent en PAGES. Confondre les deux ferait
+    /// lire quarante pages au prix d'une, sans que le garde-fou de dépense y
+    /// voie quoi que ce soit.</para>
+    /// </summary>
+    /// <param name="Bytes">Contenu binaire, déjà validé par signature (§216).</param>
+    /// <param name="MediaType">« image/jpeg », « image/png », « application/pdf »…</param>
+    public record VisionFile(byte[] Bytes, string MediaType)
+    {
+        public bool IsPdf => string.Equals(MediaType, "application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// UNE page prête à partir à l'IA. Une photo telle quelle, ou une page
+    /// extraite d'un PDF. À partir d'ici, plus rien dans la chaîne n'a besoin de
+    /// savoir qu'un PDF a existé.
+    /// </summary>
+    public record VisionPage(byte[] Bytes, string MediaType)
+    {
+        public bool IsPdf => string.Equals(MediaType, "application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Ce que l'IA a lu.
@@ -54,12 +77,10 @@ namespace Idara.API.Services.Vision
         bool IsConfigured { get; }
 
         /// <summary>
-        /// Lit les images et rend le tableau. Les pages partent dans UN SEUL
-        /// appel : le modèle voit l'en-tête une fois et garde la même
-        /// disposition sur toutes les pages — une page 2 sans en-tête serait
-        /// illisible envoyée seule.
+        /// Lit les pages et rend le tableau. Photos et pages de PDF se mélangent
+        /// librement : à ce niveau, ce ne sont plus que des pages.
         /// </summary>
         Task<VisionReadResult> ReadAsync(
-            IReadOnlyList<VisionImage> images, ImportKind kind, CancellationToken ct = default);
+            IReadOnlyList<VisionPage> pages, ImportKind kind, CancellationToken ct = default);
     }
 }

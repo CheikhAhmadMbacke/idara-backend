@@ -317,10 +317,15 @@ namespace Idara.API.Services
                             c.Item().Text(t =>
                             {
                                 t.Span("Type : ").SemiBold().FontColor(TextSecondary);
-                                // Topup wallet école = pas d'élève + pas de facture.
-                                t.Span(student == null
-                                    ? "Recharge du wallet école"
-                                    : "Paiement libre");
+                                // Pas d'élève ET pas de facture : trois cas
+                                // possibles, et il ne faut jamais en nommer un
+                                // pour un autre — un reçu qui ment sur ce qui a
+                                // été acheté est pire que pas de reçu.
+                                t.Span(student != null
+                                    ? "Paiement libre"
+                                    : payment.Purpose == PaymentPurpose.OcrPages
+                                        ? $"Achat de {payment.OcrPagesPurchased} page(s) de lecture de cahier"
+                                        : "Recharge du wallet école");
                             });
                         }
                     }

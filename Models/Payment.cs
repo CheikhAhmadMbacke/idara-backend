@@ -70,6 +70,22 @@ namespace Idara.API.Models
         public int? DonorId { get; set; }
         public User? Donor { get; set; }
 
+        /// <summary>
+        /// Pages de lecture achetées, quand <see cref="Purpose"/> ==
+        /// <c>OcrPages</c> (zéro partout ailleurs). FIGÉ à l'initiation : entre
+        /// le clic et le webhook, l'école a pu faire lire d'autres pages, donc
+        /// changer sa calibration et son prix. Elle doit recevoir ce qu'elle a
+        /// acheté, pas ce que le tarif du moment lui donnerait.
+        /// </summary>
+        public int OcrPagesPurchased { get; set; }
+
+        /// <summary>
+        /// Prix unitaire figé de ces pages. Gardé en plus du total parce qu'une
+        /// facture doit se LIRE : « 50 pages à 102 F » se vérifie, « 5 100 » ne
+        /// se vérifie pas.
+        /// </summary>
+        public long OcrPricePerPageFcfa { get; set; }
+
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }

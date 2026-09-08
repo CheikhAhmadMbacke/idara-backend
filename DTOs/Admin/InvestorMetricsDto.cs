@@ -66,7 +66,9 @@ namespace Idara.API.DTOs.Admin
         public long SubscriptionRevenueFcfa { get; set; }
         /// <summary>Marge sur les paiements en ligne du mois (excédent de la majoration, §112).</summary>
         public long PaymentMarginFcfa { get; set; }
-        /// <summary>CA du mois = abonnements + marge paiements.</summary>
+        /// <summary>Pages de lecture de cahier vendues aux écoles ce mois (net encaissé).</summary>
+        public long OcrPageRevenueFcfa { get; set; }
+        /// <summary>CA du mois = abonnements + marge paiements + pages de lecture.</summary>
         public long GrossRevenueFcfa { get; set; }
         /// <summary>Coût direct : frais des retraits écoles complétés ce mois.</summary>
         public long PayoutFeesFcfa { get; set; }

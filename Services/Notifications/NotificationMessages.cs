@@ -257,6 +257,15 @@ namespace Idara.API.Services.Notifications
                 ? $"تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك."
                 : $"تم استلام شحن بمبلغ {montantFcfa} FCFA. تم إضافة المبلغ إلى رصيدك. الإيصال: {recuUrl}");
 
+        // Pages de lecture de cahier achetées. Ni élève, ni solde crédité : dire
+        // « votre solde a été crédité » ici serait faux — cet argent ne revient
+        // pas à l'école, elle achète un service. On annonce donc ce qu'elle a
+        // reçu (des pages) et non un mouvement de solde qui n'a pas eu lieu.
+        // Chiffres latins et « FCFA » dans les deux langues (§228).
+        public static BilingualMessage OcrPagesPurchased(int pages, long montantFcfa) => new(
+            Fr: $"{pages} page(s) de lecture ajoutee(s) a votre compte ({montantFcfa} FCFA). Vous pouvez reprendre la lecture de votre cahier.",
+            Ar: $"تمت إضافة {pages} صفحة قراءة إلى حسابكم ({montantFcfa} FCFA). يمكنكم متابعة قراءة دفتركم.");
+
         // Auto-ajustement de palier à la facturation : l'effectif de l'école a
         // dépassé le plafond de son plan, on l'a remontée au plan adapté.
         public static BilingualMessage SubscriptionPlanUpgraded(

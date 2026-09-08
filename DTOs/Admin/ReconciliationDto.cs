@@ -46,7 +46,10 @@ namespace Idara.API.DTOs.Admin
     /// <summary>Décomposition des gains plateforme P.</summary>
     public class PlatformBalanceDto
     {
-        /// <summary>P total = Subscriptions + Surplus8 − SchoolPayoutFees − Outflows.</summary>
+        /// <summary>
+        /// P total = Subscriptions + Surplus8 + PagesDeLecture + Injections
+        /// + RetoursDébits − FraisPayoutÉcole − Sorties.
+        /// </summary>
         public long TotalFcfa { get; set; }
 
         /// <summary>Revenus d'abonnement encaissés (factures abo payées).</summary>
@@ -54,6 +57,13 @@ namespace Idara.API.DTOs.Admin
 
         /// <summary>Excédent de la majoration +8% des payins (part au-dessus du crédit école).</summary>
         public long Surplus8PercentFcfa { get; set; }
+
+        /// <summary>
+        /// Pages de lecture de cahier vendues aux écoles, en NET encaissé. La
+        /// seule recette entrante qui ne crédite aucun wallet : elle entre donc
+        /// en totalité dans P.
+        /// </summary>
+        public long OcrPageRevenueFcfa { get; set; }
 
         /// <summary>Frais de payout des retraits école (déduits, absorbés par la plateforme).</summary>
         public long SchoolPayoutFeesFcfa { get; set; }

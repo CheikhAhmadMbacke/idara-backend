@@ -171,6 +171,8 @@ builder.Services.AddScoped<Idara.API.Services.Vision.IOcrBudgetGuard,
     Idara.API.Services.Vision.OcrBudgetGuard>();
 builder.Services.AddScoped<Idara.API.Services.Vision.IPhotoImportService,
     Idara.API.Services.Vision.PhotoImportService>();
+builder.Services.AddScoped<Idara.API.Services.Vision.IOcrPricingService,
+    Idara.API.Services.Vision.OcrPricingService>();
 builder.Services.AddScoped<IReportCardPdfService, ReportCardPdfService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<IReceiptPdfService, ReceiptPdfService>();

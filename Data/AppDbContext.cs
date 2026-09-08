@@ -194,6 +194,22 @@ namespace Idara.API.Data
                 .HasForeignKey(g => g.SchoolId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // 🔴 UN paiement n'octroie ses pages QU'UNE FOIS. SenePay rejoue son
+            // webhook jusqu'a trois fois (~1 s / 5 s / 30 s, §50) : sans cet
+            // unique, un rejeu offrirait les pages une seconde fois — et pas
+            // une erreur nulle part pour le dire. L'index est filtre sur les
+            // octrois issus d'un achat : les gestes du SuperAdmin ont
+            // PaymentId NULL et doivent rester nombreux.
+            modelBuilder.Entity<OcrPageGrant>()
+                .HasIndex(g => g.PaymentId)
+                .IsUnique()
+                .HasFilter("\"PaymentId\" IS NOT NULL");
+            modelBuilder.Entity<OcrPageGrant>()
+                .HasOne(g => g.Payment)
+                .WithMany()
+                .HasForeignKey(g => g.PaymentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             modelBuilder.Entity<TranslationProposal>()
                 .HasOne(p => p.Reviewer)
                 .WithMany(r => r.Proposals)

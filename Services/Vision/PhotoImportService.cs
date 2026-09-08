@@ -19,9 +19,14 @@ namespace Idara.API.Services.Vision
 
     public interface IPhotoImportService
     {
+        /// <param name="files">
+        /// Les fichiers déposés : des photos, des PDF, ou les deux mêlés. Le
+        /// service les développe lui-même en pages — c'est LUI qui décide de
+        /// combien l'école sera décomptée, jamais l'appelant.
+        /// </param>
         Task<PhotoImportResult> AnalyzePhotosAsync(
             int schoolId, int userId, ImportKind kind,
-            IReadOnlyList<VisionImage> images, CancellationToken ct);
+            IReadOnlyList<VisionFile> files, CancellationToken ct);
     }
 
     /// <summary>
@@ -69,9 +74,35 @@ namespace Idara.API.Services.Vision
 
         public async Task<PhotoImportResult> AnalyzePhotosAsync(
             int schoolId, int userId, ImportKind kind,
-            IReadOnlyList<VisionImage> images, CancellationToken ct)
+            IReadOnlyList<VisionFile> files, CancellationToken ct)
         {
-            // --- 1. Le garde-fou D'ABORD, avant même de regarder si le
+            // --- 0. Développer les fichiers en PAGES, avant tout le reste.
+            //
+            // Un PDF de quarante pages est UN fichier et QUARANTE pages. Le
+            // quota, le prix et le découpage des appels se comptent en pages :
+            // si cette expansion arrivait après le garde-fou, l'école lirait son
+            // cahier entier pour le prix d'une photo et rien ne le verrait.
+            //
+            // L'opération est purement locale et gratuite — donc elle n'a rien à
+            // faire dans le registre : un PDF illisible n'a rien dépensé, et ce
+            // n'est pas un fait qui concerne le quota de l'école.
+            List<VisionPage> pages;
+            try
+            {
+                pages = ExpandToPages(files);
+            }
+            catch (PdfPageSplitter.PdfUnreadableException ex)
+            {
+                _logger.LogInformation(
+                    "[photo-import] École {SchoolId} : PDF refusé à l'ouverture ({Message})",
+                    schoolId, ex.Message);
+                throw new InvalidOperationException(ex.Message);
+            }
+
+            if (pages.Count == 0)
+                throw new InvalidOperationException("Aucune page à lire.");
+
+            // --- 1. Le garde-fou, avant même de regarder si le
             // fournisseur est configuré.
             //
             // L'ordre inverse paraissait naturel — pourquoi évaluer un quota si
@@ -85,12 +116,12 @@ namespace Idara.API.Services.Vision
             // Accessoirement, un refus pour quota ou KYC est un fait qui
             // concerne l'école : il mérite sa ligne de registre que le
             // fournisseur soit joignable ou non.
-            var verdict = await _guard.EvaluateAsync(new OcrGuardContext(schoolId, images.Count), ct);
+            var verdict = await _guard.EvaluateAsync(new OcrGuardContext(schoolId, pages.Count), ct);
             if (!verdict.Allowed)
             {
                 // Un refus laisse une trace, à coût nul : c'est ce qui permet de
                 // savoir qu'une école se heurte au plafond au lieu de le deviner.
-                await RecordAsync(schoolId, userId, kind, images.Count,
+                await RecordAsync(schoolId, userId, kind, pages.Count,
                     charged: 0, success: false, blocked: verdict.BlockedReason,
                     error: null, model: string.Empty, inTok: 0, outTok: 0,
                     costCentimes: 0, rows: 0, uncertain: 0, batchId: null, durationMs: 0, ct);
@@ -113,16 +144,16 @@ namespace Idara.API.Services.Vision
             VisionReadResult read;
             try
             {
-                read = await _vision.ReadAsync(images, kind, ct);
+                read = await _vision.ReadAsync(pages, kind, ct);
             }
             catch (Exception ex)
             {
                 // On ne connaît pas les tokens consommés quand l'appel lève ;
-                // on estime la dépense sur les images envoyées plutôt que de
+                // on estime la dépense sur les pages envoyées plutôt que de
                 // l'oublier — un coût inconnu compté à zéro rendrait le plafond
                 // quotidien aveugle exactement les jours où il sert.
-                var estimated = EstimateCentimes(settings, images.Count);
-                await RecordAsync(schoolId, userId, kind, images.Count,
+                var estimated = EstimateCentimes(settings, pages.Count);
+                await RecordAsync(schoolId, userId, kind, pages.Count,
                     charged: 0, success: false, blocked: null, error: Truncate(ex.Message),
                     model: string.Empty, inTok: 0, outTok: 0, costCentimes: estimated,
                     rows: 0, uncertain: 0, batchId: null, durationMs: 0, ct);
@@ -137,7 +168,7 @@ namespace Idara.API.Services.Vision
 
             if (read.Table.Rows.Count == 0)
             {
-                await RecordAsync(schoolId, userId, kind, images.Count,
+                await RecordAsync(schoolId, userId, kind, pages.Count,
                     charged: 0, success: false, blocked: "no_rows", error: null,
                     model: read.Model, inTok: read.InputTokens, outTok: read.OutputTokens,
                     costCentimes: cost, rows: 0, uncertain: 0, batchId: null,
@@ -149,13 +180,13 @@ namespace Idara.API.Services.Vision
             }
 
             // --- 4. L'analyse : celle de l'import Excel, sans un paramètre de plus.
-            var source = images.Count == 1 ? "Photo du cahier" : $"Photos du cahier ({images.Count})";
+            var source = SourceLabel(files, pages.Count);
             var batch = kind == ImportKind.Staff
                 ? await _staff.AnalyzeTableAsync(schoolId, userId, read.Table, source, ct)
                 : await _students.AnalyzeTableAsync(schoolId, userId, read.Table, source, ct);
 
-            await RecordAsync(schoolId, userId, kind, images.Count,
-                charged: images.Count, success: true, blocked: null, error: null,
+            await RecordAsync(schoolId, userId, kind, pages.Count,
+                charged: pages.Count, success: true, blocked: null, error: null,
                 model: read.Model, inTok: read.InputTokens, outTok: read.OutputTokens,
                 costCentimes: cost, rows: read.Table.Rows.Count,
                 uncertain: read.Uncertain.Count, batchId: batch.Id,
@@ -164,7 +195,7 @@ namespace Idara.API.Services.Vision
             _logger.LogInformation(
                 "[photo-import] École {SchoolId} : {Pages} page(s) → lot {BatchId} "
                 + "({Rows} ligne(s), {Unc} douteuse(s)), coût {Cost} centimes",
-                schoolId, images.Count, batch.Id, read.Table.Rows.Count, read.Uncertain.Count, cost);
+                schoolId, pages.Count, batch.Id, read.Table.Rows.Count, read.Uncertain.Count, cost);
 
             // Traduit les doutes en (ligne du lot, NOM de colonne) : un index
             // numérique ne veut rien dire pour l'écran, qui affiche des colonnes.
@@ -176,11 +207,53 @@ namespace Idara.API.Services.Vision
 
             return new PhotoImportResult(
                 batch, uncertain,
-                Math.Max(0, verdict.RemainingPages - images.Count),
+                Math.Max(0, verdict.RemainingPages - pages.Count),
                 verdict.AllowancePages);
         }
 
         // ---------------------------------------------------------------
+
+        /// <summary>
+        /// Développe les fichiers en pages : une photo donne une page, un PDF en
+        /// donne autant qu'il en contient, et l'ordre de dépôt est conservé.
+        /// </summary>
+        private static List<VisionPage> ExpandToPages(IReadOnlyList<VisionFile> files)
+        {
+            var pages = new List<VisionPage>();
+            foreach (var f in files)
+            {
+                if (!f.IsPdf)
+                {
+                    pages.Add(new VisionPage(f.Bytes, f.MediaType));
+                    continue;
+                }
+
+                foreach (var page in PdfPageSplitter.SplitToSinglePages(f.Bytes))
+                    pages.Add(new VisionPage(page, "application/pdf"));
+            }
+            return pages;
+        }
+
+        /// <summary>
+        /// Ce que l'école lira dans l'aperçu, en haut du lot. Elle a déposé des
+        /// photos ou un fichier : l'origine doit lui parler de ce QU'ELLE a fait,
+        /// pas de notre découpage interne en pages.
+        /// </summary>
+        private static string SourceLabel(IReadOnlyList<VisionFile> files, int pageCount)
+        {
+            var pdfs = files.Count(f => f.IsPdf);
+            var shots = files.Count - pdfs;
+
+            if (pdfs > 0 && shots == 0)
+                return pdfs == 1
+                    ? $"PDF du cahier ({pageCount} page{(pageCount > 1 ? "s" : "")})"
+                    : $"{pdfs} PDF du cahier ({pageCount} pages)";
+
+            if (pdfs == 0)
+                return shots == 1 ? "Photo du cahier" : $"Photos du cahier ({shots})";
+
+            return $"Cahier ({shots} photo{(shots > 1 ? "s" : "")} + {pdfs} PDF, {pageCount} pages)";
+        }
 
         /// <summary>
         /// Coût réel, calculé sur les tokens RÉELLEMENT consommés et les tarifs

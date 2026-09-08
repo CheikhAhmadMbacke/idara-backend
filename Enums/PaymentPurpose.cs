@@ -9,11 +9,16 @@ namespace Idara.API.Enums
     /// - WalletTopup : recharge du wallet par le SchoolAdmin (Phase 4).
     /// - Donation : don d'un DONATEUR → école (StudentId/GuardianId null,
     ///   DonorId renseigné). Crédite la poche « Don » du wallet école.
+    /// - OcrPages : l'école achète des pages de lecture de cahier. 🔴 SEULE
+    ///   nature qui ne crédite PAS le wallet école : l'argent est un revenu de
+    ///   la plateforme, pas une somme due à l'école. Il entre donc dans P
+    ///   (§112), et le webhook octroie les pages au lieu de créditer un solde.
     /// </summary>
     public enum PaymentPurpose
     {
         SchoolFee = 0,
         WalletTopup = 1,
-        Donation = 2
+        Donation = 2,
+        OcrPages = 3
     }
 }

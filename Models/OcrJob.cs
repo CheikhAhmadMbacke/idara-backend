@@ -100,8 +100,28 @@ namespace Idara.API.Models
         /// <summary>Pourquoi. Affiché au SuperAdmin, jamais à l'école.</summary>
         public string Reason { get; set; } = string.Empty;
 
-        /// <summary>Qui a accordé. Null = accordé par un automate (un achat, plus tard).</summary>
+        /// <summary>Qui a accordé. Null = accordé par un automate — donc un achat.</summary>
         public int? GrantedByUserId { get; set; }
+
+        /// <summary>
+        /// Le paiement qui a acheté ces pages. Null pour un geste du SuperAdmin.
+        /// <b>C'est aussi la clé d'idempotence</b> : un webhook SenePay est
+        /// rejoué jusqu'à trois fois, et sans cette contrainte d'unicité un
+        /// rejeu offrirait les pages une seconde fois.
+        /// </summary>
+        public int? PaymentId { get; set; }
+        public Payment? Payment { get; set; }
+
+        /// <summary>
+        /// Prix unitaire FIGÉ à l'achat. Le tarif de lancement va baisser une
+        /// fois la mesure faite : sans ce gel, une baisse réécrirait le prix de
+        /// ce qui a déjà été payé, et le registre ne dirait plus la vérité.
+        /// Zéro pour un geste du SuperAdmin.
+        /// </summary>
+        public long PricePerPageFcfa { get; set; }
+
+        /// <summary>Total réellement demandé à l'école. Zéro pour un geste.</summary>
+        public long AmountFcfa { get; set; }
 
         public DateTime CreatedAt { get; set; }
     }

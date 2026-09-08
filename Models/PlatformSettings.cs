@@ -327,7 +327,7 @@ namespace Idara.API.Models
         /// (le modèle voit l'en-tête une fois et garde la disposition) — mais
         /// une requête sans borne est une facture sans borne.
         /// </summary>
-        public int OcrMaxPagesPerRequest { get; set; } = 12;
+        public int OcrMaxPagesPerRequest { get; set; } = 40;
 
         /// <summary>
         /// Plafond de dépense QUOTIDIEN, toutes écoles confondues. C'est ce
@@ -353,6 +353,60 @@ namespace Idara.API.Models
 
         /// <summary>Prix du million de tokens de SORTIE. Opus 5 : 25 $/M ≈ 15 175 FCFA/M.</summary>
         public long OcrOutputPriceCentimesPerMTok { get; set; } = 1517500;
+
+        // ---- Ce que l'école PAIE pour une page, au-delà de ses pages offertes ----
+        //
+        // 🔴 **Le prix d'une page dépend de ce que la page contient**, et c'est
+        // la seule façon de ne pas ruiner le daara pour qui la fonction existe.
+        // Deux réalités opposées coexistent :
+        //   - un cahier serré tient 24 élèves sur une page ;
+        //   - certains daara informels tiennent UNE FICHE PAR ÉLÈVE, sur une à
+        //     trois pages.
+        // Un prix unique par page ferait payer au second QUATRE FOIS le service
+        // rendu au premier. D'où deux composantes — une part fixe qui paie
+        // l'image et la réflexion du modèle, une part par élève qui paie le
+        // texte produit — réunies en UN SEUL prix affiché, grâce à la
+        // calibration faite sur les pages offertes de l'école.
+        //
+        // ⚠️ Tarif de LANCEMENT. La « réflexion » du modèle est estimée, jamais
+        // mesurée : c'est 41 % du coût et le seul chiffre qui manque. La part
+        // fixe est donc volontairement au-dessus du prix arrêté le 2026-09-02
+        // (20 F), parce que **baisser un prix après mesure est facile, le monter
+        // ne l'est pas**. À rebaisser dès que de vraies photos de cahier auront
+        // été lues.
+
+        /// <summary>
+        /// Part FIXE du prix d'une page, en FCFA. Elle paie l'image et la
+        /// réflexion du modèle — ce qui ne dépend pas du nombre d'élèves.
+        /// </summary>
+        public long OcrPriceBaseFcfa { get; set; } = 30;
+
+        /// <summary>
+        /// Part VARIABLE, par élève trouvé sur une page. Elle paie le texte
+        /// produit, qui est 82 % du coût réel.
+        /// </summary>
+        public long OcrPricePerStudentFcfa { get; set; } = 3;
+
+        /// <summary>
+        /// Élèves par page retenus tant que l'école n'a rien fait lire. Sert
+        /// uniquement de repli : toute école reçoit des pages offertes, donc
+        /// elle est calibrée bien avant d'avoir à payer.
+        /// </summary>
+        public int OcrDefaultStudentsPerPage { get; set; } = 15;
+
+        /// <summary>
+        /// Interrupteur de la VENTE, distinct de celui de la lecture. Couper la
+        /// vente laisse vivre les pages offertes et les pages déjà achetées ;
+        /// couper <see cref="OcrEnabled"/> ferme tout. Deux robinets, parce que
+        /// les deux pannes ne sont pas la même.
+        /// </summary>
+        public bool OcrPurchaseEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Pages achetables en une fois. Borne haute : une école qui se trompe
+        /// d'un zéro ne doit pas payer dix fois ce qu'elle voulait.
+        /// </summary>
+        public int OcrMaxPagesPerPurchase { get; set; } = 300;
 
         public DateTime? UpdatedAt { get; set; }
 
