@@ -407,6 +407,15 @@
       return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     }
 
+    // \u2066 et \u2069 : isolats bidirectionnels. Sans eux, dans une phrase
+    // arabe, le nombre et le sigle s'INVERSENT a l'affichage — « 500 FCFA »
+    // se lit « FCFA 500 ». L'espace qui les separe est neutre pour Unicode :
+    // il prend la direction du paragraphe. Meme parade que core/utils/money.dart.
+    function money(n) {
+      if (n == null) return '—';
+      return '\u2066' + fmt(n) + '\u00A0FCFA\u2069';
+    }
+
     function setState(kind, icon, title, subtitle) {
       stateIcon.className = 'state-icon ' + kind;
       stateIcon.innerHTML = kind === 'loading'
@@ -424,7 +433,7 @@
       const rows = [
         {
           label: data.isOcrPages ? t('amount_ocr') : data.isTopup ? t('amount_topup') : data.isDonation ? t('amount_donation') : t('amount_paid'),
-          value: fmt(data.amountChargedFcfa) + ' FCFA',
+          value: money(data.amountChargedFcfa),
           big: true,
         },
       ];
@@ -456,7 +465,7 @@
         const pdfUrl = `${window.location.origin}/pay/${paymentId}/${token}/receipt.pdf`;
         const waKind = data.isOcrPages ? t('wa_ocr') : data.isDonation ? t('wa_donation') : data.isTopup ? t('wa_topup') : t('wa_payment');
         const waText = encodeURIComponent(
-          t('wa_text', { kind: waKind, amount: fmt(data.amountChargedFcfa) + ' FCFA' }) + ' ' + pdfUrl
+          t('wa_text', { kind: waKind, amount: money(data.amountChargedFcfa) }) + ' ' + pdfUrl
         );
         items.push(`
           <a class="btn btn-whatsapp" href="https://wa.me/?text=${waText}" target="_blank" rel="noopener">

@@ -349,7 +349,10 @@
     // L'argent ne se traduit JAMAIS (decision produit 2026-09-05) : chiffres
     // latins et « FCFA » quelle que soit la langue. Un arabophone senegalais lit
     // mieux « 1000 FCFA » que « ١٠٠٠ فرنك ».
-    return (n || 0).toLocaleString('fr-FR') + ' FCFA';
+    // \u2066 et \u2069 : isolats bidirectionnels, sans quoi « 500 FCFA »
+    // se lit « FCFA 500 » dans une phrase arabe (l'espace qui les separe
+    // est neutre et prend la direction du paragraphe).
+    return '\u2066' + (n || 0).toLocaleString('fr-FR') + '\u00A0FCFA\u2069';
   }
   function show(id, on) { $(id).classList.toggle('hidden', !on); }
 

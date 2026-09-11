@@ -243,7 +243,14 @@
   // latins et « FCFA » dans les deux langues. La cle reste traversee par t()
   // pour que le dictionnaire demeure la source unique — elle vaut « FCFA »
   // partout, et Tools/check-i18n-pages.js garde cela vrai.
-  function fmt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + t('fcfa'); }
+  // \u2066 et \u2069 : isolats bidirectionnels. Sans eux, dans une phrase
+  // arabe, le nombre et le sigle s'INVERSENT a l'affichage — « 500 FCFA »
+  // se lit « FCFA 500 ». L'espace qui les separe est neutre pour Unicode :
+  // il prend la direction du paragraphe. Meme parade que core/utils/money.dart.
+  function fmt(n) {
+    var g = String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return '\u2066' + g + ' ' + t('fcfa') + '\u2069';
+  }
   function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
   function isInApp() { var ua = navigator.userAgent || ''; return /whatsapp|fban|fbav|fb_iab|instagram|messenger|line\//i.test(ua); }
 

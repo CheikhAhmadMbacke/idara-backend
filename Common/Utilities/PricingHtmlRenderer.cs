@@ -164,19 +164,19 @@ namespace Idara.API.Common.Utilities
             var tagline = Pick(p.Tagline, p.TaglineAr, ar);
             sb.Append("<p class=\"tag\">").Append(E(tagline)).Append("</p>\n");
 
-            sb.Append("<p class=\"price\"><strong>").Append(Money(p.MonthlyPriceFcfa)).Append("</strong>")
-              .Append("<span> FCFA / ").Append(ar ? "شهر" : "mois").Append("</span></p>\n");
+            sb.Append("<p class=\"price\"><strong>").Append(Fcfa(p.MonthlyPriceFcfa)).Append("</strong>")
+              .Append("<span> / ").Append(ar ? "شهر" : "mois").Append("</span></p>\n");
 
             // Le tarif annuel n'est montré QUE s'il est réellement renseigné :
             // un « 0 FCFA / an » sur une page de tarifs discrédite tout le reste.
             if (p.AnnualPriceFcfa > 0)
             {
-                sb.Append("<p class=\"annual\">").Append(Money(p.AnnualPriceFcfa)).Append(" FCFA / ")
+                sb.Append("<p class=\"annual\">").Append(Fcfa(p.AnnualPriceFcfa)).Append(" / ")
                   .Append(ar ? "سنة" : "an");
                 var saving = p.MonthlyPriceFcfa * 12 - p.AnnualPriceFcfa;
                 if (saving > 0)
-                    sb.Append(" <em>(").Append(ar ? "توفير " : "économie ").Append(Money(saving))
-                      .Append(" FCFA)</em>");
+                    sb.Append(" <em>(").Append(ar ? "توفير " : "économie ").Append(Fcfa(saving))
+                      .Append(")</em>");
                 sb.Append("</p>\n");
             }
 
@@ -223,6 +223,20 @@ namespace Idara.API.Common.Utilities
         /// </summary>
         private static string? Pick(string? fr, string? arText, bool ar) =>
             ar && !string.IsNullOrWhiteSpace(arText) ? arText : fr;
+
+        /// <summary>
+        /// Un prix en FCFA, pret a etre insere dans la page — y compris dans
+        /// la version ARABE, ou il est encadre des isolats bidirectionnels
+        /// U+2066 / U+2069.
+        /// </summary>
+        /// <remarks>
+        /// Sans eux, « 12 000 FCFA » s'affiche « FCFA 12 000 » : dans un
+        /// paragraphe RTL, l'espace entre le nombre et le sigle est NEUTRE
+        /// pour l'algorithme bidirectionnel d'Unicode, il prend donc la
+        /// direction du paragraphe, et les deux fragments latins s'inversent.
+        /// Meme parade que <c>core/utils/money.dart</c> cote application.
+        /// </remarks>
+        public static string Fcfa(long v) => "\u2066" + Money(v) + "\u00A0FCFA\u2069";
 
         /// <summary>
         /// « 12 000 » avec un espace INSÉCABLE ordinaire (U+00A0) : un prix ne

@@ -1050,7 +1050,28 @@ namespace Idara.API.Controllers
                         && sg.Student.SchoolId == schoolId.Value
                         && !sg.Student.IsDeleted))
                 .OrderBy(u => u.Id)
-                .Select(u => new { u.Id, u.Email, u.FullName, u.PhoneNumber })
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Email,
+                    u.FullName,
+                    u.PhoneNumber,
+                    // Le lien de parenté déclaré pour cet adulte auprès d'un
+                    // AUTRE enfant de l'école — un père est « Père » pour sa
+                    // fille comme pour son fils. Sert au pré-remplissage du
+                    // formulaire ; le lien saisi restera propre au nouvel élève.
+                    // Le plus récent l'emporte (Id décroissant) : c'est le
+                    // dernier que l'école a validé de sa main.
+                    Relationship = _context.StudentGuardians
+                        .Where(sg => sg.GuardianId == u.Id
+                                     && sg.Student.SchoolId == schoolId.Value
+                                     && !sg.Student.IsDeleted
+                                     && sg.Relationship != null
+                                     && sg.Relationship != "")
+                        .OrderByDescending(sg => sg.Id)
+                        .Select(sg => sg.Relationship)
+                        .FirstOrDefault()
+                })
                 .FirstOrDefaultAsync();
 
             return guardian == null ? NotFound() : Ok(guardian);
