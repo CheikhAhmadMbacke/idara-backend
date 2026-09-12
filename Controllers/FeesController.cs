@@ -37,6 +37,7 @@ namespace Idara.API.Controllers
         private readonly IInvoiceRepricingService _repricing;
         private readonly ICashPaymentService _cashPayments;
         private readonly IPaymentLinkService _paymentLinks;
+        private readonly IGuardianPaymentService _guardianPayments;
         private readonly INotificationService _notif;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
@@ -50,6 +51,7 @@ namespace Idara.API.Controllers
             IInvoiceRepricingService repricing,
             ICashPaymentService cashPayments,
             IPaymentLinkService paymentLinks,
+            IGuardianPaymentService guardianPayments,
             INotificationService notif,
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
@@ -62,6 +64,7 @@ namespace Idara.API.Controllers
             _repricing = repricing;
             _cashPayments = cashPayments;
             _paymentLinks = paymentLinks;
+            _guardianPayments = guardianPayments;
             _notif = notif;
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
@@ -685,8 +688,16 @@ namespace Idara.API.Controllers
                         // fois pour toutes avant elle.
                         var ensured = await _paymentLinks.EnsureAsync(
                             schoolId.Value, g.GuardianId, User.GetUserId() ?? 0, ct);
+                        // Même règle que StudentService : on annonce ce que le lien
+                        // va RÉCLAMER (consolidé par responsable, §161), pas la seule
+                        // facture qu'on vient de créer.
+                        var outstanding = await _guardianPayments.GetOutstandingAsync(
+                            g.GuardianId, schoolId.Value, ct);
+                        var aPayerFcfa = outstanding == null
+                            ? amount.Value
+                            : outstanding.ChargeFor(outstanding.TotalDueFcfa);
                         var msg = NotificationTemplates.RegistrationFeeDue(
-                            eleve, amount.Value, _paymentLinks.BuildUrl(ensured.Link.Token));
+                            eleve, aPayerFcfa, _paymentLinks.BuildUrl(ensured.Link.Token));
                         await _notif.SendSmsAsync(new NotificationSmsRequest(
                             UserId: g.GuardianId,
                             RawPhone: g.PhoneNumber,

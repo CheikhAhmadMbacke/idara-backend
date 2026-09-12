@@ -127,14 +127,29 @@ namespace Idara.API.Services.Notifications
         /// disparaître du message arabe. Le surcoût n'existe qu'en bilingue, où
         /// l'arabe force de toute façon l'UCS-2 (§88).</para>
         /// </param>
+        /// <param name="totalAPayerFcfa">
+        /// 🔴 Le TOTAL que le lien va réellement réclamer — et non le seul
+        /// montant de l'inscription. Ce n'était pas le cas avant le 2026-09-12,
+        /// et l'écart se voyait : le lien de paiement est PERMANENT et CONSOLIDÉ
+        /// par responsable (§161), il regroupe donc toutes les factures impayées
+        /// de TOUS ses enfants. Une famille recevait « Inscription de X :
+        /// 500 FCFA », cliquait, et tombait sur 27 321 FCFA.
+        /// </param>
+        /// <remarks>
+        /// ⚠️ <b>Mesuré</b> (§224 — toute retouche se remesure) : <b>134 caractères</b>
+        /// GSM-7 pour un nom de 11 et un lien de 62, soit <b>1 segment</b>, et il le
+        /// reste jusqu'à un nom de <b>37 caractères</b>. Le texte précédent en tenait
+        /// 124 : on paie 10 caractères pour cesser d'annoncer un montant qu'on ne
+        /// demande pas.
+        /// </remarks>
         public static BilingualMessage RegistrationFeeDue(
-            string eleve, long montantFcfa, string? lien = null) => new(
+            string eleve, long totalAPayerFcfa, string? lien = null) => new(
             Fr: string.IsNullOrWhiteSpace(lien)
-                ? $"Les frais d'inscription de {eleve} ({montantFcfa} FCFA) sont a payer. Reglez sur idara.sn ou sur l'application."
-                : $"Inscription de {eleve} : {montantFcfa} FCFA a payer. Cliquez ici :\n{lien}",
+                ? $"Inscription de {eleve} enregistree. A payer en tout : {totalAPayerFcfa} FCFA. Reglez sur idara.sn ou sur l'application."
+                : $"Inscription de {eleve}. A payer en tout : {totalAPayerFcfa} FCFA. Cliquez ici :\n{lien}",
             Ar: string.IsNullOrWhiteSpace(lien)
-                ? $"رسوم تسجيل {eleve} ({montantFcfa} FCFA) مستحقة الدفع. ادفع عبر idara.sn أو عبر التطبيق."
-                : $"تسجيل {eleve}: {montantFcfa} FCFA مستحقة الدفع. اضغط هنا:\n{lien}");
+                ? $"تم تسجيل {eleve}. المجموع المستحق: {totalAPayerFcfa} FCFA. ادفع عبر idara.sn أو عبر التطبيق."
+                : $"تسجيل {eleve}. المجموع المستحق: {totalAPayerFcfa} FCFA. اضغط هنا:\n{lien}");
 
         /// <summary>
         /// Inscription réglée <b>en espèces au guichet</b> : ce n'est pas une

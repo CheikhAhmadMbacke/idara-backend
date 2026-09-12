@@ -23,6 +23,7 @@ namespace Idara.API.Services
         private readonly Notifications.INotificationService _notif;
         private readonly ICashPaymentService _cash;
         private readonly IPaymentLinkService _paymentLinks;
+        private readonly IGuardianPaymentService _guardianPayments;
         private readonly SenePaySettings _senepay;
 
         public StudentService(
@@ -35,6 +36,7 @@ namespace Idara.API.Services
             Notifications.INotificationService notif,
             ICashPaymentService cash,
             IPaymentLinkService paymentLinks,
+            IGuardianPaymentService guardianPayments,
             IOptions<SenePaySettings> senepay)
         {
             _context = context;
@@ -46,6 +48,7 @@ namespace Idara.API.Services
             _notif = notif;
             _cash = cash;
             _paymentLinks = paymentLinks;
+            _guardianPayments = guardianPayments;
             _senepay = senepay.Value;
         }
 
@@ -485,8 +488,23 @@ namespace Idara.API.Services
                         // dans la boucle est donc la règle, pas une négligence.
                         var ensured = await _paymentLinks.EnsureAsync(
                             student.SchoolId, t.Id, currentUserId);
+                        // 🔴 Le montant ANNONCÉ est celui que le lien va réclamer,
+                        // pas celui de la seule inscription : le lien est consolidé
+                        // par responsable (§161) et porte les factures impayées de
+                        // TOUS ses enfants. `ChargeFor` reproduit exactement le
+                        // « Total à payer » de la modale école et de la page de
+                        // paiement — majoration parent comprise tant qu'elle existe
+                        // (elle disparaîtra avec Wave direct, §145).
+                        // Repli sur la facture seule si l'école n'a pas de réglages
+                        // de paiement : mieux vaut un montant juste et incomplet
+                        // qu'aucun message.
+                        var outstanding = await _guardianPayments.GetOutstandingAsync(
+                            t.Id, student.SchoolId, default);
+                        var aPayerFcfa = outstanding == null
+                            ? invoice.AmountDueFcfa
+                            : outstanding.ChargeFor(outstanding.TotalDueFcfa);
                         msg = Notifications.NotificationTemplates.RegistrationFeeDue(
-                            eleve, invoice.AmountDueFcfa, _paymentLinks.BuildUrl(ensured.Link.Token));
+                            eleve, aPayerFcfa, _paymentLinks.BuildUrl(ensured.Link.Token));
                         code = "REGISTRATION_DUE";
                     }
 
