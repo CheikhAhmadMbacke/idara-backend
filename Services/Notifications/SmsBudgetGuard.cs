@@ -72,6 +72,22 @@ namespace Idara.API.Services.Notifications
                 // ============================================================
                 if (!SmsSegmentCalculator.IsSenegalMobileE164(ctx.RecipientE164))
                 {
+                    // Un compte CONNU d'Idara joignable à l'étranger : depuis
+                    // que l'identité accepte tous les pays (§244), c'est un cas
+                    // normal — un parent installé en France, la première
+                    // destination de l'émigration sénégalaise. L'envoi reste
+                    // refusé (rien ne sort du Sénégal), mais ce n'est pas une
+                    // alerte de sécurité : en faire une les rendrait illisibles
+                    // à force de se déclencher pour rien.
+                    if (ctx.KnownUserId is int knownUser)
+                    {
+                        _logger.LogInformation(
+                            "[sms-guard] Destinataire hors Senegal pour le compte {UserId} : "
+                            + "envoi refuse (politique), pas d'alerte — numero legitime.",
+                            knownUser);
+                        return Block(BlockedForeign);
+                    }
+
                     _alerts.Queue(new OpsAlertRequest(
                         OpsAlertKind.SmsForeignRecipientBlocked,
                         GroupingKey: "sms-foreign",

@@ -1070,7 +1070,9 @@ namespace Idara.API.Services
             string adminLanguage = "fr")
         {
             // Identité = TÉLÉPHONE (incrément 2). Email facultatif (normalisé minuscules).
-            var phone = SenegalPhone.Normalize(dto.PhoneNumber);
+            // Identité : tout pays accepté (§244). Le paiement, lui, reste
+            // sénégalais — c'est SenegalPhone qui le garde.
+            var phone = Phone.Normalize(dto.PhoneNumber);
             if (phone == null)
                 throw new InvalidOperationException(
                     $"Numéro de téléphone du responsable invalide : '{dto.PhoneNumber}'.");

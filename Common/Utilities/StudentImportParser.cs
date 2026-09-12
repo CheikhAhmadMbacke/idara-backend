@@ -126,7 +126,7 @@ namespace Idara.API.Common.Utilities
                 var phoneRaw = SheetReader.Cell(row, iGPhone);
                 if (!string.IsNullOrWhiteSpace(phoneRaw))
                 {
-                    var norm = SenegalPhone.Normalize(phoneRaw);
+                    var norm = Phone.Normalize(phoneRaw);
                     if (norm == null)
                         p.Errors.Add($"Numéro du responsable invalide (« {phoneRaw} »).");
                     else

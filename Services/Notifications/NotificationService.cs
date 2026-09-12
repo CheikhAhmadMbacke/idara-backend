@@ -169,7 +169,11 @@ namespace Idara.API.Services.Notifications
 
             try
             {
-                var phone = SenegalPhone.Normalize(req.RawPhone);
+                // Normalisation INTERNATIONALE : un numéro étranger est un
+                // numéro valide, et son rejet éventuel appartient au garde-fou
+                // de dépense — pas à la normalisation, qui n'a pas à décider
+                // d'une politique d'envoi.
+                var phone = Phone.Normalize(req.RawPhone);
                 if (phone == null)
                 {
                     _logger.LogWarning(
@@ -227,7 +231,7 @@ namespace Idara.API.Services.Notifications
                 // plafond ne peut pas être contourné par un appelant futur.
                 var verdict = await _guard.EvaluateAsync(
                     new SmsGuardContext(schoolId, phone, text, priority,
-                        req.AuthorizedCampaign), ct);
+                        req.AuthorizedCampaign, KnownUserId: req.UserId), ct);
 
                 if (!verdict.Allowed)
                 {

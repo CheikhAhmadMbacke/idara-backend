@@ -22,12 +22,26 @@ namespace Idara.API.Services.Notifications
     /// senegalaise, le coupe-circuit, le palier ABSOLU de la plateforme et le
     /// plafond par DESTINATAIRE. Autrement dit, tout ce qui protege de la
     /// facture catastrophique et du harcelement d'une personne.</para></param>
+    /// <param name="KnownUserId">
+    /// Le compte visé, quand l'envoi part d'une notification adressée à un
+    /// utilisateur d'Idara. <c>null</c> = numéro qui ne correspond à aucun
+    /// compte (page publique, saisie libre).
+    ///
+    /// <para>🔴 Sert à une seule chose, et elle compte : distinguer un
+    /// <b>parent réellement installé à l'étranger</b> d'un numéro étranger
+    /// <b>injecté</b>. L'envoi est refusé dans les deux cas — rien d'Idara ne
+    /// sort du Sénégal — mais seul le second est une alerte de sécurité. Sans
+    /// cette distinction, le premier parent vivant en France déclencherait une
+    /// alerte « tentative d'envoi hors Sénégal » à chaque facture, et l'alerte
+    /// cesserait d'être lue.</para>
+    /// </param>
     public record SmsGuardContext(
         int? SchoolId,
         string RecipientE164,
         string Message,
         SmsPriority Priority,
-        bool AuthorizedCampaign = false);
+        bool AuthorizedCampaign = false,
+        int? KnownUserId = null);
 
     /// <summary>
     /// Verdict du garde-fou, accompagné du chiffrage — calculé une seule fois et

@@ -9,6 +9,18 @@ namespace Idara.API.Common.Utilities
     /// Accepte les saisies humaines courantes : espaces, points, tirets,
     /// préfixe <c>00221</c>, <c>+221</c>, ou un numéro national à 9 chiffres
     /// commençant par 7 (70/75/76/77/78). Rejette tout le reste.
+    ///
+    /// <para>🔴 <b>Ce refus est désormais une DÉCISION, plus un défaut.</b>
+    /// Depuis le 2026-09-12, l'identité d'un compte accepte un numéro de
+    /// n'importe quel pays — c'est <see cref="Phone.Normalize"/> qui s'en
+    /// charge (§244). Cette classe-ci reste le passage obligé de tout ce qui
+    /// touche à l'<b>argent</b> : Wave et Orange Money n'opèrent qu'au Sénégal,
+    /// et un décaissement vers un numéro étranger serait de l'argent envoyé
+    /// nulle part. Elle garde aussi les <b>SMS</b>, qui ne sortent pas du pays
+    /// (onze fois le prix, et carburant de la fraude au « SMS pumping »).</para>
+    ///
+    /// <para>Avant d'y toucher, se demander lequel des deux on tient en main :
+    /// une identité, ou un mouvement d'argent.</para>
     /// </summary>
     public static class SenegalPhone
     {

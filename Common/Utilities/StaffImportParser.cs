@@ -106,7 +106,7 @@ namespace Idara.API.Common.Utilities
                 }
                 else
                 {
-                    var norm = SenegalPhone.Normalize(phoneRaw);
+                    var norm = Phone.Normalize(phoneRaw);
                     if (norm == null) p.Errors.Add($"Numéro de téléphone invalide (« {phoneRaw} »).");
                     else p.Phone = norm;
                 }
