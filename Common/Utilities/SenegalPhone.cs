@@ -10,17 +10,27 @@ namespace Idara.API.Common.Utilities
     /// préfixe <c>00221</c>, <c>+221</c>, ou un numéro national à 9 chiffres
     /// commençant par 7 (70/75/76/77/78). Rejette tout le reste.
     ///
-    /// <para>🔴 <b>Ce refus est désormais une DÉCISION, plus un défaut.</b>
-    /// Depuis le 2026-09-12, l'identité d'un compte accepte un numéro de
-    /// n'importe quel pays — c'est <see cref="Phone.Normalize"/> qui s'en
-    /// charge (§244). Cette classe-ci reste le passage obligé de tout ce qui
-    /// touche à l'<b>argent</b> : Wave et Orange Money n'opèrent qu'au Sénégal,
-    /// et un décaissement vers un numéro étranger serait de l'argent envoyé
-    /// nulle part. Elle garde aussi les <b>SMS</b>, qui ne sortent pas du pays
-    /// (onze fois le prix, et carburant de la fraude au « SMS pumping »).</para>
+    /// <para>🔑 <b>RÈGLE D'OR (posée par Cheikh le 2026-09-12) : tout numéro
+    /// qui reçoit de l'argent, en envoie, ou reçoit un SMS doit être
+    /// sénégalais.</b> Ce refus n'est donc pas une limitation qu'on lèvera un
+    /// jour : c'est la règle, et elle vient de deux faits qui ne dépendent pas
+    /// de nous. Wave et Orange Money n'opèrent qu'au Sénégal — un décaissement
+    /// vers un numéro étranger serait de l'argent envoyé nulle part. Et aucun
+    /// SMS d'Idara ne sort du pays : onze fois le prix, et c'est le carburant
+    /// de la fraude au « SMS pumping ».</para>
     ///
-    /// <para>Avant d'y toucher, se demander lequel des deux on tient en main :
-    /// une identité, ou un mouvement d'argent.</para>
+    /// <para>Or <b>tout compte reçoit des SMS</b> — identifiants, rappels, code
+    /// de connexion. La règle couvre donc aussi l'identité : création d'un
+    /// responsable, invitation d'un membre du personnel, import en masse,
+    /// inscription d'un donateur, réinitialisation par numéro. Cette classe est
+    /// le passage obligé des cinq.</para>
+    ///
+    /// <para>⚠️ Seules les <b>coordonnées d'information</b> échappent à la règle
+    /// — téléphone du père, de la mère, du médecin, du contact d'urgence, de
+    /// l'école : personne ne leur envoie rien, rien ne leur est payé, et elles
+    /// ne sont stockées que comme du texte. Côté application, ces champs-là
+    /// gardent un sélecteur d'indicatif ; les autres sont
+    /// <c>PhoneField.senegalOnly</c>, verrouillés à +221 et à 9 chiffres.</para>
     /// </summary>
     public static class SenegalPhone
     {

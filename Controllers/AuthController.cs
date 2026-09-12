@@ -209,9 +209,7 @@ namespace Idara.API.Controllers
             var raw = (request.Email ?? string.Empty).Trim();
             var isEmail = raw.Contains('@');
             var emailKey = raw.ToLowerInvariant();
-            // Identité : un numéro de n'importe quel pays (§244). Un parent
-            // installé en France doit pouvoir se connecter.
-            var phone = isEmail ? null : Phone.Normalize(raw);
+            var phone = isEmail ? null : SenegalPhone.Normalize(raw);
 
             // Rate-limiting anti brute-force : 5 tentatives ratées / 15 min. La
             // clé est l'identifiant NORMALISÉ (email minuscule / numéro E.164)
@@ -291,7 +289,7 @@ namespace Idara.API.Controllers
             var generic = ApiResponse<bool>.Ok(true,
                 "Si un compte existe pour ce numéro, un code a été envoyé par SMS.");
 
-            var phone = Common.Utilities.Phone.Normalize(request.Phone);
+            var phone = Common.Utilities.SenegalPhone.Normalize(request.Phone);
             if (phone == null) return Ok(generic);
 
             // Anti-spam / abus de coût SMS : 3 envois max / 15 min par numéro.
@@ -322,7 +320,7 @@ namespace Idara.API.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> SetPhonePassword([FromBody] PhoneSetPasswordRequest request)
         {
-            var phone = Common.Utilities.Phone.Normalize(request.Phone);
+            var phone = Common.Utilities.SenegalPhone.Normalize(request.Phone);
             if (phone == null)
                 return BadRequest(ApiResponse<bool>.Fail("Numéro invalide."));
 
@@ -1032,7 +1030,7 @@ namespace Idara.API.Controllers
             if (schoolId == null) return Unauthorized();
 
             // Recherche par numéro normalisé E.164 en priorité, sinon par email.
-            var normalizedPhone = Phone.Normalize(phone);
+            var normalizedPhone = SenegalPhone.Normalize(phone);
             var normalizedEmail = string.IsNullOrWhiteSpace(email)
                 ? null
                 : email.Trim().ToLowerInvariant();

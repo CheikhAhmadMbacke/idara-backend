@@ -116,7 +116,7 @@ namespace Idara.API.Services
                     throw new InviteRejectedException("Élève introuvable dans votre école.");
             }
 
-            var phone = Phone.Normalize(cmd.PhoneNumber);
+            var phone = SenegalPhone.Normalize(cmd.PhoneNumber);
             if (phone == null)
                 throw new InviteRejectedException("Numéro de téléphone invalide.");
             if (await _context.Users.AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted, ct))

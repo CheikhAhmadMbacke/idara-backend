@@ -653,7 +653,7 @@ namespace Idara.API.Data
             int fixedCount = 0;
             foreach (var u in users)
             {
-                var norm = Phone.Normalize(u.PhoneNumber);
+                var norm = SenegalPhone.Normalize(u.PhoneNumber);
                 if (norm != null && norm != u.PhoneNumber)
                 {
                     u.PhoneNumber = norm;
