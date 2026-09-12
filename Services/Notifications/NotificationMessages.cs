@@ -100,9 +100,77 @@ namespace Idara.API.Services.Notifications
         // n'apprenait son existence qu'au rappel de retard 7 jours plus tard —
         // avec le mot « mensualite » en plus. Le libellé est dérivé du TYPE de
         // facture (§158), comme partout ailleurs.
-        public static BilingualMessage RegistrationFeeDue(string eleve, long montantFcfa) => new(
-            Fr: $"Les frais d'inscription de {eleve} ({montantFcfa} FCFA) sont a payer. Reglez sur idara.sn ou sur l'application.",
-            Ar: $"رسوم تسجيل {eleve} ({montantFcfa} FCFA) مستحقة الدفع. ادفع عبر idara.sn أو عبر التطبيق.");
+        /// <summary>
+        /// Les frais d'inscription sont dus — <b>avec le lien de paiement de la
+        /// famille</b>, depuis le 2026-09-12.
+        /// </summary>
+        /// <param name="lien">
+        /// Le lien de paiement PERMANENT du responsable (§161), ou null pour un
+        /// responsable qui n'en a pas (pas de numéro exploitable) : le texte
+        /// retombe alors sur l'ancienne formulation.
+        ///
+        /// <para>🔴 <b>Le texte a été resserré, et ce n'est pas cosmétique.</b>
+        /// Ajouter le lien (62 caractères) à la phrase d'origine portait le
+        /// message à <b>exactement 160 caractères</b> pour un prénom court : le
+        /// premier nom un peu long le faisait passer à 2 segments, soit le
+        /// DOUBLE du prix sur chaque inscription. La forme ci-dessous tient en
+        /// <b>124 caractères</b> — 36 de marge, de quoi absorber un nom de 36
+        /// caractères sans changer de segment.</para>
+        ///
+        /// <para>« Reglez sur idara.sn ou sur l'application » disparaît : le
+        /// lien fait les deux, et mieux — il ouvre la page de paiement sans
+        /// demander de compte, ce dont le parent qui n'a pas l'application a
+        /// précisément besoin. Toute retouche de ce texte se REMESURE (§224).</para>
+        ///
+        /// <para>⚠️ Le lien figure dans les DEUX langues et non une seule : en
+        /// mode unilingue, le mettre côté français seulement l'aurait fait
+        /// disparaître du message arabe. Le surcoût n'existe qu'en bilingue, où
+        /// l'arabe force de toute façon l'UCS-2 (§88).</para>
+        /// </param>
+        public static BilingualMessage RegistrationFeeDue(
+            string eleve, long montantFcfa, string? lien = null) => new(
+            Fr: string.IsNullOrWhiteSpace(lien)
+                ? $"Les frais d'inscription de {eleve} ({montantFcfa} FCFA) sont a payer. Reglez sur idara.sn ou sur l'application."
+                : $"Inscription de {eleve} : {montantFcfa} FCFA a payer. Cliquez ici :\n{lien}",
+            Ar: string.IsNullOrWhiteSpace(lien)
+                ? $"رسوم تسجيل {eleve} ({montantFcfa} FCFA) مستحقة الدفع. ادفع عبر idara.sn أو عبر التطبيق."
+                : $"تسجيل {eleve}: {montantFcfa} FCFA مستحقة الدفع. اضغط هنا:\n{lien}");
+
+        /// <summary>
+        /// Inscription réglée <b>en espèces au guichet</b> : ce n'est pas une
+        /// demande de paiement, c'est un accusé de réception.
+        /// </summary>
+        /// <remarks>
+        /// <para>Ce gabarit n'existait pas : quand une famille payait
+        /// l'inscription en liquide, elle ne recevait rien du tout — ni demande
+        /// (il n'y en a plus lieu), ni confirmation. Elle repartait avec un
+        /// enfant inscrit et aucune trace de ce qu'elle venait de remettre.</para>
+        ///
+        /// <para>Mesuré : <b>134 caractères</b> en français avec le lien du reçu
+        /// (63 caractères), soit 26 de marge sous le segment GSM-7. C'est ce qui
+        /// a fait retirer « Nous avons bien recu » au profit de « recus » : la
+        /// forme longue plaçait le message à 166 caractères, donc à DEUX
+        /// segments — payés sur chaque inscription réglée au guichet.</para>
+        ///
+        /// <para>La bascule exacte, pour qui voudra retoucher le texte : avec un
+        /// montant à 6 chiffres, un nom d'élève de <b>34 caractères ou plus</b>
+        /// fait passer le message à 2 segments. « Mouhamadou Moustapha Mbacke »
+        /// en fait 27 : la marge est réelle, mais elle n'est pas infinie.</para>
+        ///
+        /// <para>⚠️ En arabe, « {montant} FCFA » s'affiche « FCFA {montant} » :
+        /// c'est l'algorithme bidirectionnel, et c'est précisément l'ordre
+        /// voulu — le nombre se lit en premier quand on lit de droite à gauche.
+        /// Aucun isolat ici : ces caractères invisibles deviennent un carré au
+        /// milieu du montant sur un téléphone d'entrée de gamme (§237).</para>
+        /// </remarks>
+        public static BilingualMessage RegistrationCash(
+            string eleve, long montantFcfa, string? recuUrl = null) => new(
+            Fr: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"Inscription de {eleve} : {montantFcfa} FCFA recus en especes. Merci."
+                : $"Inscription de {eleve} : {montantFcfa} FCFA recus en especes. Merci. Recu :\n{recuUrl}",
+            Ar: string.IsNullOrWhiteSpace(recuUrl)
+                ? $"تسجيل {eleve}: تم استلام {montantFcfa} FCFA نقدا. شكرا."
+                : $"تسجيل {eleve}: تم استلام {montantFcfa} FCFA نقدا. الإيصال:\n{recuUrl}");
 
         public static BilingualMessage RegistrationOverdue(string eleve, long montantFcfa) => new(
             Fr: $"Rappel : les frais d'inscription de {eleve} ({montantFcfa} FCFA) restent a regler. Reglez sur idara.sn ou sur l'application.",

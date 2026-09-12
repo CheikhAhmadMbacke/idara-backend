@@ -28,17 +28,20 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IGuardianPaymentService _guardianPayments;
+        private readonly IPaymentLinkService _paymentLinks;
         private readonly SenePaySettings _senepaySettings;
         private readonly ILogger<PaymentLinksController> _logger;
 
         public PaymentLinksController(
             AppDbContext context,
             IGuardianPaymentService guardianPayments,
+            IPaymentLinkService paymentLinks,
             IOptions<SenePaySettings> senepaySettings,
             ILogger<PaymentLinksController> logger)
         {
             _context = context;
             _guardianPayments = guardianPayments;
+            _paymentLinks = paymentLinks;
             _senepaySettings = senepaySettings.Value;
             _logger = logger;
         }
@@ -114,39 +117,10 @@ namespace Idara.API.Controllers
                     "Ce responsable n'a pas de numéro de téléphone : le paiement Wave ne peut pas lui être attribué."));
             }
 
-            var now = DateTime.UtcNow;
-            var link = await _context.PaymentLinks
-                .FirstOrDefaultAsync(l => l.SchoolId == schoolId.Value && l.GuardianId == chosen.GuardianId && l.RevokedAt == null, ct);
-            if (link == null)
-            {
-                link = new PaymentLink
-                {
-                    Token = Guid.NewGuid().ToString("N"),
-                    SchoolId = schoolId.Value,
-                    GuardianId = chosen.GuardianId,
-                    CreatedById = userId.Value,
-                    CreatedAt = now,
-                    LastSharedAt = now
-                };
-                _context.PaymentLinks.Add(link);
-                try
-                {
-                    await _context.SaveChangesAsync(ct);
-                }
-                catch (DbUpdateException)
-                {
-                    // Course entre deux membres de l'école : l'index unique a
-                    // tranché, on relit le lien gagnant.
-                    _context.Entry(link).State = EntityState.Detached;
-                    link = await _context.PaymentLinks
-                        .FirstAsync(l => l.SchoolId == schoolId.Value && l.GuardianId == chosen.GuardianId && l.RevokedAt == null, ct);
-                }
-            }
-            else
-            {
-                link.LastSharedAt = now;
-                await _context.SaveChangesAsync(ct);
-            }
+            // Création ou réutilisation : la règle vit dans IPaymentLinkService,
+            // partagée avec la campagne SuperAdmin et le SMS d'inscription (§199).
+            var (link, _) = await _paymentLinks.EnsureAsync(
+                schoolId.Value, chosen.GuardianId, userId.Value, ct);
 
             var response = await BuildResponseAsync(link, chosen, ct);
             return Ok(ApiResponse<PaymentLinkResponseDto>.Ok(response));
@@ -188,7 +162,7 @@ namespace Idara.API.Controllers
             var paidViaLink = await _context.Payments
                 .CountAsync(p => p.PaymentLinkId == link.Id && p.Status == PaymentStatus.Completed, ct);
 
-            var url = $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/link/{link.Token}";
+            var url = _paymentLinks.BuildUrl(link.Token);
             var lines = (outstanding?.Lines ?? new List<OutstandingLine>())
                 .Select(l => new PaymentLinkDueLineDto
                 {

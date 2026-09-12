@@ -164,18 +164,18 @@ namespace Idara.API.Common.Utilities
             var tagline = Pick(p.Tagline, p.TaglineAr, ar);
             sb.Append("<p class=\"tag\">").Append(E(tagline)).Append("</p>\n");
 
-            sb.Append("<p class=\"price\"><strong>").Append(Fcfa(p.MonthlyPriceFcfa)).Append("</strong>")
+            sb.Append("<p class=\"price\"><strong>").Append(Fcfa(p.MonthlyPriceFcfa, ar)).Append("</strong>")
               .Append("<span> / ").Append(ar ? "شهر" : "mois").Append("</span></p>\n");
 
             // Le tarif annuel n'est montré QUE s'il est réellement renseigné :
             // un « 0 FCFA / an » sur une page de tarifs discrédite tout le reste.
             if (p.AnnualPriceFcfa > 0)
             {
-                sb.Append("<p class=\"annual\">").Append(Fcfa(p.AnnualPriceFcfa)).Append(" / ")
+                sb.Append("<p class=\"annual\">").Append(Fcfa(p.AnnualPriceFcfa, ar)).Append(" / ")
                   .Append(ar ? "سنة" : "an");
                 var saving = p.MonthlyPriceFcfa * 12 - p.AnnualPriceFcfa;
                 if (saving > 0)
-                    sb.Append(" <em>(").Append(ar ? "توفير " : "économie ").Append(Fcfa(saving))
+                    sb.Append(" <em>(").Append(ar ? "توفير " : "économie ").Append(Fcfa(saving, ar))
                       .Append(")</em>");
                 sb.Append("</p>\n");
             }
@@ -225,18 +225,28 @@ namespace Idara.API.Common.Utilities
             ar && !string.IsNullOrWhiteSpace(arText) ? arText : fr;
 
         /// <summary>
-        /// Un prix en FCFA, pret a etre insere dans la page — y compris dans
-        /// la version ARABE, ou il est encadre des isolats bidirectionnels
-        /// U+2066 / U+2069.
+        /// Un prix en FCFA, pret a etre insere dans la page — dans l'ordre du
+        /// sens de lecture : « 12 000 FCFA » en francais, « FCFA 12 000 » en
+        /// arabe.
         /// </summary>
         /// <remarks>
-        /// Sans eux, « 12 000 FCFA » s'affiche « FCFA 12 000 » : dans un
-        /// paragraphe RTL, l'espace entre le nombre et le sigle est NEUTRE
-        /// pour l'algorithme bidirectionnel d'Unicode, il prend donc la
-        /// direction du paragraphe, et les deux fragments latins s'inversent.
-        /// Meme parade que <c>core/utils/money.dart</c> cote application.
+        /// <para>
+        /// Le nombre doit etre lu EN PREMIER dans les deux langues. L'arabe se
+        /// lisant de droite a gauche, il doit y etre le morceau le plus a
+        /// droite — donc ecrit en dernier. (Corrige le 2026-09-12 : la veille,
+        /// la page ecrivait « 12 000 FCFA » dans les deux langues.)
+        /// </para>
+        /// <para>
+        /// Les isolats U+2066 / U+2069 n'inversent RIEN : ils FIGENT l'ordre
+        /// choisi ci-dessus. Sans eux, l'espace entre le nombre et le sigle est
+        /// NEUTRE pour l'algorithme bidirectionnel d'Unicode, il prend la
+        /// direction du paragraphe, et le rendu depend alors de la phrase
+        /// autour. Meme parade que <c>core/utils/money.dart</c> cote application.
+        /// </para>
         /// </remarks>
-        public static string Fcfa(long v) => "\u2066" + Money(v) + "\u00A0FCFA\u2069";
+        public static string Fcfa(long v, bool ar) => ar
+            ? "\u2066FCFA\u00A0" + Money(v) + "\u2069"
+            : "\u2066" + Money(v) + "\u00A0FCFA\u2069";
 
         /// <summary>
         /// « 12 000 » avec un espace INSÉCABLE ordinaire (U+00A0) : un prix ne

@@ -180,6 +180,7 @@ builder.Services.AddSingleton<IExportPdfService, ExportPdfService>();
 builder.Services.AddSingleton<IInvestorReportPdfService, InvestorReportPdfService>();
 builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<ICashPaymentService, CashPaymentService>();
+builder.Services.AddScoped<IPaymentLinkService, PaymentLinkService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();
 builder.Services.AddScoped<IPricingPageService, PricingPageService>();
 builder.Services.AddScoped<Idara.API.Services.Notifications.INotificationService, Idara.API.Services.Notifications.NotificationService>();

@@ -7,6 +7,7 @@ using Idara.API.DTOs.Payment;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
+using Idara.API.Services;
 using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -56,17 +57,20 @@ namespace Idara.API.Controllers
 
         private readonly AppDbContext _context;
         private readonly INotificationService _notifications;
+        private readonly IPaymentLinkService _paymentLinks;
         private readonly SenePaySettings _senepay;
         private readonly ILogger<PaymentLinkCampaignController> _logger;
 
         public PaymentLinkCampaignController(
             AppDbContext context,
             INotificationService notifications,
+            IPaymentLinkService paymentLinks,
             IOptions<SenePaySettings> senepay,
             ILogger<PaymentLinkCampaignController> logger)
         {
             _context = context;
             _notifications = notifications;
+            _paymentLinks = paymentLinks;
             _senepay = senepay.Value;
             _logger = logger;
         }
@@ -191,10 +195,10 @@ namespace Idara.API.Controllers
                     }
 
                     var lien = await GetOrCreateLinkAsync(ecole.SchoolId, r.GuardianId, userId.Value, ct);
-                    if (lien.venaitDetreCree) result.LinksCreated++;
+                    if (lien.Created) result.LinksCreated++;
 
                     var message = NotificationTemplates.PaymentLinkShare(
-                        ecole.SchoolName, r.FullName, BuildUrl(lien.link.Token));
+                        ecole.SchoolName, r.FullName, BuildUrl(lien.Link.Token));
 
                     var parti = await _notifications.SendSmsAsync(new NotificationSmsRequest(
                         UserId: r.GuardianId,
@@ -203,7 +207,7 @@ namespace Idara.API.Controllers
                         Message: message,
                         Bilingual: true,
                         TemplateCode: NotificationTemplates.PaymentLinkShareCode,
-                        RelatedEntityId: lien.link.Id,
+                        RelatedEntityId: lien.Link.Id,
                         PushRoute: null,
                         SchoolId: ecole.SchoolId,
                         Priority: SmsPriority.Bulk,
@@ -578,47 +582,16 @@ namespace Idara.API.Controllers
             return (mesure.Segments, cout, network, mesure.Encoding);
         }
 
-        private async Task<(PaymentLink link, bool venaitDetreCree)> GetOrCreateLinkAsync(
-            int schoolId, int guardianId, int createdById, CancellationToken ct)
-        {
-            var now = DateTime.UtcNow;
-            var lien = await _context.PaymentLinks.FirstOrDefaultAsync(
-                l => l.SchoolId == schoolId && l.GuardianId == guardianId && l.RevokedAt == null, ct);
-            if (lien != null)
-            {
-                lien.LastSharedAt = now;
-                await _context.SaveChangesAsync(ct);
-                return (lien, false);
-            }
+        /// <summary>
+        /// Le lien du responsable — cree s'il n'existe pas. La regle vit dans
+        /// <see cref="IPaymentLinkService"/> depuis le 2026-09-12 : elle avait
+        /// deux copies, et le SMS d'inscription en demandait une troisieme (§199).
+        /// </summary>
+        private Task<(PaymentLink Link, bool Created)> GetOrCreateLinkAsync(
+            int schoolId, int guardianId, int createdById, CancellationToken ct) =>
+            _paymentLinks.EnsureAsync(schoolId, guardianId, createdById, ct);
 
-            lien = new PaymentLink
-            {
-                Token = Guid.NewGuid().ToString("N"),
-                SchoolId = schoolId,
-                GuardianId = guardianId,
-                CreatedById = createdById,
-                CreatedAt = now,
-                LastSharedAt = now,
-            };
-            _context.PaymentLinks.Add(lien);
-            try
-            {
-                await _context.SaveChangesAsync(ct);
-                return (lien, true);
-            }
-            catch (DbUpdateException)
-            {
-                // Course avec l'école qui générerait le même lien au même moment :
-                // l'index unique tranche, on relit le gagnant.
-                _context.Entry(lien).State = EntityState.Detached;
-                var gagnant = await _context.PaymentLinks.FirstAsync(
-                    l => l.SchoolId == schoolId && l.GuardianId == guardianId && l.RevokedAt == null, ct);
-                return (gagnant, false);
-            }
-        }
-
-        private string BuildUrl(string token) =>
-            $"{_senepay.PublicBaseUrl.TrimEnd('/')}/pay/link/{token}";
+        private string BuildUrl(string token) => _paymentLinks.BuildUrl(token);
 
         private static List<int>? ParseIds(string? csv) =>
             string.IsNullOrWhiteSpace(csv)

@@ -75,6 +75,14 @@ namespace Idara.API.DTOs.Student
         /// </summary>
         [Range(0, 100_000_000)] public long? RegistrationFeeFcfa { get; set; }
 
+        /// <summary>
+        /// Comment la famille règle ces frais. <c>null</c> = en ligne : c'est le
+        /// comportement historique, et celui d'une application antérieure au
+        /// champ — jamais un mode « indéterminé ». Sans effet si
+        /// <see cref="RegistrationFeeFcfa"/> ne crée aucune facture.
+        /// </summary>
+        public RegistrationPaymentMode? RegistrationPaymentMode { get; set; }
+
         // ----- Santé -----
         [StringLength(10)]  public string? BloodType { get; set; }
         [StringLength(500)] public string? Allergies { get; set; }

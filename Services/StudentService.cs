@@ -21,6 +21,9 @@ namespace Idara.API.Services
         private readonly IInvoiceRepricingService _repricing;
         private readonly UploadSettings _uploads;
         private readonly Notifications.INotificationService _notif;
+        private readonly ICashPaymentService _cash;
+        private readonly IPaymentLinkService _paymentLinks;
+        private readonly SenePaySettings _senepay;
 
         public StudentService(
             AppDbContext context,
@@ -29,7 +32,10 @@ namespace Idara.API.Services
             IEmailService emailService,
             IInvoiceRepricingService repricing,
             IOptions<UploadSettings> uploads,
-            Notifications.INotificationService notif)
+            Notifications.INotificationService notif,
+            ICashPaymentService cash,
+            IPaymentLinkService paymentLinks,
+            IOptions<SenePaySettings> senepay)
         {
             _context = context;
             _env = env;
@@ -38,6 +44,9 @@ namespace Idara.API.Services
             _repricing = repricing;
             _uploads = uploads.Value;
             _notif = notif;
+            _cash = cash;
+            _paymentLinks = paymentLinks;
+            _senepay = senepay.Value;
         }
 
         public async Task<StudentListResponseDto> GetStudentsAsync(
@@ -363,41 +372,18 @@ namespace Idara.API.Services
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
 
-            // SMS « frais d'inscription à payer » aux responsables joignables —
-            // POST-commit, best-effort (§42/§57 : un échec d'envoi ne doit jamais
-            // faire échouer une inscription déjà enregistrée). Avant le
-            // 2026-08-27, la facture d'inscription ne déclenchait AUCUN SMS : la
-            // famille n'apprenait son existence qu'au rappel de retard 7 jours
-            // plus tard.
-            if (registrationInvoice != null && smsTargets.Count > 0)
+            // Frais d'inscription : encaissement immédiat s'ils ont été réglés
+            // en espèces, puis information de la famille. Tout ce qui suit est
+            // POST-commit et best-effort (§42/§57) : l'élève est enregistré, et
+            // rien de ce bloc ne doit pouvoir le défaire.
+            if (registrationInvoice != null)
             {
-                try
-                {
-                    var platform = await _context.GetPlatformSettingsAsync();
-                    var eleve = $"{student.FirstName} {student.LastName}".Trim();
-                    var msg = Notifications.NotificationTemplates.RegistrationFeeDue(
-                        eleve, registrationInvoice.AmountDueFcfa);
-                    foreach (var t in smsTargets)
-                    {
-                        await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
-                            UserId: t.Id,
-                            RawPhone: t.Phone,
-                            PreferredLanguage: t.Lang ?? "fr",
-                            Message: msg,
-                            Bilingual: platform.SmsBilingual,
-                            TemplateCode: "REGISTRATION_DUE",
-                            RelatedEntityId: registrationInvoice.Id,
-                            PushRoute: "/guardian/invoices",
-                            SchoolId: student.SchoolId,
-                            TriggerSource: "api:students/create"));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[students] SMS frais d'inscription non envoyé pour StudentId={Id} — pas bloquant",
-                        student.Id);
-                }
+                var paidCash = dto.RegistrationPaymentMode == RegistrationPaymentMode.Cash
+                    ? await CollectRegistrationCashAsync(registrationInvoice, schoolId, currentUserId)
+                    : null;
+
+                await NotifyRegistrationFeeAsync(
+                    student, registrationInvoice, smsTargets, paidCash, currentUserId);
             }
 
             // Pas de re-tarification ici : un élève qui vient d'être créé ne peut
@@ -407,6 +393,122 @@ namespace Idara.API.Services
             var created = await GetStudentByIdAsync(student.Id, schoolId);
             created!.NewGuardianCredentials = newGuardians.Select(g => g.Credential).ToList();
             return created;
+        }
+
+        /// <summary>
+        /// 💵 L'inscription a été réglée <b>en espèces au bureau</b> : la facture
+        /// qu'on vient de créer est soldée sur-le-champ.
+        /// </summary>
+        /// <returns>Le paiement enregistré, ou <c>null</c> si l'encaissement a échoué.</returns>
+        /// <remarks>
+        /// <para>🔴 <b>Pourquoi créer la facture pour la solder aussitôt</b>,
+        /// plutôt que de n'en créer aucune : sans facture, les 15 000 FCFA
+        /// n'existeraient nulle part — ni en caisse, ni dans le chiffre
+        /// d'affaires — et la famille n'aurait aucune preuve d'avoir payé. Ici,
+        /// l'école obtient l'inverse exact : caisse créditée, reçu, et AUCUNE
+        /// facture en attente donc aucun rappel de retard (§182).</para>
+        ///
+        /// <para>⚠️ <b>Hors de la transaction de création</b>, et il n'y a pas le
+        /// choix : <c>CollectAsync</c> ouvre la sienne, et la facture doit être
+        /// commitée pour exister à ses yeux. Si l'encaissement échoue, l'état
+        /// obtenu est sûr et VISIBLE — une facture d'inscription en attente, que
+        /// l'école solde d'un geste depuis l'écran des factures, par le même
+        /// chemin. Rien n'est perdu, rien n'est silencieux.</para>
+        /// </remarks>
+        private async Task<Payment?> CollectRegistrationCashAsync(
+            Invoice invoice, int schoolId, int currentUserId)
+        {
+            try
+            {
+                var result = await _cash.CollectAsync(
+                    schoolId, invoice.Id, invoice.AmountDueFcfa,
+                    note: null, occurredAt: null, userId: currentUserId, ct: default);
+                if (result.Ok) return result.Payment;
+
+                _logger.LogError(
+                    "[students] Encaissement especes refusé pour la facture {InvoiceId} : {Error}. "
+                    + "La facture reste en attente, l'école peut l'encaisser depuis l'écran des factures.",
+                    invoice.Id, result.Error);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[students] Encaissement especes en échec pour la facture {InvoiceId} — "
+                    + "la facture reste en attente", invoice.Id);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Prévient les responsables joignables : soit les frais sont à payer
+        /// (avec leur lien), soit ils viennent d'être reçus en espèces (avec le
+        /// reçu). Best-effort de bout en bout.
+        /// </summary>
+        /// <remarks>
+        /// Avant le 2026-08-27, la facture d'inscription ne déclenchait AUCUN
+        /// SMS : la famille n'apprenait son existence qu'au rappel de retard,
+        /// sept jours plus tard. Depuis le 2026-09-12, le message « à payer »
+        /// porte en plus le <b>lien de paiement permanent</b> du responsable —
+        /// il est personnel, donc composé par destinataire et non une fois pour
+        /// toutes.
+        /// </remarks>
+        private async Task NotifyRegistrationFeeAsync(
+            Student student,
+            Invoice invoice,
+            List<(int Id, string Phone, string? Lang)> targets,
+            Payment? cashPayment,
+            int currentUserId)
+        {
+            if (targets.Count == 0) return;
+            try
+            {
+                var platform = await _context.GetPlatformSettingsAsync();
+                var eleve = $"{student.FirstName} {student.LastName}".Trim();
+                var recu = cashPayment == null
+                    ? null
+                    : PublicLinks.Receipt(
+                        _senepay.PublicBaseUrl, cashPayment.Id, cashPayment.PublicResultToken);
+
+                foreach (var t in targets)
+                {
+                    Notifications.BilingualMessage msg;
+                    string code;
+                    if (cashPayment != null)
+                    {
+                        msg = Notifications.NotificationTemplates.RegistrationCash(
+                            eleve, cashPayment.AmountFcfa, recu);
+                        code = "REGISTRATION_CASH";
+                    }
+                    else
+                    {
+                        // Le lien est PERSONNEL : un par responsable. Le composer
+                        // dans la boucle est donc la règle, pas une négligence.
+                        var ensured = await _paymentLinks.EnsureAsync(
+                            student.SchoolId, t.Id, currentUserId);
+                        msg = Notifications.NotificationTemplates.RegistrationFeeDue(
+                            eleve, invoice.AmountDueFcfa, _paymentLinks.BuildUrl(ensured.Link.Token));
+                        code = "REGISTRATION_DUE";
+                    }
+
+                    await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
+                        UserId: t.Id,
+                        RawPhone: t.Phone,
+                        PreferredLanguage: t.Lang ?? "fr",
+                        Message: msg,
+                        Bilingual: platform.SmsBilingual,
+                        TemplateCode: code,
+                        RelatedEntityId: cashPayment?.Id ?? invoice.Id,
+                        PushRoute: "/guardian/invoices",
+                        SchoolId: student.SchoolId,
+                        TriggerSource: "api:students/create"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[students] SMS frais d'inscription non envoyé pour StudentId={Id} — pas bloquant",
+                    student.Id);
+            }
         }
 
         public async Task<StudentResponseDto?> UpdateStudentAsync(int schoolId, int currentUserId, StudentUpdateDto dto)

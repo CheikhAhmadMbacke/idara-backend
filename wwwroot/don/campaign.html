@@ -349,10 +349,18 @@
     // L'argent ne se traduit JAMAIS (decision produit 2026-09-05) : chiffres
     // latins et « FCFA » quelle que soit la langue. Un arabophone senegalais lit
     // mieux « 1000 FCFA » que « ١٠٠٠ فرنك ».
-    // \u2066 et \u2069 : isolats bidirectionnels, sans quoi « 500 FCFA »
-    // se lit « FCFA 500 » dans une phrase arabe (l'espace qui les separe
-    // est neutre et prend la direction du paragraphe).
-    return '\u2066' + (n || 0).toLocaleString('fr-FR') + '\u00A0FCFA\u2069';
+    // ORDRE DES DEUX MORCEAUX (corrige le 2026-09-12) : le nombre doit etre lu
+    // en PREMIER dans les deux langues. Le francais se lit de gauche a droite,
+    // donc 500 FCFA ; l'arabe de droite a gauche, donc FCFA 500 — le nombre est
+    // alors le morceau le plus a droite, celui que l'oeil rencontre d'abord.
+    // La veille, la page ecrivait 500 FCFA dans les deux langues.
+    // Les isolats U+2066 / U+2069 n'inversent RIEN : ils FIGENT l'ordre choisi
+    // ci-dessus, pour que la phrase qui entoure le montant ne puisse pas le
+    // rejouer a sa facon. Meme parade que core/utils/money.dart cote application.
+    var g = (n || 0).toLocaleString('fr-FR');
+    return lang === 'ar'
+      ? '\u2066FCFA\u00A0' + g + '\u2069'
+      : '\u2066' + g + '\u00A0FCFA\u2069';
   }
   function show(id, on) { $(id).classList.toggle('hidden', !on); }
 

@@ -46,14 +46,19 @@ namespace Idara.API.Services
     public class CashPaymentService : ICashPaymentService
     {
         private readonly AppDbContext _context;
+        private readonly IReceiptPdfService _receiptPdf;
         private readonly ILogger<CashPaymentService> _logger;
 
         /// <summary>Libellé de la catégorie de caisse portée par ces écritures.</summary>
         public const string CashCategoryLabel = "Scolarité";
 
-        public CashPaymentService(AppDbContext context, ILogger<CashPaymentService> logger)
+        public CashPaymentService(
+            AppDbContext context,
+            IReceiptPdfService receiptPdf,
+            ILogger<CashPaymentService> logger)
         {
             _context = context;
+            _receiptPdf = receiptPdf;
             _logger = logger;
         }
 
@@ -118,6 +123,13 @@ namespace Idara.API.Services
                 InitiatedAt = now,
                 PaidAt = day,
                 CollectedById = userId,
+                // 🧾 Jeton de la page publique du reçu (2026-09-12). Il manquait
+                // aux encaissements en espèces : le reçu existait en PDF, mais
+                // aucune ADRESSE ne permettait de l'atteindre — donc aucun SMS
+                // ne pouvait le porter. Or c'est précisément la famille qui
+                // paie au guichet, souvent sans compte, qui n'a rien d'autre.
+                // Même mécanisme et même page que le paiement en ligne (§229).
+                PublicResultToken = Guid.NewGuid().ToString("N"),
             };
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
@@ -149,7 +161,46 @@ namespace Idara.API.Services
                 "[cash] SchoolId={SchoolId} facture {InvoiceId} : {Amount} FCFA encaissés en espèces (paiement {PaymentId}, par {UserId})",
                 schoolId, invoice.Id, amountFcfa, payment.Id, userId);
 
+            await GenerateReceiptAsync(payment, invoice, ct);
             return new(true, null, payment);
+        }
+
+        /// <summary>
+        /// Reçu PDF de l'encaissement — <b>hors transaction et best-effort</b> :
+        /// l'argent est déjà en caisse et la facture déjà soldée, un PDF qui
+        /// échoue ne doit pas défaire ça (§57).
+        /// </summary>
+        /// <remarks>
+        /// Vit ICI et plus dans le contrôleur : deux chemins encaissent
+        /// désormais en espèces — le guichet et l'inscription réglée cash — et
+        /// tous deux doivent produire le même reçu. Une copie dans chacun aurait
+        /// divergé au premier changement (§199). La page publique le régénère
+        /// de toute façon à la demande : ce fichier est le chemin rapide.
+        /// </remarks>
+        private async Task GenerateReceiptAsync(
+            Payment payment, Invoice invoice, CancellationToken ct)
+        {
+            try
+            {
+                var school = await _context.Schools
+                    .FirstOrDefaultAsync(x => x.Id == payment.SchoolId, ct);
+                if (school == null) return;
+                var student = payment.StudentId is int sid
+                    ? await _context.Students.FirstOrDefaultAsync(x => x.Id == sid, ct)
+                    : null;
+
+                var path = await _receiptPdf.GenerateAsync(payment, school, student, invoice);
+                if (string.IsNullOrWhiteSpace(path)) return;
+                await _context.Payments
+                    .Where(p => p.Id == payment.Id)
+                    .ExecuteUpdateAsync(u => u.SetProperty(p => p.ReceiptPdfPath, path), ct);
+                payment.ReceiptPdfPath = path;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[cash] Reçu non généré pour le paiement {Id} — pas bloquant", payment.Id);
+            }
         }
 
         /// <summary>

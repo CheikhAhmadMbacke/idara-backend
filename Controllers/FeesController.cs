@@ -7,11 +7,13 @@ using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Options;
 using Idara.API.Services;
 using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Idara.API.Controllers
 {
@@ -34,10 +36,12 @@ namespace Idara.API.Controllers
         private readonly MonthlyInvoiceGenerationJob _invoiceJob;
         private readonly IInvoiceRepricingService _repricing;
         private readonly ICashPaymentService _cashPayments;
+        private readonly IPaymentLinkService _paymentLinks;
         private readonly INotificationService _notif;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
+        private readonly SenePaySettings _senepaySettings;
         private readonly ILogger<FeesController> _logger;
 
         public FeesController(
@@ -45,20 +49,24 @@ namespace Idara.API.Controllers
             MonthlyInvoiceGenerationJob invoiceJob,
             IInvoiceRepricingService repricing,
             ICashPaymentService cashPayments,
+            IPaymentLinkService paymentLinks,
             INotificationService notif,
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
             IWebHostEnvironment env,
+            IOptions<SenePaySettings> senepaySettings,
             ILogger<FeesController> logger)
         {
             _context = context;
             _invoiceJob = invoiceJob;
             _repricing = repricing;
             _cashPayments = cashPayments;
+            _paymentLinks = paymentLinks;
             _notif = notif;
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
             _env = env;
+            _senepaySettings = senepaySettings.Value;
             _logger = logger;
         }
 
@@ -670,9 +678,15 @@ namespace Idara.API.Controllers
                 {
                     var platform = await _context.GetPlatformSettingsAsync(ct);
                     var eleve = $"{student.FirstName} {student.LastName}".Trim();
-                    var msg = NotificationTemplates.RegistrationFeeDue(eleve, amount.Value);
                     foreach (var g in guardians)
                     {
+                        // Le lien de paiement est PERSONNEL : un par responsable.
+                        // Le message se compose donc dans la boucle, et non une
+                        // fois pour toutes avant elle.
+                        var ensured = await _paymentLinks.EnsureAsync(
+                            schoolId.Value, g.GuardianId, User.GetUserId() ?? 0, ct);
+                        var msg = NotificationTemplates.RegistrationFeeDue(
+                            eleve, amount.Value, _paymentLinks.BuildUrl(ensured.Link.Token));
                         await _notif.SendSmsAsync(new NotificationSmsRequest(
                             UserId: g.GuardianId,
                             RawPhone: g.PhoneNumber,
@@ -1302,38 +1316,21 @@ namespace Idara.API.Controllers
             };
         }
 
-        /// <summary>Reçu + information du responsable, aucun n'étant bloquant.</summary>
+        /// <summary>
+        /// L'adresse publique du reçu de ce paiement — celle qui part par SMS.
+        /// </summary>
+        private string? PublicReceiptUrl(Payment payment) =>
+            PublicLinks.Receipt(
+                _senepaySettings.PublicBaseUrl, payment.Id, payment.PublicResultToken);
+
+        /// <summary>
+        /// Information du responsable après un encaissement au guichet — jamais
+        /// bloquante. Le reçu, lui, est produit par <c>CashPaymentService</c>
+        /// lui-même depuis le 2026-09-12 : les deux chemins d'encaissement en
+        /// espèces doivent en produire un, et un seul code doit décider comment.
+        /// </summary>
         private async Task RunCashPaymentEffectsAsync(Payment payment, CancellationToken ct)
         {
-            try
-            {
-                var school = await _context.Schools
-                    .FirstOrDefaultAsync(x => x.Id == payment.SchoolId, ct);
-                var student = payment.StudentId is int sid
-                    ? await _context.Students.FirstOrDefaultAsync(x => x.Id == sid, ct)
-                    : null;
-                var invoice = payment.InvoiceId is int iid
-                    ? await _context.Invoices.FirstOrDefaultAsync(x => x.Id == iid, ct)
-                    : null;
-                if (school != null)
-                {
-                    var path = await _receiptPdf.GenerateAsync(
-                        payment, school, student, invoice);
-                    if (!string.IsNullOrWhiteSpace(path))
-                    {
-                        await _context.Payments
-                            .Where(p => p.Id == payment.Id)
-                            .ExecuteUpdateAsync(
-                                s => s.SetProperty(p => p.ReceiptPdfPath, path), ct);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "[cash] Reçu non généré pour le paiement {Id} — pas bloquant", payment.Id);
-            }
-
             if (payment.GuardianId is not int guardianId) return;
             try
             {
@@ -1354,7 +1351,11 @@ namespace Idara.API.Controllers
                     UserId: guardian.Id,
                     RawPhone: guardian.PhoneNumber,
                     PreferredLanguage: guardian.PreferredLanguage ?? "fr",
-                    Message: NotificationTemplates.PaymentReceived(eleve, payment.AmountFcfa),
+                    // Le lien du reçu voyage avec la confirmation : une famille
+                    // qui paie au guichet n'a souvent pas de compte, donc aucun
+                    // autre chemin vers sa preuve de paiement (§229).
+                    Message: NotificationTemplates.PaymentReceived(
+                        eleve, payment.AmountFcfa, PublicReceiptUrl(payment)),
                     Bilingual: platform.SmsBilingual,
                     TemplateCode: "PAYMENT_RECEIVED",
                     RelatedEntityId: payment.Id,
