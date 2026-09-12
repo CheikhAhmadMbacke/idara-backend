@@ -44,7 +44,6 @@ namespace Idara.API.Controllers
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
-        private readonly IMemoryCache _cache;
         private readonly ILogger<DonationsController> _logger;
 
         public DonationsController(
@@ -56,7 +55,6 @@ namespace Idara.API.Controllers
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
             IWebHostEnvironment env,
-            IMemoryCache cache,
             ILogger<DonationsController> logger)
         {
             _context = context;
@@ -67,85 +65,28 @@ namespace Idara.API.Controllers
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
             _env = env;
-            _cache = cache;
             _logger = logger;
         }
 
         // ====================================================================
-        // ===== Auto-inscription (anonyme) =====
+        // ===== Plus d'inscription : donner ne demande pas de compte =====
         // ====================================================================
-
-        /// <summary>
-        /// `POST /api/donations/register` — crée un compte donateur (nom +
-        /// téléphone + mot de passe, email optionnel) et auto-login (LoginResponse).
-        /// </summary>
-        [HttpPost("register")]
-        [AllowAnonymous]
-        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(ApiResponse<LoginResponse>))]
-        public async Task<IActionResult> Register([FromBody] DonorRegisterRequest request)
-        {
-            var phone = SenegalPhone.Normalize(request.Phone);
-            if (phone == null)
-                return BadRequest(ApiResponse<bool>.Fail("Numéro de téléphone invalide (format attendu : 7XXXXXXXX)."));
-
-            // Anti-spam de création de comptes : 5 tentatives / 15 min / numéro.
-            var rlKey = $"donor-register:{phone}";
-            if (_cache.TryGetValue(rlKey, out int attempts) && attempts >= 5)
-                return StatusCode(429, ApiResponse<bool>.Fail(
-                    "Trop de tentatives. Réessayez dans quelques minutes."));
-
-            // Unicité téléphone (applicative + index DB filtré). Un numéro déjà
-            // utilisé par un autre compte (tout rôle) ne peut pas être ré-enregistré.
-            var phoneTaken = await _context.Users.AnyAsync(u => u.PhoneNumber == phone && !u.IsDeleted);
-            if (phoneTaken)
-            {
-                _cache.Set(rlKey, attempts + 1, TimeSpan.FromMinutes(15));
-                return BadRequest(ApiResponse<bool>.Fail(
-                    "Ce numéro est déjà associé à un compte. Connectez-vous."));
-            }
-
-            var email = string.IsNullOrWhiteSpace(request.Email)
-                ? null
-                : request.Email.Trim().ToLowerInvariant();
-            if (email != null && await _context.Users.AnyAsync(u => u.Email != null && u.Email == email && !u.IsDeleted))
-            {
-                _cache.Set(rlKey, attempts + 1, TimeSpan.FromMinutes(15));
-                return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
-            }
-
-            var lang = !string.IsNullOrWhiteSpace(request.PreferredLanguage)
-                ? request.PreferredLanguage!
-                : HttpContext.GetPreferredLanguage();
-
-            var user = new User
-            {
-                FullName = request.FullName.Trim(),
-                PhoneNumber = phone,
-                Email = email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-                Role = UserRoles.Donor,
-                DonorType = request.DonorType,
-                IsEmailVerified = email != null,
-                AccountStatus = AccountStatus.Active, // pas de KYC pour un donateur
-                SchoolId = null,                       // compte global, aucune école
-                PreferredLanguage = lang,
-                CreatedAt = DateTime.UtcNow,
-                LastLoginAt = DateTime.UtcNow
-            };
-            _context.Users.Add(user);
-            await _context.SaveChangesAsync();
-
-            var refreshToken = await _refreshTokens.CreateAsync(user.Id);
-            return Ok(ApiResponse<LoginResponse>.Ok(new LoginResponse
-            {
-                Token = _jwtService.GenerateToken(user),
-                RefreshToken = refreshToken,
-                Role = user.Role,
-                SchoolId = null,
-                AccountStatus = user.AccountStatus.ToString(),
-                KycStatus = null
-            }, "Compte donateur créé avec succès."));
-        }
+        //
+        // 🔴 `POST /api/donations/register` a ete SUPPRIME le 2026-09-12.
+        // La porte avait ete fermee cote application le 2026-09-03 (route
+        // retiree), mais l'endpoint restait ouvert et anonyme : n'importe
+        // qui pouvait encore creer un compte donateur en appelant l'API
+        // directement. Fermer une porte dans l'interface ne ferme rien.
+        //
+        // La regle : un donateur passe par le LIEN DE COLLECTE genere par
+        // l'ecole. Son don est enregistre sans compte (`DonorId = null`,
+        // nom et numero portes par le paiement) et son recu lui arrive par
+        // SMS. Demander un compte pour donner, c'est perdre le donateur au
+        // moment precis ou il avait decide de donner.
+        //
+        // Les comptes DEJA crees gardent leur espace, leur historique et
+        // leurs recus — d'ou le role `Donor` et les endpoints ci-dessous,
+        // conserves tels quels. Seule la creation a disparu.
 
         // ====================================================================
         // ===== Liste publique des daaras (anonyme) =====
