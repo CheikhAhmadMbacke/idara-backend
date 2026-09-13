@@ -846,8 +846,11 @@ namespace Idara.API.Controllers
                     var totalDue = schoolGroup.Sum(i => i.AmountDueFcfa - i.AmountPaidFcfa);
                     var feesPayer = feesPayerBySchool.TryGetValue(schoolGroup.Key, out var fp)
                         ? fp : FeesPayer.Parent;
-                    var amountToCharge = feesPayer == FeesPayer.Parent
-                        ? (long)Math.Ceiling(totalDue * platform.ParentFeeMultiplier)
+                    // Non configuré → on annonce la cible sans majoration plutôt
+                    // que de refuser l'écran entier : c'est une LECTURE. Le refus
+                    // tombe à l'initiation du paiement, là où l'argent bouge.
+                    var amountToCharge = feesPayer == FeesPayer.Parent && platform.Fees.IsConfigured
+                        ? platform.Fees.ChargeFor(totalDue)
                         : totalDue;
                     var children = schoolGroup
                         .GroupBy(i => i.StudentId)

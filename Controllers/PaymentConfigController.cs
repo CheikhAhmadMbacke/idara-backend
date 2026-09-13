@@ -23,13 +23,27 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         public PaymentConfigController(AppDbContext context) => _context = context;
 
+        /// <summary>
+        /// Mensualité type sur laquelle la majoration est évaluée pour
+        /// l'affichage. Un montant, pas un taux — voir PaymentConfigDto.
+        /// </summary>
+        private const long MarkupReferenceFcfa = 10_000;
+
         [HttpGet]
         public async Task<ActionResult<ApiResponse<PaymentConfigDto>>> Get(CancellationToken ct)
         {
             var s = await _context.GetPlatformSettingsAsync(ct);
+            var fees = s.Fees;
             return Ok(ApiResponse<PaymentConfigDto>.Ok(new PaymentConfigDto
             {
-                ParentFeePercent = s.ParentFeePercent,
+                // Évalué sur une mensualité type. C'est un MONTANT de référence,
+                // pas un taux en dur : le pourcentage qui en sort est purement
+                // indicatif, et le montant réel est calculé à l'initiation.
+                ParentFeePercent = fees.IsConfigured
+                    ? Math.Round(fees.EffectiveMarkupPercent(MarkupReferenceFcfa), 2)
+                    : 0,
+                MarkupReferenceFcfa = MarkupReferenceFcfa,
+                FeesConfigured = fees.IsConfigured,
                 MinPayinFcfa = s.MinPayinFcfa
             }));
         }

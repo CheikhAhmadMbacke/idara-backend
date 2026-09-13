@@ -416,7 +416,13 @@ namespace Idara.API.Controllers
                 ? PaymentOperator.Wave : PaymentOperator.Orange;
             var recipientName = dto.RecipientName.Trim();
             var recipientPhone = dto.RecipientPhone;
-            var feeEstimate = (long)Math.Ceiling(dto.Amount * platform.PayoutFeeRate);
+            // Frais EXACTS du décaissement (pas une estimation par taux) : la
+            // réserve doit couvrir montant + frais, et ce frais est un entier
+            // calculable, pas un pourcentage. Non configuré → 0, la vérification
+            // de réserve devient seulement plus prudente d'un franc ou deux.
+            var feeEstimate = platform.Fees.IsConfigured
+                ? platform.Fees.PayoutFeesFor(dto.Amount)
+                : 0L;
 
             // Réserve SenePay (live) AVANT le verrou (valeur externe, indépendante de nos writes).
             long reserve;

@@ -1,216 +1,234 @@
 #!/usr/bin/env node
 /*
- * Contrôle de NEUTRALITÉ de la majoration au payeur.
+ * Contrôle de NEUTRALITÉ : quand l'école fait porter les frais au payeur, elle
+ * doit encaisser T, retirer T, et la plateforme ne doit avancer AUCUN franc.
  *
  * POURQUOI CET OUTIL EXISTE
  * -------------------------
- * Quand l'école fait porter les frais au parent, une seule chose doit être
- * vraie : l'école encaisse T, retire T, et la plateforme n'avance rien.
- *
  * Ça n'a pas été le cas pendant quatre mois. La majoration valait 7,14 %,
  * obtenue en ADDITIONNANT les taux prélevés (3,6 + 1,77 + 1,77). Or majorer de
- * t ne compense pas un prélèvement de t : il manquait ~3 800 FCFA par million
- * facturé, payés par la plateforme. Rien ne l'indiquait — aucune erreur, aucun
- * écran, aucun journal. L'école recevait bien son dû, donc personne ne pouvait
- * s'en plaindre.
+ * t ne compense pas un prélèvement de t : la commission porte sur le montant
+ * DÉBITÉ, majoration comprise. Il manquait ~3 800 FCFA par million facturé,
+ * payés par la plateforme. Rien ne l'indiquait — aucune erreur, aucun écran,
+ * aucun journal. L'école recevait bien son dû, donc personne ne pouvait s'en
+ * plaindre.
  *
- * Le calcul juste tient en une ligne, et c'est justement pour ça qu'il se
- * réécrit de travers sans que personne ne le remarque :
+ * Puis une seconde découverte a rendu ce premier correctif insuffisant :
+ * LES FRAIS NE SONT PAS UN POURCENTAGE. Retrouvée sur les 197 paiements réglés
+ * en production (197/197 exacts), la règle réelle est :
  *
- *     majoration = (1 + frais_de_retrait) / (1 − frais_d_encaissement)
+ *     encaissement = round(C × provider %) + ceil( ceil(C × opIn % HT) × (1+TVA) )
+ *     décaissement =                         ceil( ceil(T × opOut % HT) × (1+TVA) )
  *
- * Le dénominateur vient de ce que le prélèvement d'entrée porte sur le montant
- * DÉBITÉ, pas sur la cible. Le numérateur vient de ce que SenePay prélève le
- * frais de sortie EN PLUS du montant envoyé (`fee_mode = "on_top"`) — écrire
- * ici `1 / (1 − frais_de_retrait)`, c'est décrire un modèle de frais qu'on
- * n'utilise plus depuis 2026.
+ * Le « 1,77 % » n'existe nulle part : c'est 1,5 % HT + 18 % de TVA, chacun
+ * arrondi au franc. Le « 5,40 % » d'encaissement est une moyenne vraie pour
+ * AUCUN montant (mesurée : de 5,37 % à 6,05 % selon la taille). Appliquer un
+ * taux moyen laissait 3 542 montants en déficit entre 200 et 100 000 FCFA.
+ *
+ * D'où ProviderFees.ChargeFor, qui RÉSOUT au lieu d'appliquer : le plus petit
+ * entier C tel que C − frais(C) ≥ T + fraisRetrait(T).
  *
  * CE QUI EST VÉRIFIÉ
- *   1. La formule de `ParentFeeMultiplier` est bien celle-là — et pas une
- *      addition des taux, la faute d'origine.
- *   2. Sur toute la plage des montants réels, l'aller-retour ne coûte JAMAIS
- *      un franc à la plateforme — au taux SAISI.
- *   3. Le taux par défaut du code et celui posé par la migration coïncident.
- *      Sinon, une base neuve et la production ne calculent pas pareil (§193).
+ *   1. Le code C# porte toujours la règle attendue (arrondis compris) et la
+ *      recherche du plus petit C — pas un taux réintroduit en douce.
+ *   2. Les taux du calcul viennent de la BASE (posés par migration), le code
+ *      n'en portant aucun par défaut.
+ *   3. Sur toute la plage des montants réels, la plateforme n'avance JAMAIS un
+ *      franc, et la famille n'en paie jamais un de trop.
+ *   4. Un retrait GROUPÉ — plusieurs paiements accumulés, le cas courant —
+ *      reste couvert par la somme des provisions constituées un à un.
  *
- * CE QUE LE CONTRÔLE 2 NE DIT PAS, ET IL FAUT LE SAVOIR
- *   Il applique le taux saisi des DEUX côtés : ce qu'on majore et ce qu'on
- *   suppose prélevé. Il valide donc la cohérence du calcul, pas le comportement
- *   réel du prestataire — qui arrondit ses frais au franc SUPÉRIEUR sur chaque
- *   transaction. Mesuré en production : le taux effectif va de 5,373 % sur les
- *   gros montants à 5,749 % sous 1 000 FCFA, alors que le contractuel additionné
- *   vaut 5,37. Autrement dit, le taux contractuel est un PLANCHER.
- *
- *   Vouloir modéliser cet arrondi ici serait une illusion de précision : il
- *   dépend de la décomposition interne du prestataire (3,6 % puis 1,77 %, chacun
- *   arrondi), qu'on n'observe pas. C'est l'écran SuperAdmin qui couvre ce
- *   terrain — il compare les taux saisis à ceux RÉELLEMENT prélevés et chiffre
- *   l'écart. Un garde-fou qui ment sur sa portée est pire qu'un garde-fou absent.
- *
- * Même esprit que check-migrations.js (§254), check-html-pages.js (§218) et
- * check-i18n-pages.js (§228) : ce qui ne se voit pas à la relecture doit se
- * vérifier par une commande.
+ * CE QUE CET OUTIL NE DIT PAS
+ *   Il rejoue la règle en JavaScript, à l'identique du C#. Il prouve donc que
+ *   LA RÈGLE est neutre, et que le C# la contient encore — pas que le C#
+ *   l'exécute sans bug. C'est l'écran SuperAdmin qui ferme cette porte, en
+ *   confrontant les frais prédits aux frais réellement prélevés, franc par
+ *   franc, sur chaque paiement réglé.
  *
  * Usage : node Idara.API/Tools/check-fee-neutrality.js
- * Sort en code 1 dès qu'un contrôle échoue.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const RACINE = path.join(__dirname, '..');
-const MODELE = path.join(RACINE, 'Models', 'PlatformSettings.cs');
+const CALCULATEUR = path.join(RACINE, 'Common', 'Utilities', 'ProviderFees.cs');
 const MIGRATIONS = path.join(RACINE, 'Migrations');
 
-/** Plage des montants réellement facturés : du minimum SenePay à une année. */
 const MONTANT_MIN = 200;
 const MONTANT_MAX = 200000;
 
 const echecs = [];
-
-function echec(titre, detail) {
-  echecs.push({ titre, detail });
-}
-
-/** Valeur par défaut d'une propriété double de PlatformSettings. */
-function defautCsharp(source, propriete) {
-  const re = new RegExp(
-    'public\\s+double\\s+' + propriete + '\\s*\\{[^}]*\\}\\s*=\\s*([0-9.]+)\\s*;'
-  );
-  const m = source.match(re);
-  return m ? parseFloat(m[1]) : null;
-}
+const echec = (titre, detail) => echecs.push({ titre, detail });
 
 // ====================================================================
-// 1. La formule
+// 1. Le code C# porte-t-il encore la règle ?
 // ====================================================================
-const modele = fs.readFileSync(MODELE, 'utf8');
-
-const blocMultiplicateur = modele.slice(
-  modele.indexOf('public double ParentFeeMultiplier')
-);
-const corps = blocMultiplicateur.slice(0, blocMultiplicateur.indexOf('\n        }'));
-
-if (!/\(1\.0 \+ b\) \/ \(1\.0 - a\)/.test(corps)) {
-  echec(
-    'La formule de ParentFeeMultiplier a changé',
-    'Attendu : (1.0 + b) / (1.0 - a), avec a = encaissement et b = retrait.\n' +
-      "         Une addition des taux (1 + a + b) est la faute d'origine : elle\n" +
-      '         sous-calibre la majoration et fait avancer la différence à la\n' +
-      "         plateforme. Une division 1 / ((1-a)(1-b)) décrit, elle, un frais\n" +
-      "         de sortie prélevé DANS le montant envoyé — ce n'est pas le\n" +
-      '         modèle SenePay actuel (on_top).'
-  );
-}
-
-// ====================================================================
-// 2. La neutralité, arrondis compris
-// ====================================================================
-const payin = defautCsharp(modele, 'PayinFeePercent');
-const payout = defautCsharp(modele, 'PayoutFeePercent');
-
-if (payin === null || payout === null) {
-  echec(
-    'Taux par défaut introuvables dans PlatformSettings.cs',
-    'PayinFeePercent / PayoutFeePercent doivent porter une valeur par défaut.'
-  );
+if (!fs.existsSync(CALCULATEUR)) {
+  echec('ProviderFees.cs est introuvable', 'Le calculateur de frais a disparu.');
 } else {
-  const a = payin / 100;
-  const b = payout / 100;
-  const multiplicateur = (1 + b) / (1 - a);
-
-  let pire = { marge: Infinity, cible: null };
-  for (let T = MONTANT_MIN; T <= MONTANT_MAX; T++) {
-    const debite = Math.ceil(T * multiplicateur); // ce que paie la famille
-    const entre = debite - Math.round(debite * a); // ce qui entre en réserve
-    const sort = T + Math.round(T * b); // ce que coûte le retrait de T
-    const marge = entre - sort;
-    if (marge < pire.marge) pire = { marge, cible: T };
-  }
-
-  if (pire.marge < 0) {
-    echec(
-      `La plateforme AVANCE de l'argent sur certains montants`,
-      `Pire cas : une cible de ${pire.cible} FCFA laisse ${pire.marge} FCFA.\n` +
-        `         Taux en vigueur : encaissement ${payin} %, retrait ${payout} %,\n` +
-        `         majoration déduite ${((multiplicateur - 1) * 100).toFixed(3)} %.`
-    );
+  const src = fs.readFileSync(CALCULATEUR, 'utf8');
+  const attendus = [
+    [/RoundFranc\(chargedFcfa \* PayinProviderPercent \/ 100\.0\)/,
+      'la commission prestataire doit être arrondie au franc LE PLUS PROCHE'],
+    [/CeilFranc\(chargedFcfa \* PayinOperatorPercentHt \/ 100\.0\)/,
+      'la part opérateur HT doit être arrondie au franc SUPÉRIEUR'],
+    [/CeilFranc\(operatorHt \* Vat\)/,
+      'la TVA doit être arrondie au franc SUPÉRIEUR, APRÈS le HT'],
+    [/CeilFranc\(amountFcfa \* PayoutOperatorPercentHt \/ 100\.0\)/,
+      'le frais de retrait suit la même structure HT puis TVA'],
+    [/charged - PayinFeesFor\(charged\) < needed/,
+      "ChargeFor doit RÉSOUDRE (chercher le plus petit C), jamais multiplier"],
+    [/for \(var step = 1; step <= SearchWindow; step\+\+\)/,
+      "la redescente est obligatoire : le premier C qui couvre n'est pas le plus petit"],
+  ];
+  for (const [re, quoi] of attendus) {
+    if (!re.test(src)) echec('La règle de calcul des frais a changé', quoi + '.');
   }
 }
 
 // ====================================================================
-// 3. Le code et la migration disent-ils la même chose ?
+// 2. Les taux viennent-ils de la base ?
 // ====================================================================
-// La ligne de réglages est un SINGLETON créé en juin : la valeur par défaut C#
-// ne l'atteint jamais. Seule une migration peut la poser. Si les deux
-// divergent, une base neuve et la production appliquent deux majorations
-// différentes — et c'est la production qu'on ne regarde pas.
-if (payin !== null) {
+let taux = null;
+if (fs.existsSync(MIGRATIONS)) {
   const fichiers = fs
     .readdirSync(MIGRATIONS)
     .filter((f) => f.endsWith('.cs') && !f.endsWith('.Designer.cs'))
     .sort();
 
-  let posee = null;
-  let posePar = null;
   for (const fichier of fichiers) {
     const brut = fs.readFileSync(path.join(MIGRATIONS, fichier), 'utf8');
-
-    // 🔴 Ne lire que le corps de `Up()`. Le `Down()` d'une migration de
-    // recalibrage repose la valeur PRÉCÉDENTE — la prendre pour la valeur
-    // courante ferait échouer le contrôle sur une migration pourtant juste
-    // (constaté au premier recalibrage : 5.37 lu dans le Down au lieu de 5.40).
+    // Seul le corps de Up() compte : le Down() repose les valeurs PRÉCÉDENTES.
+    // Les confondre faisait échouer le contrôle sur une migration pourtant
+    // juste — constaté au premier recalibrage.
     const debutUp = brut.indexOf('void Up(');
     const debutDown = brut.indexOf('void Down(');
-    const source =
-      debutUp === -1
-        ? brut
-        : brut.slice(debutUp, debutDown === -1 ? undefined : debutDown);
-    // Un UPDATE (ou un defaultValue) qui fixe PayinFeePercent. Le `\\?` couvre
-    // le guillemet échappé du SQL PostgreSQL écrit dans une chaîne C# :
-    //   "UPDATE \"PlatformSettings\" SET \"PayinFeePercent\" = 5.37;"
-    const re = /PayinFeePercent\\?"?\s*=\s*([0-9.]+)/g;
-    let m;
-    while ((m = re.exec(source)) !== null) {
-      posee = parseFloat(m[1]);
-      posePar = fichier;
+    if (debutUp === -1) continue;
+    const up = brut.slice(debutUp, debutDown === -1 ? undefined : debutDown);
+
+    const lu = (nom) => {
+      const m = up.match(new RegExp('"*' + nom + '"*\\s*=\\s*([0-9.]+)'));
+      return m ? parseFloat(m[1]) : null;
+    };
+    const provider = lu('PayinProviderFeePercent');
+    if (provider !== null) {
+      taux = {
+        provider,
+        opIn: lu('PayinOperatorFeePercentHt'),
+        opOut: lu('PayoutOperatorFeePercentHt'),
+        vat: lu('FeeVatPercent'),
+        parFichier: fichier,
+      };
     }
   }
+}
 
-  if (posee === null) {
+if (!taux || [taux.opIn, taux.opOut, taux.vat].some((v) => v === null)) {
+  echec(
+    'Aucune migration ne pose les quatre taux',
+    "Les propriétés C# n'ont AUCUN défaut (c'est voulu) : sans migration, la\n" +
+      "         ligne de réglages reste à NULL et la plateforme refuse d'encaisser.\n" +
+      '         Poser les valeurs mesurées par un migrationBuilder.Sql(UPDATE ...).'
+  );
+}
+
+// ====================================================================
+// 3 & 4. La règle est-elle neutre, et les retraits groupés couverts ?
+// ====================================================================
+if (taux && echecs.length === 0) {
+  const ceilF = (x) => Math.ceil(x - 1e-9);
+  const roundF = (x) => Math.floor(x + 0.5);
+  const vat = 1 + taux.vat / 100;
+
+  const fraisIn = (c) =>
+    roundF((c * taux.provider) / 100) + ceilF(ceilF((c * taux.opIn) / 100) * vat);
+  const fraisOut = (t) => ceilF(ceilF((t * taux.opOut) / 100) * vat);
+
+  const FENETRE = 64;
+  const chargeFor = (t) => {
+    const besoin = t + fraisOut(t);
+    const approx = (taux.provider + taux.opIn * vat) / 100;
+    let c = approx < 0.95 ? Math.ceil(besoin / (1 - approx)) : besoin;
+    if (c < besoin) c = besoin;
+    while (c > besoin && c - fraisIn(c) >= besoin) c--;
+    while (c - fraisIn(c) < besoin) c++;
+    let best = c;
+    for (let s = 1; s <= FENETRE; s++) {
+      const cand = c - s;
+      if (cand < besoin) break;
+      if (cand - fraisIn(cand) >= besoin) best = cand;
+    }
+    return best;
+  };
+
+  let deficits = 0;
+  let pire = { montant: 0, cible: null };
+  let nonMinimal = 0;
+  for (let t = MONTANT_MIN; t <= MONTANT_MAX; t++) {
+    const besoin = t + fraisOut(t);
+    const c = chargeFor(t);
+    const solde = c - fraisIn(c) - besoin;
+    if (solde < 0) {
+      deficits++;
+      if (solde < pire.montant) pire = { montant: solde, cible: t };
+    }
+    // La famille ne doit pas payer un franc de plus que nécessaire.
+    if (c - 1 >= besoin && c - 1 - fraisIn(c - 1) >= besoin) nonMinimal++;
+  }
+
+  if (deficits > 0) {
     echec(
-      'Aucune migration ne pose PayinFeePercent',
-      "La ligne de réglages EXISTE DÉJÀ en base : la valeur par défaut C#\n" +
-        "         ne l'atteindra jamais (§193, §202, §207, §232, §254). Il faut un\n" +
-        '         migrationBuilder.Sql("UPDATE \\"PlatformSettings\\" SET ...").'
+      "La plateforme AVANCE de l'argent",
+      `${deficits} montants en déficit entre ${MONTANT_MIN} et ${MONTANT_MAX} FCFA.\n` +
+        `         Pire cas : ${pire.montant} F sur une cible de ${pire.cible} F.`
     );
-  } else if (Math.abs(posee - payin) > 1e-9) {
+  }
+  if (nonMinimal > 0) {
     echec(
-      'Le code et la migration ne posent pas le même taux',
-      `Défaut C# : ${payin} · migration ${posePar} : ${posee}.\n` +
-        '         Une base neuve et la production calculeraient deux majorations\n' +
-        '         différentes.'
+      'La famille paie plus que nécessaire',
+      `${nonMinimal} montants où un franc de moins aurait suffi.\n` +
+        '         La redescente de ChargeFor ne fait plus son travail.'
+    );
+  }
+
+  // --- Retraits GROUPÉS : le cas courant, et le plus facile à oublier ---
+  // L'école accumule plusieurs paiements et retire d'un coup. Le frais réel
+  // porte alors sur la SOMME, alors que la provision a été constituée
+  // paiement par paiement. Il faut que la somme des provisions couvre.
+  let decouverts = 0;
+  const tailles = [500, 1000, 2500, 5000, 7500, 10000, 15000, 25000, 40000, 63000];
+  for (let essai = 0; essai < 20000; essai++) {
+    const n = 2 + (essai % 11);
+    const parts = [];
+    for (let i = 0; i < n; i++) parts.push(tailles[(essai * 7 + i * 3) % tailles.length]);
+    const provision = parts.reduce((acc, p) => acc + fraisOut(p), 0);
+    const reel = fraisOut(parts.reduce((a, b) => a + b, 0));
+    if (provision < reel) decouverts++;
+  }
+  if (decouverts > 0) {
+    echec(
+      "Un retrait GROUPÉ n'est pas couvert",
+      `${decouverts} cas où la somme des provisions est inférieure au frais réel.\n` +
+        "         L'arrondi au franc SUPÉRIEUR de la provision est ce qui garantit\n" +
+        '         ceil(a) + ceil(b) ≥ ceil(a+b) : il a dû être affaibli.'
     );
   }
 }
 
 // ====================================================================
-// Verdict
-// ====================================================================
 console.log('');
 if (echecs.length === 0) {
-  const a = payin / 100;
-  const b = payout / 100;
-  const pct = (((1 + b) / (1 - a) - 1) * 100).toFixed(3);
   console.log(
-    `Majoration déduite ${pct} % (encaissement ${payin} %, retrait ${payout} %) · ` +
-      `neutre de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA AU TAUX SAISI · ` +
-      `3 contrôles, 0 en échec.`
+    `Règle de frais intacte · neutre au FRANC de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA ` +
+      '· retraits groupés couverts · 4 contrôles, 0 en échec.'
   );
-  console.log(
-    "L'arrondi réel du prestataire n'est pas modélisé ici — c'est l'écran " +
-      'SuperAdmin qui le mesure.'
-  );
+  if (taux) {
+    console.log(
+      `Taux posés par ${taux.parFichier} : encaissement ${taux.provider} % + ` +
+        `${taux.opIn} % HT · retrait ${taux.opOut} % HT · TVA ${taux.vat} %.`
+    );
+  }
   process.exit(0);
 }
 
@@ -219,10 +237,6 @@ for (const e of echecs) {
   console.log(`         ${e.detail}`);
 }
 console.log('');
-console.log(
-  `${echecs.length} contrôle(s) EN ÉCHEC. Une majoration mal calibrée ne lève`
-);
-console.log(
-  'aucune erreur : elle se paie, en silence, sur la trésorerie (§255).'
-);
+console.log('Une majoration mal calibrée ne lève aucune erreur : elle se paie,');
+console.log('en silence, sur la trésorerie de la plateforme (§255, §256).');
 process.exit(1);

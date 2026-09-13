@@ -29,9 +29,13 @@ namespace Idara.API.Services
         public BillingMode BillingMode { get; init; }
         public FeesPayer FeesPayer { get; init; }
         public long MinPayinFcfa { get; init; }
-        public double ParentFeeMultiplier { get; init; }
-        /// <summary>Majoration affichée (ex : 7.545 = +7,545 %). Dérivée des frais réels.</summary>
-        public double ParentFeePercent { get; init; }
+
+        /// <summary>
+        /// Les commissions du prestataire, telles que saisies. C'est ELLE qui
+        /// sait ce qu'il faut débiter — il n'y a pas de « multiplicateur », les
+        /// frais dépendent du montant (arrondis au franc).
+        /// </summary>
+        public Common.Utilities.ProviderFees Fees { get; init; }
         public List<OutstandingLine> Lines { get; init; } = new();
         public List<OutstandingChild> Children { get; init; } = new();
 
@@ -46,9 +50,25 @@ namespace Idara.API.Services
         /// </summary>
         public bool IsFreeAmount => BillingMode != BillingMode.FixedAmount && Lines.Count == 0;
 
-        public long ChargeFor(long target) => FeesPayer == FeesPayer.Parent
-            ? (long)Math.Ceiling(target * ParentFeeMultiplier)
-            : target;
+        /// <summary>
+        /// Ce qu'on va RÉCLAMER pour solder <paramref name="target"/>.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 Point unique partagé par le SMS et la page du lien (§199, §249) :
+        /// le message annonce un montant, la page doit réclamer le même.
+        /// Non configuré → on annonce la cible nue plutôt qu'un chiffre inventé ;
+        /// le refus tombe à l'initiation, là où l'argent bouge.
+        /// </remarks>
+        public long ChargeFor(long target) =>
+            FeesPayer == FeesPayer.Parent && Fees.IsConfigured
+                ? Fees.ChargeFor(target)
+                : target;
+
+        /// <summary>Majoration effective du total dû, en % — AFFICHAGE seulement.</summary>
+        public double ParentFeePercent =>
+            FeesPayer == FeesPayer.Parent && Fees.IsConfigured && TotalDueFcfa > 0
+                ? Fees.EffectiveMarkupPercent(TotalDueFcfa)
+                : 0;
     }
 
     /// <summary>Issue de l'appel SenePay à l'initiation (succès = RedirectUrl posé).</summary>
@@ -161,8 +181,7 @@ namespace Idara.API.Services
                 BillingMode = settings.BillingMode,
                 FeesPayer = settings.FeesPayer,
                 MinPayinFcfa = platform.MinPayinFcfa,
-                ParentFeeMultiplier = platform.ParentFeeMultiplier,
-                ParentFeePercent = platform.ParentFeePercent,
+                Fees = platform.Fees,
                 Lines = lines,
                 Children = children
                     .Select(c => new OutstandingChild(

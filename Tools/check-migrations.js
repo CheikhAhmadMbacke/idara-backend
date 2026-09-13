@@ -140,11 +140,29 @@ function main() {
 
   for (const fichier of fichiers) {
     const chemin = path.join(migrationsDir, fichier);
-    const source = fs.readFileSync(chemin, 'utf8');
-    const derogation = source.includes(WAIVER);
+    const brut = fs.readFileSync(chemin, 'utf8');
+    const derogation = brut.includes(WAIVER);
     const herite = HERITAGE_AVANT_LE_CONTROLE.has(fichier);
 
+    // 🔴 Seul le corps de `Up()` est contrôlé. Un `Down()` recrée souvent une
+    // colonne supprimée, forcément avec un défaut nul — et repose aussitôt sa
+    // valeur par un `Sql`. L'y traquer ne signale rien de réel et pousse à
+    // couvrir le fichier entier d'une dérogation, ce qui aveuglerait le
+    // contrôle sur le `Up()`, le seul qui tourne en production (MigrateAsync
+    // n'applique que des Up). Même correction que dans check-fee-neutrality.js :
+    // un garde-fou doit regarder ce qui S'APPLIQUE.
+    const debutUp = brut.indexOf('void Up(');
+    const debutDown = brut.indexOf('void Down(');
+    const source =
+      debutUp === -1
+        ? brut
+        : brut.slice(debutUp, debutDown === -1 ? undefined : debutDown);
+
+    const decalage =
+      debutUp === -1 ? 0 : brut.slice(0, debutUp).split(String.fromCharCode(10)).length - 1;
+
     for (const bloc of blocsAddColumn(source)) {
+      bloc.ligne += decalage;
       const table = champ(bloc.texte, 'table');
       if (!table || !SETTINGS_TABLES.includes(table)) continue;
 
@@ -176,6 +194,7 @@ function main() {
     const reposeLaValeur = /migrationBuilder\.Sql\(/.test(source);
 
     for (const bloc of blocsRenameColumn(source)) {
+      bloc.ligne += decalage;
       const table = champ(bloc.texte, 'table');
       if (!table || !SETTINGS_TABLES.includes(table)) continue;
 

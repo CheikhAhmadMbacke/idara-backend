@@ -272,12 +272,20 @@ namespace Idara.API.Controllers
                     $"Le montant minimum est de {platform.MinPayinFcfa} FCFA."));
             }
 
-            // Majoration parent : si FeesPayer=Parent, on charge
-            // targetAmount × ParentFeeMultiplier (~1,0755 — jamais en dur)
-            // (le parent porte les frais SenePay+opérateurs). Si FeesPayer=School,
-            // on charge targetAmount tel quel (l'école absorbe les frais au net).
+            // Majoration parent : si FeesPayer=Parent, on RÉSOUT le montant à
+            // débiter pour que l'école encaisse la cible ET puisse la retirer,
+            // sans que la plateforme avance un franc (ProviderFees.ChargeFor).
+            // Si FeesPayer=School, on charge la cible telle quelle : l'école
+            // absorbe les frais d'entrée, et la plateforme le frais de sortie
+            // (§145, chantier distinct).
+            if (settings.FeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Le paiement en ligne est momentanément indisponible : les commissions "
+                    + "du prestataire ne sont pas renseignées. Contactez l'administrateur."));
+            }
             long amountToCharge = settings.FeesPayer == FeesPayer.Parent
-                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
+                ? platform.Fees.ChargeFor(targetAmount)
                 : targetAmount;
 
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)

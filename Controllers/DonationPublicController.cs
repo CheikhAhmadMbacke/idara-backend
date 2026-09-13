@@ -254,8 +254,13 @@ namespace Idara.API.Controllers
                 // montant exact, le daara reçoit le net (§106). La collecte porte
                 // le choix figé à sa création : changer le réglage global ne doit
                 // pas modifier un lien déjà partagé.
+                if (campaign.FeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
+                {
+                    return BadRequest(new { status = "error",
+                        message = "Les dons en ligne sont momentanément indisponibles. Réessayez plus tard." });
+                }
                 var amountToCharge = campaign.FeesPayer == FeesPayer.Parent
-                    ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier)
+                    ? platform.Fees.ChargeFor(targetAmount)
                     : targetAmount;
 
                 var payment = new Payment
@@ -456,8 +461,24 @@ namespace Idara.API.Controllers
                 // Les frais ne s'affichent QUE si le donateur les paie : quand
                 // l'école les absorbe, ils ne le regardent pas, et les montrer
                 // ferait douter de ce qui arrive au daara.
+                // 🔴 On n'expose PLUS de multiplicateur : il n'existe pas. Les
+                // frais dépendent du montant (le prestataire arrondit au franc),
+                // donc c'est le SERVEUR qui donne le montant exact — la page ne
+                // peut pas le recalculer sans annoncer un chiffre que le
+                // paiement contredirait (§249). `chargedFcfa` n'a de sens que
+                // pour un montant IMPOSÉ ; en montant libre, il n'y a rien à
+                // annoncer tant que le donateur n'a rien saisi.
                 fees = campaign.FeesPayer == FeesPayer.Parent
-                    ? new { payerPays = true, multiplier = platform.ParentFeeMultiplier }
+                    ? new
+                    {
+                        payerPays = true,
+                        chargedFcfa =
+                            campaign.AmountMode == DonationAmountMode.Fixed
+                            && campaign.FixedAmountFcfa is > 0
+                            && platform.Fees.IsConfigured
+                                ? platform.Fees.ChargeFor(campaign.FixedAmountFcfa.Value)
+                                : (long?)null
+                    }
                     : null,
                 limits = new
                 {

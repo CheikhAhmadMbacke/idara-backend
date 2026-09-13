@@ -116,61 +116,64 @@ namespace Idara.API.Models
         public string LegalVersion { get; set; } = "2026-09";
 
         // ================================================================
-        // ===== Les DEUX seuls taux saisis — la majoration se DÉDUIT ======
+        // ===== Ce que le prestataire prélève — SAISI, jamais deviné ======
         //
-        // 🔴 Pourquoi ils sont deux, et pourquoi la majoration n'en est plus un.
+        // 🔴 AUCUNE VALEUR PAR DÉFAUT ICI, ET C'EST DÉLIBÉRÉ.
         //
-        // La majoration au payeur a longtemps été un troisième champ saisi à la
-        // main. Elle valait 7,14 en production, calée en ADDITIONNANT les taux
-        // prélevés (3,6 + 1,77 + 1,77). C'était faux de 0,45 point, pour une
-        // raison purement arithmétique : majorer de t ne compense pas un
-        // prélèvement de t. Prélever 5,37 % de 107,14 laisse 101,39, d'où il
-        // faut encore sortir 1,77 % de frais de retrait — il manquait 4 154 F
-        // par million facturé, payés par la plateforme et visibles nulle part.
+        // Ces quatre champs sont `double?` sans initialisateur. Tant qu'ils ne
+        // sont pas renseignés, aucun paiement « frais au payeur » ne part : le
+        // système REFUSE, avec un message qui dit où aller les saisir.
         //
-        // Un chiffre saisi à la main dérive dès que le prestataire change sa
-        // grille. On ne saisit donc plus que ce qui est OBSERVABLE sur un relevé
-        // — ce que le prestataire prélève — et la majoration en découle.
+        // L'alternative — une valeur de repli « raisonnable » dans le code —
+        // paraît prudente et ne l'est pas. C'est très exactement ce qui a laissé
+        // une majoration fausse de 0,45 point tourner QUATRE MOIS : le chiffre
+        // existait, il avait l'air juste, personne n'avait de raison de le
+        // regarder. Un service arrêté se voit et se répare en trente secondes
+        // depuis SuperAdmin ; un calcul faux ne se voit pas.
+        //
+        // 🔑 ET CE NE SONT PAS DES POURCENTAGES DE FRAIS — ce sont les
+        // paramètres d'une RÈGLE. Les frais réels, retrouvés sur les 197
+        // paiements de production (197/197 exacts) :
+        //
+        //     encaissement = round(C × provider %) + ceil( ceil(C × op % HT) × (1+TVA) )
+        //     décaissement =                         ceil( ceil(T × op % HT) × (1+TVA) )
+        //
+        // Le « 1,77 % » qu'on lisait partout est 1,5 % HT + 18 % de TVA, chacun
+        // arrondi au franc. Le « 5,37 % » d'encaissement est une moyenne vraie
+        // pour AUCUN montant : mesurée, elle va de 5,37 % à 6,05 % selon la
+        // taille. D'où Common/Utilities/ProviderFees.cs, qui RÉSOUT au lieu
+        // d'appliquer un taux.
         // ================================================================
 
         /// <summary>
-        /// Taux réellement retenu sur un ENCAISSEMENT, en pourcentage humain
-        /// (5.40 = 5,40 %).
+        /// Commission du prestataire de paiement à l'encaissement, en % du
+        /// montant débité (SenePay : 3,6). Arrondie au franc le plus proche.
         /// </summary>
-        /// <remarks>
-        /// 🔴 <b>5,40 et non 5,37, et la nuance a coûté une mesure pour être
-        /// vue.</b> Le taux contractuel additionné (3,6 % SenePay + 1,77 %
-        /// opérateur) donne 5,37 — mais c'est un <b>plancher</b>, jamais une
-        /// moyenne : SenePay arrondit ses frais au franc supérieur sur
-        /// <i>chaque</i> transaction, et ce supplément pèse d'autant plus que le
-        /// montant est petit. Mesuré en production sur 197 paiements réglés :
-        /// minimum <b>5,370</b>, moyenne pondérée <b>5,379</b>, et par tranche
-        /// 5,749 % sous 1 000 F · 5,532 % de 1 à 5 k · 5,380 % de 5 à 20 k ·
-        /// 5,373 % au-delà. Saisir le plancher laissait donc ~2 F de déficit par
-        /// transaction — 29 fois moins qu'avant, mais toujours du déficit.
-        /// </remarks>
-        /// <remarks>
-        /// ⚠️ <b>Ce taux ne se lit pas dans <c>Payments.FeesFcfa</c></b>, qui
-        /// n'enregistre que la part SenePay (~3,66 %). Le vrai taux est
-        /// <c>(Σ AmountFcfa − Σ NetCreditedFcfa) / Σ AmountFcfa</c> sur les
-        /// paiements <c>Completed</c> hors espèces — c'est exactement ce que
-        /// l'écran SuperAdmin affiche en regard de ce champ, pour qu'une dérive
-        /// de la grille SenePay se VOIE au lieu de se payer.
-        /// </remarks>
-        public double PayinFeePercent { get; set; } = 5.40;
+        public double? PayinProviderFeePercent { get; set; }
 
         /// <summary>
-        /// Frais opérateur prélevés sur un DÉCAISSEMENT, en pourcentage humain
-        /// (1.77 = 1,77 %). Mesuré : 55 429 F sur 3 133 100 F retirés.
+        /// Part opérateur à l'encaissement, en % <b>hors taxe</b> du montant
+        /// débité (Wave / Orange Money : 1,5). Arrondie au franc supérieur,
+        /// puis la TVA s'y ajoute.
+        /// </summary>
+        public double? PayinOperatorFeePercentHt { get; set; }
+
+        /// <summary>
+        /// Part opérateur au décaissement, en % <b>hors taxe</b> du montant
+        /// envoyé (1,5). Prélevée <b>en plus</b> du montant
+        /// (<c>fee_mode = "on_top"</c>) : sortir T coûte T + ce frais.
+        /// </summary>
+        public double? PayoutOperatorFeePercentHt { get; set; }
+
+        /// <summary>
+        /// TVA appliquée aux commissions opérateur, en % (Sénégal : 18).
         /// </summary>
         /// <remarks>
-        /// 🔴 Ce frais est prélevé <b>en plus</b> du montant envoyé
-        /// (<c>fee_mode = "on_top"</c>, cf. <c>SenePayPayoutRequest</c>) : un
-        /// retrait de T coûte <c>T × (1 + taux)</c> à la réserve marchand, pas
-        /// <c>T / (1 − taux)</c>. C'est ce qui donne sa forme au numérateur de
-        /// <see cref="ParentFeeMultiplier"/>.
+        /// Champ à part entière plutôt que fondue dans les taux : elle change
+        /// par décision de l'État, pas par décision du prestataire, et les deux
+        /// ne bougent jamais en même temps.
         /// </remarks>
-        public double PayoutFeePercent { get; set; } = 1.77;
+        public double? FeeVatPercent { get; set; }
 
         /// <summary>
         /// Mode d'envoi des SMS de notification. <c>true</c> : les DEUX versions
@@ -467,70 +470,25 @@ namespace Idara.API.Models
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>
-        /// 🔑 <b>LE point unique de la majoration au payeur.</b> Multiplicateur
-        /// appliqué au montant CIBLE pour obtenir ce qu'on débite réellement.
-        /// Les 7 appelants passent tous par lui (§199).
+        /// 🔑 <b>Le calculateur de frais, construit depuis les taux saisis.</b>
+        /// Tout ce qui touche à l'argent du payeur passe par lui — jamais par
+        /// un pourcentage recopié (§199 : une règle, un seul lieu).
         /// </summary>
         /// <remarks>
-        /// <para><b>La règle qu'il fait tenir</b> : si l'école annonce T, elle
-        /// doit encaisser T dans son wallet <b>et</b> pouvoir retirer T, sans
-        /// que la plateforme avance quoi que ce soit. Deux prélèvements
-        /// s'interposent :</para>
-        /// <list type="number">
-        ///   <item>à l'encaissement, la réserve ne reçoit que <c>C × (1 − a)</c>
-        ///   de ce qu'on débite au payeur ;</item>
-        ///   <item>au décaissement, sortir T de la réserve en coûte
-        ///   <c>T × (1 + b)</c>, le frais étant prélevé <b>en plus</b>
-        ///   (<c>on_top</c>).</item>
-        /// </list>
-        /// <para>La neutralité s'écrit donc <c>C × (1 − a) = T × (1 + b)</c>,
-        /// soit <c>C = T × (1 + b) / (1 − a)</c>. Avec a = 5,37 % et b = 1,77 %,
-        /// le multiplicateur vaut <b>1,0755</b> — une majoration de
-        /// <b>7,55 %</b>, contre 7,14 % saisis auparavant.</para>
-        /// <para>🔴 <b>Ne jamais « simplifier » en 1 + a + b.</b> C'est
-        /// précisément l'erreur d'origine : les taux ne s'additionnent pas, ils
-        /// se composent. Et ne pas écrire <c>1 / ((1 − a)(1 − b))</c> non plus —
-        /// cette forme-là suppose un frais de retrait prélevé DANS le montant
-        /// envoyé, ce que <c>fee_mode = "on_top"</c> ne fait pas.</para>
-        /// <para>⚠️ <b>Date de péremption</b> : l'article 8.2 du contrat Wave
-        /// interdit toute majoration au payeur. À la bascule vers Wave direct,
-        /// cette majoration disparaît et c'est le wallet qui devra porter le
-        /// frais de retrait (§145).</para>
+        /// Il peut être <b>non configuré</b> : c'est un état normal, pas une
+        /// anomalie. Tester <c>Fees.IsConfigured</c> avant d'initier un
+        /// encaissement en mode « frais au payeur », et refuser proprement
+        /// sinon. Les valeurs nulles deviennent <c>-1</c>, donc hors des bornes
+        /// admises — impossible de calculer par accident sur un zéro.
         /// </remarks>
         [NotMapped]
-        public double ParentFeeMultiplier
+        public Common.Utilities.ProviderFees Fees => new()
         {
-            get
-            {
-                // Bornage défensif : ces deux taux sont saisis par un humain et
-                // se retrouvent au dénominateur. Un 100 saisi par erreur
-                // donnerait +∞, donc un montant à débiter absurde — on préfère
-                // un multiplicateur borné à un crash au moment de payer.
-                var a = Math.Clamp(PayinFeePercent, 0.0, 95.0) / 100.0;
-                var b = Math.Clamp(PayoutFeePercent, 0.0, 95.0) / 100.0;
-                return (1.0 + b) / (1.0 - a);
-            }
-        }
-
-        /// <summary>
-        /// Majoration au payeur en pourcentage humain (7.55 = +7,55 %), telle
-        /// qu'affichée au parent et au donateur. <b>DÉRIVÉE</b> depuis le
-        /// 2026-09-13 : plus de colonne, donc plus de valeur qui dérive.
-        /// </summary>
-        /// <remarks>
-        /// Le nom est conservé tel quel dans les réponses API : tous les écrans
-        /// parents et les pages publiques qui l'affichent continuent de marcher
-        /// et montrent le nouveau taux sans qu'une seule ligne ne change chez
-        /// eux. Seul l'écran SuperAdmin qui l'ÉDITAIT a changé — il édite
-        /// désormais <see cref="PayinFeePercent"/> et affiche ceci en lecture
-        /// seule (un champ accepté mais jamais utilisé serait un §196).
-        /// </remarks>
-        [NotMapped]
-        public double ParentFeePercent => (ParentFeeMultiplier - 1.0) * 100.0;
-
-        /// <summary>Taux de frais payout : p/100. Sert à majorer le montant envoyé à SenePay.</summary>
-        [NotMapped]
-        public double PayoutFeeRate => PayoutFeePercent / 100.0;
+            PayinProviderPercent = PayinProviderFeePercent ?? -1,
+            PayinOperatorPercentHt = PayinOperatorFeePercentHt ?? -1,
+            PayoutOperatorPercentHt = PayoutOperatorFeePercentHt ?? -1,
+            VatPercent = FeeVatPercent ?? -1,
+        };
 
         /// <summary>Prix unitaire du segment (centimes) pour un réseau donné.</summary>
         public long SmsUnitPriceCentimes(Common.Utilities.SmsNetwork network) => network switch

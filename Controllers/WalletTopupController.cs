@@ -87,14 +87,20 @@ namespace Idara.API.Controllers
 
             // Majoration (comme un paiement parent, FeesPayer=Parent) : l'école
             // veut recevoir EXACTEMENT dto.Amount dans son wallet ET pouvoir le
-            // ressortir, donc on la débite de target × ParentFeeMultiplier et le
+            // ressortir, donc on RÉSOUT le montant à débiter (ProviderFees) et le
             // webhook crédite le wallet du TargetAmountFcfa (§82).
-            // TargetAmountFcfa = ce qui atterrit dans le wallet (5000),
-            // AmountFcfa = ce qui est débité du payeur (5378 au taux courant).
-            // ⚠️ Ne jamais réécrire le taux en dur ici : il se déduit des frais
-            // réels dans PlatformSettings et a déjà changé deux fois.
+            // TargetAmountFcfa = ce qui atterrit dans le wallet (5 000),
+            // AmountFcfa = ce qui est débité du payeur (5 379 aux taux actuels).
+            // ⚠️ Ne jamais réécrire un taux en dur ici : les frais ne sont pas un
+            // pourcentage, ils dépendent du montant (arrondis du prestataire).
+            if (!platform.Fees.IsConfigured)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Recharge indisponible : les commissions du prestataire ne sont pas "
+                    + "renseignées. SuperAdmin → Réglages plateforme → Frais."));
+            }
             var targetAmount = dto.Amount;
-            var amountToCharge = (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier);
+            var amountToCharge = platform.Fees.ChargeFor(targetAmount);
             var payment = new Payment
             {
                 SchoolId = schoolId.Value,

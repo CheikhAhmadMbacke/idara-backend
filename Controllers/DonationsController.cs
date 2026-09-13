@@ -177,9 +177,15 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(ct) ?? FeesPayer.School;
 
             var targetAmount = dto.Amount;
+            if (donationFeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
+            {
+                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    "Les dons en ligne sont momentanément indisponibles : les commissions "
+                    + "du prestataire ne sont pas renseignées."));
+            }
             var amountToCharge = donationFeesPayer == FeesPayer.Parent
-                ? (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier) // donateur paie
-                : targetAmount;                                                   // daara paie (exact)
+                ? platform.Fees.ChargeFor(targetAmount)  // donateur paie les frais
+                : targetAmount;                          // daara paie (montant exact)
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
             var payment = new Payment

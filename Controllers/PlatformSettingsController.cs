@@ -192,9 +192,7 @@ namespace Idara.API.Controllers
         public async Task<ActionResult<ApiResponse<PlatformSettingsDto>>> Get(CancellationToken ct)
         {
             var s = await _context.GetPlatformSettingsAsync(ct);
-            var dto = Map(s);
-            dto.Calibration = await MeasureFeesAsync(s, ct);
-            return Ok(ApiResponse<PlatformSettingsDto>.Ok(dto));
+            return Ok(ApiResponse<PlatformSettingsDto>.Ok(await BuildAsync(s, ct)));
         }
 
         [HttpPut]
@@ -214,102 +212,146 @@ namespace Idara.API.Controllers
             s.MinWithdrawalFcfa = dto.MinWithdrawalFcfa;
             // Absent = inchangé (§140) : un client antérieur au 2026-09-13
             // n'envoie pas ces champs et ne doit rien écraser.
-            if (dto.PayinFeePercent.HasValue) s.PayinFeePercent = dto.PayinFeePercent.Value;
-            if (dto.PayoutFeePercent.HasValue) s.PayoutFeePercent = dto.PayoutFeePercent.Value;
+            if (dto.PayinProviderFeePercent.HasValue)
+                s.PayinProviderFeePercent = dto.PayinProviderFeePercent.Value;
+            if (dto.PayinOperatorFeePercentHt.HasValue)
+                s.PayinOperatorFeePercentHt = dto.PayinOperatorFeePercentHt.Value;
+            if (dto.PayoutOperatorFeePercentHt.HasValue)
+                s.PayoutOperatorFeePercentHt = dto.PayoutOperatorFeePercentHt.Value;
+            if (dto.FeeVatPercent.HasValue)
+                s.FeeVatPercent = dto.FeeVatPercent.Value;
             s.SmsBilingual = dto.SmsBilingual;
             s.SubscriptionEnforcementEnabled = dto.SubscriptionEnforcementEnabled;
             s.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync(ct);
 
-            // La majoration est tracée elle aussi, bien qu'elle ne soit plus
-            // saisie : c'est le chiffre que les familles verront, et le journal
-            // doit permettre de dater un changement de ce qu'on leur demande.
+            // On trace aussi ce que ça donne pour une famille : c'est le seul
+            // chiffre qu'elle verra, et le journal doit permettre de DATER un
+            // changement de ce qu'on lui réclame.
             _logger.LogInformation(
-                "[platform-settings] MAJ par SuperAdmin {UserId} : minPayin={MinPayin}, minWithdraw={MinWithdraw}, payinFee={PayinFee}%, payoutFee={PayoutFee}% -> majoration déduite {ParentFee}%",
-                User.GetUserId(), s.MinPayinFcfa, s.MinWithdrawalFcfa, s.PayinFeePercent, s.PayoutFeePercent,
-                Math.Round(s.ParentFeePercent, 3));
+                "[platform-settings] MAJ par SuperAdmin {UserId} : minPayin={MinPayin}, "
+                + "minWithdraw={MinWithdraw}, encaissement={Provider}%+{OperatorIn}%HT, "
+                + "décaissement={OperatorOut}%HT, TVA={Vat}% → configuré={Configured}",
+                User.GetUserId(), s.MinPayinFcfa, s.MinWithdrawalFcfa,
+                s.PayinProviderFeePercent, s.PayinOperatorFeePercentHt,
+                s.PayoutOperatorFeePercentHt, s.FeeVatPercent, s.Fees.IsConfigured);
 
-            var updated = Map(s);
-            updated.Calibration = await MeasureFeesAsync(s, ct);
-            return Ok(ApiResponse<PlatformSettingsDto>.Ok(updated, "Réglages mis à jour."));
+            return Ok(ApiResponse<PlatformSettingsDto>.Ok(
+                await BuildAsync(s, ct), "Réglages mis à jour."));
         }
 
         /// <summary>
-        /// Confronte les taux SAISIS à ce que le prestataire a réellement
-        /// prélevé, lu dans les paiements et les retraits déjà réglés.
+        /// Montants d'aperçu. Ce sont des MONTANTS, pas des taux : ils servent à
+        /// montrer ce que les réglages donnent concrètement, et n'entrent dans
+        /// aucun calcul de facturation.
+        /// </summary>
+        private static readonly long[] PreviewTargets = { 500, 5_000, 15_000, 50_000 };
+
+        private async Task<PlatformSettingsDto> BuildAsync(
+            Models.PlatformSettings s, CancellationToken ct)
+        {
+            var dto = Map(s);
+            if (s.Fees.IsConfigured)
+            {
+                foreach (var target in PreviewTargets)
+                {
+                    var charged = s.Fees.ChargeFor(target);
+                    var payin = s.Fees.PayinFeesFor(charged);
+                    var payout = s.Fees.PayoutFeesFor(target);
+                    dto.Preview.Add(new FeePreviewRowDto
+                    {
+                        TargetFcfa = target,
+                        ChargedFcfa = charged,
+                        PayinFeesFcfa = payin,
+                        PayoutFeesFcfa = payout,
+                        // Ce qui reste une fois l'école servie ET le retrait payé.
+                        PlatformBalanceFcfa = charged - payin - target - payout,
+                        MarkupPercent = Math.Round((charged - target) * 100.0 / target, 3),
+                    });
+                }
+            }
+            dto.Calibration = await MeasureFeesAsync(s, ct);
+            return dto;
+        }
+
+        /// <summary>
+        /// Confronte les frais que nos taux PRÉDISENT à ceux que le prestataire
+        /// a réellement prélevés, paiement par paiement.
         /// </summary>
         /// <remarks>
-        /// <para>🔎 <b>Pourquoi cette mesure vit ici et pas dans une note.</b>
-        /// Une majoration mal calibrée ne provoque aucune erreur : elle se paie.
-        /// La seule façon de la voir est de comparer, en continu, ce qu'on
-        /// demande au payeur à ce que le prestataire prend. C'est ce qui a
-        /// manqué pendant quatre mois.</para>
+        /// <para>🔎 <b>La comparaison porte sur des FRANCS, pas sur des taux</b>,
+        /// et c'est délibéré. Un taux moyen lisse exactement ce qu'on cherche à
+        /// voir : les arrondis. C'est en comparant franc à franc qu'on a
+        /// découvert que la règle du prestataire n'était pas un pourcentage mais
+        /// <c>round(C × 3,6 %) + ceil(ceil(C × 1,5 %) × 1,18)</c> — 197/197
+        /// exacts là où le meilleur pourcentage unique n'en expliquait que 6.</para>
         ///
-        /// <para>⚠️ <b>Les espèces sont exclues du calcul de l'encaissement</b> :
-        /// un paiement au guichet a des frais nuls par construction (§182), et
-        /// les inclure ferait mécaniquement baisser le taux mesuré — on croirait
-        /// SenePay moins cher à mesure que l'école encaisse au comptant.</para>
+        /// <para>⚠️ <b>Les espèces sont exclues</b> : un paiement au guichet a des
+        /// frais nuls par construction (§182), et les inclure ferait croire le
+        /// prestataire moins cher à mesure que l'école encaisse au comptant.</para>
         ///
-        /// <para>⚠️ <c>SumAsync</c> porte sur un type NULLABLE : sur un
-        /// ensemble vide, SQL renvoie NULL et EF échoue à le matérialiser en
-        /// <c>long</c> (§195). Une plateforme neuve n'a aucun paiement.</para>
+        /// <para>⚠️ <c>FeesFcfa</c> n'est PAS fiable et n'est pas utilisé : le
+        /// webhook y met tantôt la seule part du prestataire, tantôt le total
+        /// (constaté sur 8 paiements). <c>NetCreditedFcfa</c>, lui, est cohérent
+        /// — c'est donc <c>débité − net</c> qui fait foi.</para>
         /// </remarks>
         private async Task<FeeCalibrationDto> MeasureFeesAsync(
             Models.PlatformSettings s, CancellationToken ct)
         {
             var result = new FeeCalibrationDto();
+            var configured = s.Fees.IsConfigured;
 
-            // --- Encaissement : (brut - net crédité) / brut, hors espèces ---
-            var payins = _context.Payments.Where(p =>
-                p.Status == Enums.PaymentStatus.Completed
-                && p.Operator != Enums.PaymentOperator.Cash
-                && p.AmountFcfa > 0
-                && p.NetCreditedFcfa > 0);
+            // --- Encaissement ---
+            var payins = await _context.Payments
+                .Where(p => p.Status == Enums.PaymentStatus.Completed
+                            && p.Operator != Enums.PaymentOperator.Cash
+                            && p.AmountFcfa > 0
+                            && p.NetCreditedFcfa > 0)
+                .Select(p => new { p.AmountFcfa, p.NetCreditedFcfa })
+                .ToListAsync(ct);
 
-            result.PayinSampleCount = await payins.CountAsync(ct);
-            if (result.PayinSampleCount > 0)
+            result.PayinSampleCount = payins.Count;
+            if (payins.Count > 0)
             {
-                var gross = await payins.SumAsync(p => (long?)p.AmountFcfa, ct) ?? 0L;
-                var net = await payins.SumAsync(p => (long?)p.NetCreditedFcfa, ct) ?? 0L;
+                long gross = 0, taken = 0;
+                foreach (var p in payins)
+                {
+                    var reel = p.AmountFcfa - p.NetCreditedFcfa;
+                    gross += p.AmountFcfa;
+                    taken += reel;
+                    if (!configured) continue;
+                    var predit = s.Fees.PayinFeesFor(p.AmountFcfa);
+                    if (predit == reel) result.PayinExactCount++;
+                    result.PayinGapFcfa += predit - reel;
+                }
                 if (gross > 0)
-                    result.MeasuredPayinFeePercent = Math.Round((gross - net) * 100.0 / gross, 3);
+                    result.ObservedPayinPercent = Math.Round(taken * 100.0 / gross, 3);
             }
 
-            // --- Décaissement : frais / montant retiré ---
-            var payouts = _context.Withdrawals.Where(w =>
-                w.Status == Enums.WithdrawalStatus.Completed
-                && w.AmountFcfa > 0
-                && w.FeesFcfa > 0);
+            // --- Décaissement ---
+            var payouts = await _context.Withdrawals
+                .Where(w => w.Status == Enums.WithdrawalStatus.Completed
+                            && w.AmountFcfa > 0
+                            && w.FeesFcfa > 0)
+                .Select(w => new { w.AmountFcfa, w.FeesFcfa })
+                .ToListAsync(ct);
 
-            result.PayoutSampleCount = await payouts.CountAsync(ct);
-            if (result.PayoutSampleCount > 0)
+            result.PayoutSampleCount = payouts.Count;
+            if (payouts.Count > 0)
             {
-                var sent = await payouts.SumAsync(w => (long?)w.AmountFcfa, ct) ?? 0L;
-                var fees = await payouts.SumAsync(w => (long?)w.FeesFcfa, ct) ?? 0L;
+                long sent = 0, fees = 0;
+                foreach (var w in payouts)
+                {
+                    sent += w.AmountFcfa;
+                    fees += w.FeesFcfa;
+                    if (!configured) continue;
+                    var predit = s.Fees.PayoutFeesFor(w.AmountFcfa);
+                    if (predit == w.FeesFcfa) result.PayoutExactCount++;
+                    result.PayoutGapFcfa += predit - w.FeesFcfa;
+                }
                 if (sent > 0)
-                    result.MeasuredPayoutFeePercent = Math.Round(fees * 100.0 / sent, 3);
-            }
-
-            // --- La majoration qui SERAIT neutre d'après ces mesures ---
-            // Même formule que ParentFeeMultiplier, appliquée aux taux mesurés
-            // plutôt qu'aux taux saisis. Si l'un des deux manque (plateforme
-            // neuve, aucun retrait encore réglé), on retombe sur le taux saisi :
-            // afficher un écart calculé sur une moitié de mesure serait pire que
-            // ne rien afficher.
-            var a = (result.MeasuredPayinFeePercent ?? s.PayinFeePercent) / 100.0;
-            var b = (result.MeasuredPayoutFeePercent ?? s.PayoutFeePercent) / 100.0;
-            if (a is >= 0 and < 0.95 && b is >= 0 and < 0.95)
-            {
-                var neutral = ((1.0 + b) / (1.0 - a) - 1.0) * 100.0;
-                result.MeasuredNeutralParentFeePercent = Math.Round(neutral, 3);
-
-                // Ce que l'écart pèse sur 1 000 000 F facturés aux familles.
-                // Négatif = la plateforme avance la différence.
-                const long reference = 1_000_000L;
-                var charged = reference * (1.0 + s.ParentFeePercent / 100.0);
-                var cost = reference * (1.0 + b) / (1.0 - a);
-                result.GapPerMillionFcfa = (long)Math.Round(charged - cost, MidpointRounding.AwayFromZero);
+                    result.ObservedPayoutPercent = Math.Round(fees * 100.0 / sent, 3);
             }
 
             return result;
@@ -319,9 +361,11 @@ namespace Idara.API.Controllers
         {
             MinPayinFcfa = s.MinPayinFcfa,
             MinWithdrawalFcfa = s.MinWithdrawalFcfa,
-            PayinFeePercent = s.PayinFeePercent,
-            PayoutFeePercent = s.PayoutFeePercent,
-            ParentFeePercent = Math.Round(s.ParentFeePercent, 3),
+            PayinProviderFeePercent = s.PayinProviderFeePercent,
+            PayinOperatorFeePercentHt = s.PayinOperatorFeePercentHt,
+            PayoutOperatorFeePercentHt = s.PayoutOperatorFeePercentHt,
+            FeeVatPercent = s.FeeVatPercent,
+            FeesConfigured = s.Fees.IsConfigured,
             SmsBilingual = s.SmsBilingual,
             SubscriptionEnforcementEnabled = s.SubscriptionEnforcementEnabled,
             UpdatedAt = s.UpdatedAt

@@ -471,8 +471,13 @@
       show('fixed-amount', true);
       $('fixed-value').textContent = money(c.fixedAmountFcfa);
       // Les frais ne s'affichent QUE si le donateur les paie.
-      if (data.fees && data.fees.payerPays) {
-        var total = Math.ceil(c.fixedAmountFcfa * data.fees.multiplier);
+      // Le total vient du SERVEUR, jamais d'un calcul local : les frais du
+      // prestataire ne sont pas un pourcentage (il arrondit au franc a chaque
+      // etape), donc un multiplicateur applique ici annoncerait un montant que
+      // le paiement contredirait. Absent = on n'annonce rien plutot que de
+      // deviner.
+      if (data.fees && data.fees.payerPays && data.fees.chargedFcfa) {
+        var total = data.fees.chargedFcfa;
         $('fixed-fee').textContent = t('fee_line', { fee: money(total - c.fixedAmountFcfa) });
         $('fixed-total-value').textContent = money(total);
         show('fixed-fee', true);
