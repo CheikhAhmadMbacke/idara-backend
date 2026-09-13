@@ -48,6 +48,25 @@ namespace Idara.API.DTOs.Admin
         public long SubscriptionRevenueTotalFcfa { get; set; }
         public long PaymentMarginTotalFcfa { get; set; }
         /// <summary>CA plateforme cumulé = abonnements + marge sur paiements.</summary>
+        /// <summary>
+        /// Frais de décaissement cumulés, payés sur la réserve. Contrepartie
+        /// directe de <see cref="PaymentMarginTotalFcfa"/> : sur une plateforme
+        /// à l'équilibre, les deux se compensent presque exactement.
+        /// </summary>
+        public long PayoutFeesTotalFcfa { get; set; }
+
+        /// <summary>
+        /// Recette cumulée de la plateforme.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Les frais de décaissement en sont DÉDUITS</b>, depuis le
+        /// 2026-09-13. Avant, ce chiffre valait « abonnements + marge sur
+        /// paiements » — or cette « marge » n'est pas un gain : c'est la
+        /// provision du retrait à venir, qui repart dès que l'école retire.
+        /// L'additionner sans en retrancher la sortie gonflait le chiffre
+        /// d'affaires montré à un investisseur d'un montant qui n'a jamais
+        /// appartenu à la plateforme.
+        /// </remarks>
         public long GrossRevenueTotalFcfa { get; set; }
     }
 

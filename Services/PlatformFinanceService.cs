@@ -604,8 +604,15 @@ namespace Idara.API.Services
             };
             kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0
                 ? kpis.MrrActiveFcfa / kpis.SchoolsActivePaying : 0;
+            // Frais de décaissement cumulés (retraits ÉCOLE réglés) : la
+            // contrepartie de PaymentMarginTotalFcfa, qui n'est pas un gain mais
+            // une provision. Les additionner sans les retrancher gonflerait le
+            // CA d'un montant qui n'a jamais appartenu à la plateforme.
+            kpis.PayoutFeesTotalFcfa = payoutFees.Sum(f => f.FeesFcfa);
             kpis.GrossRevenueTotalFcfa =
-                kpis.SubscriptionRevenueTotalFcfa + kpis.PaymentMarginTotalFcfa;
+                kpis.SubscriptionRevenueTotalFcfa
+                + kpis.PaymentMarginTotalFcfa
+                - kpis.PayoutFeesTotalFcfa;
 
             return new InvestorMetricsDto
             {
