@@ -109,7 +109,12 @@ namespace Idara.API.Services
             {
                 case PaymentStatus.Completed:
                     payment.PaidAt = eventTime?.ToUtcSafe() ?? DateTime.UtcNow;
-                    CreditWalletAndInvoice(payment, wallet);
+                    // Les commissions du prestataire, pour provisionner le
+                    // retrait à venir en mode « l'école paie les frais ».
+                    // Lues ICI, sous le verrou : le règlement doit refléter les
+                    // taux en vigueur au moment du crédit, pas ceux d'un cache.
+                    var platform = await _context.GetPlatformSettingsAsync(ct);
+                    CreditWalletAndInvoice(payment, wallet, platform.Fees);
                     break;
 
                 case PaymentStatus.Failed:
@@ -139,7 +144,8 @@ namespace Idara.API.Services
         /// verrouillé (FOR UPDATE) par l'appelant — on ne re-verrouille pas.
         /// Logique identique au webhook historique (§82 wallet / §106 invoice).
         /// </summary>
-        private void CreditWalletAndInvoice(Payment payment, SchoolWallet? wallet)
+        private void CreditWalletAndInvoice(
+            Payment payment, SchoolWallet? wallet, Common.Utilities.ProviderFees fees)
         {
             // 🔴 ACHAT DE PAGES DE LECTURE — le seul paiement entrant qui ne
             // doit RIEN créditer.
@@ -162,17 +168,50 @@ namespace Idara.API.Services
 
             var netAmount = payment.NetCreditedFcfa;
 
-            // FeesPayer=Parent : créditer le montant CIBLE — l'école reçoit
-            // exactement ce qu'elle a fixé, la majoration au payeur ayant déjà
-            // couvert le prélèvement d'entrée ET celui du retrait à venir
-            // (PlatformSettings.ParentFeeMultiplier). FeesPayer=School :
-            // créditer le NET (l'école absorbe les frais d'entrée ; le frais de
-            // retrait, lui, reste à la charge de la plateforme — c'est le
-            // chantier §145, distinct). Fallback net pour les anciens Payments
-            // sans TargetAmountFcfa. (Cf. §82.)
-            var amountToCredit = payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0
-                ? payment.TargetAmountFcfa
-                : netAmount;
+            // ================================================================
+            // Combien créditer ? La règle diffère selon qui porte les frais,
+            // mais elle vise la MÊME chose dans les deux cas : que le solde
+            // affiché soit exactement ce que l'école peut sortir.
+            //
+            //   • FeesPayer = Parent → le montant CIBLE. Le payeur a déjà été
+            //     majoré de quoi couvrir l'entrée ET le retrait à venir
+            //     (ProviderFees.ChargeFor), donc l'école reçoit son montant
+            //     exact et le sortira en entier.
+            //
+            //   • FeesPayer = School → le net d'entrée DIMINUÉ de la provision
+            //     de retrait (ProviderFees.CreditableFrom). Créditer le net
+            //     entier paraissait généreux et ne l'était pas : sortir ce net
+            //     coûte le net PLUS le frais de décaissement, que personne
+            //     n'avait provisionné — la plateforme le payait (55 429 F sur
+            //     quatre mois) pour des écoles qui avaient justement choisi
+            //     d'absorber les frais. Le solde affiché était un montant que
+            //     l'école ne pouvait pas réellement retirer.
+            // ================================================================
+            long amountToCredit;
+            if (payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0)
+            {
+                amountToCredit = payment.TargetAmountFcfa;
+            }
+            else if (fees.IsConfigured && netAmount > 0)
+            {
+                amountToCredit = fees.CreditableFrom(netAmount);
+            }
+            else
+            {
+                // 🔴 Repli, et il n'y en a pas d'autre : l'argent est DÉJÀ
+                // encaissé. Refuser ici laisserait un paiement réglé sans
+                // crédit, donc une famille débitée et une école non servie. On
+                // crédite le net (ancien comportement) et on le dit assez fort
+                // pour que ça se retrouve dans le journal.
+                amountToCredit = netAmount;
+                if (!fees.IsConfigured)
+                {
+                    _logger.LogWarning(
+                        "[payin-settle] Payment.Id={Id} crédité du NET sans provision de retrait "
+                        + "— les commissions du prestataire ne sont pas renseignées. "
+                        + "La plateforme avancera le frais de décaissement.", payment.Id);
+                }
+            }
 
             if (amountToCredit <= 0)
             {
@@ -190,6 +229,10 @@ namespace Idara.API.Services
                 throw new InvalidOperationException(
                     $"SchoolWallet manquant pour SchoolId={payment.SchoolId} (Payment.Id={payment.Id})");
             }
+
+            // Ce qui a été crédité est ÉCRIT, pas déduit : les comptes du passé
+            // ne doivent pas bouger quand le prestataire change sa grille.
+            payment.WalletCreditedFcfa = amountToCredit;
 
             wallet.AvailableBalance += amountToCredit;
             wallet.TotalCreditedLifetime += amountToCredit;

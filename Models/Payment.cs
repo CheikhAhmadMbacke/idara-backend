@@ -100,6 +100,27 @@ namespace Idara.API.Models
         /// </summary>
         public long TargetAmountFcfa { get; set; }
 
+        /// <summary>
+        /// Ce qui a RÉELLEMENT été crédité au wallet de l'école lors du
+        /// règlement. 0 si ce paiement ne crédite aucun wallet (espèces → caisse,
+        /// achat de pages → recette plateforme).
+        /// </summary>
+        /// <remarks>
+        /// <para>🔑 <b>Pourquoi le stocker plutôt que le recalculer.</b> La part
+        /// de la plateforme est <c>NetCreditedFcfa − WalletCreditedFcfa</c>, et
+        /// elle entre dans l'identité <c>R = D + P</c> (§112). La recalculer a
+        /// posteriori reviendrait à l'évaluer avec les taux <b>d'aujourd'hui</b>
+        /// alors que le crédit a eu lieu sous les taux <b>de l'époque</b> — les
+        /// comptes du passé se mettraient à bouger à chaque changement de grille
+        /// du prestataire. Un montant qui a été écrit se lit, il ne se déduit
+        /// pas.</para>
+        ///
+        /// <para>Cette colonne unifie aussi les deux modes : Parent crédite la
+        /// cible, School crédite le net diminué de la provision de retrait, et
+        /// dans les deux cas la marge plateforme se lit de la même façon.</para>
+        /// </remarks>
+        public long WalletCreditedFcfa { get; set; }
+
         public PaymentOperator Operator { get; set; }
 
         /// <summary>Snapshot de la politique école au moment de l'init (peut changer après).</summary>

@@ -213,6 +213,71 @@ namespace Idara.API.Common.Utilities
         }
 
         /// <summary>
+        /// 🔑 <b>Le symétrique de <see cref="ChargeFor"/>, pour le mode « l'école
+        /// paie les frais ».</b> Ce qu'on peut créditer au wallet à partir de
+        /// <paramref name="netReceivedFcfa"/> — le net réellement entré en
+        /// réserve — pour que l'école puisse le <b>sortir en entier</b>.
+        /// </summary>
+        /// <remarks>
+        /// <para>On cherche le plus grand entier <c>W</c> vérifiant :</para>
+        /// <code>W + PayoutFeesFor(W) ≤ netReceivedFcfa</code>
+        ///
+        /// <para><b>Pourquoi ce n'est pas le net.</b> Créditer le net entier
+        /// paraît généreux et ne l'est pas : sortir ce net coûte le net
+        /// <b>plus</b> le frais de décaissement (<c>on_top</c>), que personne
+        /// n'a provisionné. La plateforme le payait — <b>55 429 F sur quatre
+        /// mois</b> — pour des écoles qui avaient justement choisi d'absorber
+        /// les frais elles-mêmes. Le solde affiché était donc un montant que
+        /// l'école ne pouvait pas réellement retirer.</para>
+        ///
+        /// <para>Avec cette borne, <b>le solde affiché est exactement ce qui
+        /// peut sortir</b>, et l'écart reste en réserve pour payer le retrait.
+        /// L'école ne perd rien : elle absorbe le frais de sortie, comme elle
+        /// absorbait déjà celui d'entrée. C'est le sens même du mode « l'école
+        /// paie les frais ».</para>
+        ///
+        /// <para>⚠️ Même précaution que <see cref="ChargeFor"/> : la fonction
+        /// <c>W + frais(W)</c> n'est pas strictement croissante (les arrondis se
+        /// croisent), donc on encadre puis on balaie pour trouver le vrai
+        /// maximum — sinon on retient un franc de trop à l'école.</para>
+        /// </remarks>
+        public long CreditableFrom(long netReceivedFcfa)
+        {
+            EnsureConfigured();
+            if (netReceivedFcfa <= 0) return 0;
+
+            // Estimation continue, puis encadrement — l'estimation ne décide
+            // jamais, elle ne fait que rapprocher.
+            var credited = (long)Math.Floor(netReceivedFcfa / (1.0 + PayoutOperatorPercentHt * Vat / 100.0));
+            if (credited < 0) credited = 0;
+            if (credited > netReceivedFcfa) credited = netReceivedFcfa;
+
+            var guard = 0;
+            while (credited > 0 && credited + PayoutFeesFor(credited) > netReceivedFcfa)
+            {
+                credited--;
+                if (++guard > MaxIterations) break;
+            }
+            while (credited + 1 <= netReceivedFcfa
+                   && (credited + 1) + PayoutFeesFor(credited + 1) <= netReceivedFcfa)
+            {
+                credited++;
+                if (++guard > MaxIterations) break;
+            }
+
+            // Remontée : le premier W qui « tient » n'est pas toujours le plus
+            // grand, pour la même raison de non-monotonie.
+            var best = credited;
+            for (var step = 1; step <= SearchWindow; step++)
+            {
+                var candidate = credited + step;
+                if (candidate > netReceivedFcfa) break;
+                if (candidate + PayoutFeesFor(candidate) <= netReceivedFcfa) best = candidate;
+            }
+            return best;
+        }
+
+        /// <summary>
         /// Majoration effective d'une cible donnée, en %. <b>Pour l'AFFICHAGE
         /// seulement</b> — elle varie d'un montant à l'autre.
         /// </summary>

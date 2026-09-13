@@ -47,21 +47,36 @@ namespace Idara.API.Services
                 .SumAsync(w => w.AvailableBalance + w.PendingBalance, ct);
 
             // --- P : gains plateforme, recalculés depuis les sources ---
-            // Excédent de majoration : en mode Parent, l'école est créditée du montant CIBLE
-            // et la réserve reçoit le net SenePay (> cible) ; l'écart est le gain
-            // plateforme. En mode School, l'école est créditée du net → 0 (le
-            // filtre FeesPayer=Parent l'exclut donc du calcul).
-            // 🔴 Les encaissements en ESPÈCES sont exclus : cet argent n'est jamais
-            // passé par la réserve du prestataire, il est dans la caisse du daara.
-            // Leur écart net−cible vaut 0 aujourd'hui, donc l'exclusion ne change
-            // aucun chiffre — mais elle rend la règle vraie par construction plutôt
-            // que par coïncidence, et protège R = D + P d'une évolution future.
+            //
+            // Écart entre ce qui est ENTRÉ en réserve et ce qui a été CRÉDITÉ à
+            // l'école. Une seule formule pour les deux modes depuis le
+            // 2026-09-13, parce qu'une seule colonne dit le vrai :
+            //
+            //   • FeesPayer = Parent → crédité = la cible ; l'écart est la part
+            //     de la majoration qui couvre le retrait à venir.
+            //   • FeesPayer = School → crédité = le net moins la provision de
+            //     retrait ; l'écart EST cette provision.
+            //
+            // 🔑 Dans les deux cas, cet écart n'est PAS un bénéfice : c'est de
+            // quoi payer le décaissement que l'école n'a pas encore demandé. Il
+            // redescend quand elle retire (voir `schoolPayoutFees` plus bas).
+            // Sur une plateforme à l'équilibre, les deux se compensent.
+            //
+            // 🔴 On lit `WalletCreditedFcfa`, on ne le recalcule pas : le crédit
+            // a eu lieu sous les taux de l'époque, et recalculer ferait bouger
+            // les comptes du passé à chaque changement de grille.
+            //
+            // 🔴 Deux exclusions, et elles sont nécessaires :
+            //   • les ESPÈCES — cet argent n'est jamais passé par la réserve, il
+            //     est dans la caisse du daara ;
+            //   • les achats de PAGES — ils ne créditent aucun wallet, donc leur
+            //     écart vaut le net entier, déjà compté dans `ocrPageRevenue`.
+            //     Sans ce filtre, la recette serait comptée deux fois.
             var surplus8 = await _db.Payments
                 .Where(p => p.Status == PaymentStatus.Completed
                             && p.Operator != PaymentOperator.Cash
-                            && p.FeesPayer == FeesPayer.Parent
-                            && p.TargetAmountFcfa > 0)
-                .SumAsync(p => p.NetCreditedFcfa - p.TargetAmountFcfa, ct);
+                            && p.Purpose != PaymentPurpose.OcrPages)
+                .SumAsync(p => p.NetCreditedFcfa - p.WalletCreditedFcfa, ct);
 
             // Revenus d'abonnement encaissés (débités du wallet école → gain plateforme).
             var subscriptionRevenue = await _db.SubscriptionInvoices
@@ -441,6 +456,7 @@ namespace Idara.API.Services
                     p.FeesPayer,
                     p.TargetAmountFcfa,
                     p.NetCreditedFcfa,
+                    p.WalletCreditedFcfa,
                     p.Purpose
                 })
                 .ToListAsync(ct);
@@ -505,11 +521,13 @@ namespace Idara.API.Services
                         .Where(p => p.Operator != PaymentOperator.Cash && In(p.When)).ToList();
                     var cash = famille
                         .Where(p => p.Operator == PaymentOperator.Cash && In(p.When)).ToList();
-                    // Marge sur paiements = excédent net − cible des payins en
-                    // mode FeesPayer=Parent — MÊME formule que P (§112).
-                    var margin = online
-                        .Where(p => p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0)
-                        .Sum(p => p.NetCreditedFcfa - p.TargetAmountFcfa);
+                    // Marge sur paiements = écart entré en réserve − crédité à
+                    // l'école — MÊME formule que P (§112), les deux modes
+                    // confondus depuis le 2026-09-13.
+                    // ⚠️ Ce n'est pas un bénéfice : c'est la provision du
+                    // décaissement à venir, que `fees` ci-dessous fait
+                    // redescendre quand l'école retire.
+                    var margin = online.Sum(p => p.NetCreditedFcfa - p.WalletCreditedFcfa);
                     var subRev = subInvoices.Where(i => In(i.When)).Sum(i => i.AmountFcfa);
                     // Pages de lecture vendues : le net encaissé, en entier —
                     // même règle que dans P.
@@ -575,9 +593,14 @@ namespace Idara.API.Services
                 GmvCashTotalFcfa = payments
                     .Where(p => p.Operator == PaymentOperator.Cash).Sum(p => p.AmountFcfa),
                 SubscriptionRevenueTotalFcfa = subInvoices.Sum(i => i.AmountFcfa),
+                // Même formule que P : entré en réserve − crédité à l'école.
+                // ⚠️ Les achats de PAGES en sont exclus — ils ne créditent aucun
+                // wallet, donc leur écart vaut le net entier, déjà porté par
+                // OcrPageRevenueFcfa. Sans ce filtre, GrossRevenueTotalFcfa
+                // compterait la recette deux fois.
                 PaymentMarginTotalFcfa = onlineAll
-                    .Where(p => p.FeesPayer == FeesPayer.Parent && p.TargetAmountFcfa > 0)
-                    .Sum(p => p.NetCreditedFcfa - p.TargetAmountFcfa),
+                    .Where(p => p.Purpose != PaymentPurpose.OcrPages)
+                    .Sum(p => p.NetCreditedFcfa - p.WalletCreditedFcfa),
             };
             kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0
                 ? kpis.MrrActiveFcfa / kpis.SchoolsActivePaying : 0;
