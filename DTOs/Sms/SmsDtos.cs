@@ -83,6 +83,9 @@ namespace Idara.API.DTOs.Sms
         public long MonthlyFeeHtFcfa { get; set; }
         public double VatPercent { get; set; }
 
+        /// <summary>RUTEL, appliquée au HT AVANT la TVA (les deux se composent).</summary>
+        public double RutelPercent { get; set; }
+
         /// <summary>Consommation + redevance, hors taxes.</summary>
         public double ExpectedHtFcfa { get; set; }
 
@@ -177,6 +180,7 @@ namespace Idara.API.DTOs.Sms
         public long InternationalPriceCentimes { get; set; }
         public long MonthlyFeeHtFcfa { get; set; }
         public double VatPercent { get; set; }
+        public double RutelPercent { get; set; }
 
         public long SoftDailyCapFcfa { get; set; }
         public long SoftMonthlyCapFcfa { get; set; }
@@ -211,6 +215,7 @@ namespace Idara.API.DTOs.Sms
         [Range(0, 1_000_000)] public long InternationalPriceCentimes { get; set; }
         [Range(0, 10_000_000)] public long MonthlyFeeHtFcfa { get; set; }
         [Range(0, 100)] public double VatPercent { get; set; }
+        [Range(0, 100)] public double RutelPercent { get; set; }
 
         [Range(0, 100_000_000)] public long SoftDailyCapFcfa { get; set; }
         [Range(0, 100_000_000)] public long SoftMonthlyCapFcfa { get; set; }

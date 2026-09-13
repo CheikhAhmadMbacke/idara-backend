@@ -24,13 +24,23 @@
  *
  * CE QUI EST VÉRIFIÉ
  *   Tout `AddColumn` visant une table de réglages avec un défaut nul
- *   (0, 0L, 0m, 0.0, false) doit porter une DÉROGATION EXPLICITE :
+ *   (0, 0L, 0m, 0.0, false) doit faire l'une de ces deux choses :
  *
- *       // defaut-zero-voulu: <raison en clair>
+ *     • REPOSER la valeur dans le même `Up()`, par un
+ *       `migrationBuilder.Sql("UPDATE … SET \"<Colonne>\" = …")` qui NOMME la
+ *       colonne. C'est le geste normal quand le zéro n'est pas la bonne
+ *       valeur — le cas de loin le plus fréquent ;
  *
- *   placée dans le fichier de migration. Écrire la raison oblige à se demander
- *   « que vaudra cette colonne pour la ligne déjà en base ? » — c'est
- *   exactement la question qui n'a pas été posée cinq fois.
+ *     • ou porter une DÉROGATION EXPLICITE, quand zéro EST la valeur voulue :
+ *
+ *           // defaut-zero-voulu: <raison en clair>
+ *
+ *   Dans les deux cas il faut avoir répondu à « que vaudra cette colonne pour
+ *   la ligne déjà en base ? » — exactement la question qui n'a pas été posée
+ *   cinq fois.
+ *
+ *   ⚠️ Le `Sql` doit mentionner LA colonne : dans une migration qui en ajoute
+ *   deux, reposer la première ne couvre pas la seconde.
  *
  *   Et, depuis le 2026-09-13, une SECONDE forme du même piège : tout
  *   `RenameColumn` visant une table de réglages. Un renommage CONSERVE la
@@ -124,6 +134,26 @@ function champ(bloc, nom) {
   return m ? m[1].trim() : null;
 }
 
+/**
+ * Vrai si le corps de `Up()` contient un `migrationBuilder.Sql(…)` qui NOMME
+ * la colonne donnée — la preuve que sa valeur est reposée après l'ajout, et
+ * qu'aucune ligne préexistante ne restera au zéro d'EF.
+ *
+ * On exige le nom de la colonne, et pas seulement la présence d'un `Sql(` :
+ * une migration qui ajoute deux colonnes et n'en repose qu'une doit encore
+ * échouer sur la seconde.
+ */
+function reposeCetteColonne(source, colonne) {
+  if (!colonne || colonne === '?') return false;
+  for (const m of source.matchAll(/migrationBuilder\.Sql\(/g)) {
+    // Fenêtre généreuse : un UPDATE tient rarement en moins, et le découpage
+    // exact des parenthèses coûterait un analyseur C# pour rien.
+    const fenetre = source.slice(m.index, m.index + 600);
+    if (fenetre.includes(colonne)) return true;
+  }
+  return false;
+}
+
 function main() {
   if (!fs.existsSync(migrationsDir)) {
     console.error(`Dossier introuvable : ${migrationsDir}`);
@@ -174,6 +204,15 @@ function main() {
 
       if (herite) continue;
       if (derogation) continue;
+      // Une colonne ajoutée à zéro PUIS reposée par un UPDATE qui la NOMME
+      // n'est pas en défaut : c'est le geste correct, et c'est même celui que
+      // le §254 réclame. Le contrôle vise la ligne qui hérite d'un zéro que
+      // personne ne corrige — pas le fait d'écrire `defaultValue: 0`, qu'EF
+      // génère toujours et qu'on ne peut pas lui faire écrire autrement.
+      // ⚠️ Le Sql doit mentionner CETTE colonne : un UPDATE portant sur une
+      // autre colonne du même fichier ne prouve rien. C'est la seule chose qui
+      // distingue ce contrôle d'une simple présence de `Sql(`.
+      if (reposeCetteColonne(source, colonne)) continue;
 
       enDefaut++;
       console.log(

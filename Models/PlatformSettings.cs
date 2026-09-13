@@ -230,6 +230,24 @@ namespace Idara.API.Models
         /// total TTC à un total TTC.</summary>
         public double SmsVatPercent { get; set; } = 18.0;
 
+        /// <summary>
+        /// RUTEL — redevance d'utilisation des télécommunications, 5 % au Sénégal.
+        /// Elle s'applique au HT <b>avant</b> la TVA, et non à côté d'elle : le
+        /// vrai multiplicateur est 1,05 × 1,18 = <b>1,239</b>, pas 1,18.
+        ///
+        /// <para>Vérifié à l'unité près sur la facture d'août (n° 202608A-094574) :
+        /// 10 509 × 1,05 = 11 035, puis × 1,18 = 13 021 — net payé 13 000 après
+        /// arrondis. Sans elle, l'écran de comparaison sous-estimait CHAQUE
+        /// facture de 5 % et affichait un écart qu'on aurait pris pour des SMS
+        /// partis hors d'Idara.</para>
+        ///
+        /// <para>⚠️ Contrairement aux taux de frais de paiement (§256), un défaut
+        /// est ici légitime : couper les SMS parce qu'un taux de taxe n'a pas été
+        /// saisi serait pire que de les envoyer. Ce champ ne décide de rien — il
+        /// ne sert qu'à comparer notre total à celui de l'opérateur.</para>
+        /// </summary>
+        public double SmsRutelPercent { get; set; } = 5.0;
+
         // ----- Coupe-circuit global (deux paliers, décision 2026-09-01) -----
 
         /// <summary>

@@ -88,11 +88,16 @@ namespace Idara.API.Controllers
                 ConsumptionHtFcfa = (await sent.SumAsync(n => (long?)n.CostCentimes, ct) ?? 0) / 100.0,
                 MonthlyFeeHtFcfa = p.SmsMonthlyFeeHtFcfa,
                 VatPercent = p.SmsVatPercent,
+                RutelPercent = p.SmsRutelPercent,
             };
 
-            var vat = 1 + p.SmsVatPercent / 100.0;
+            // Les deux taxes se COMPOSENT, elles ne s'additionnent pas : la RUTEL
+            // frappe le HT, puis la TVA frappe le total RUTEL comprise. D'où
+            // 1,05 × 1,18 = 1,239 et non 1,23. Facture d'août vérifiée à l'unité
+            // près : 10 509 → 11 035 → 13 021 (13 000 payés après arrondis).
+            var taxes = (1 + p.SmsRutelPercent / 100.0) * (1 + p.SmsVatPercent / 100.0);
             totals.ExpectedHtFcfa = totals.ConsumptionHtFcfa + p.SmsMonthlyFeeHtFcfa;
-            totals.ExpectedTtcFcfa = totals.ExpectedHtFcfa * vat;
+            totals.ExpectedTtcFcfa = totals.ExpectedHtFcfa * taxes;
             var invoice = await _context.SmsProviderInvoices.AsNoTracking()
                 .FirstOrDefaultAsync(i => i.Year == y && i.Month == m, ct);
             if (invoice != null)
@@ -192,7 +197,7 @@ namespace Idara.API.Controllers
             totals.ConsumptionFixed160HtFcfa =
                 fixedLots.Sum(x => x.Lots * p.SmsUnitPriceCentimes(x.Network)) / 100.0;
             totals.ExpectedTtcFixed160Fcfa =
-                (totals.ConsumptionFixed160HtFcfa + p.SmsMonthlyFeeHtFcfa) * vat;
+                (totals.ConsumptionFixed160HtFcfa + p.SmsMonthlyFeeHtFcfa) * taxes;
 
             // Les blocages sont ventilés par MOTIF, et non fondus dans les
             // répartitions ci-dessus : un envoi bloqué n'a pas de coût, il a une
@@ -333,6 +338,7 @@ namespace Idara.API.Controllers
             s.SmsInternationalPriceCentimes = dto.InternationalPriceCentimes;
             s.SmsMonthlyFeeHtFcfa = dto.MonthlyFeeHtFcfa;
             s.SmsVatPercent = dto.VatPercent;
+            s.SmsRutelPercent = dto.RutelPercent;
             s.SmsSoftDailyCapFcfa = dto.SoftDailyCapFcfa;
             s.SmsSoftMonthlyCapFcfa = dto.SoftMonthlyCapFcfa;
             s.SmsHardDailyCapFcfa = dto.HardDailyCapFcfa;
@@ -633,6 +639,7 @@ namespace Idara.API.Controllers
             InternationalPriceCentimes = s.SmsInternationalPriceCentimes,
             MonthlyFeeHtFcfa = s.SmsMonthlyFeeHtFcfa,
             VatPercent = s.SmsVatPercent,
+            RutelPercent = s.SmsRutelPercent,
             SoftDailyCapFcfa = s.SmsSoftDailyCapFcfa,
             SoftMonthlyCapFcfa = s.SmsSoftMonthlyCapFcfa,
             HardDailyCapFcfa = s.SmsHardDailyCapFcfa,
