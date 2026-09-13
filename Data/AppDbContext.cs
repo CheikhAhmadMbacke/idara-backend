@@ -95,6 +95,7 @@ namespace Idara.API.Data
 
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
+        public DbSet<AuthCodeRequest> AuthCodeRequests { get; set; }
         public DbSet<PushDeviceToken> PushDeviceTokens { get; set; }
 
         // ----- Écritures rejouables depuis la file d'attente hors ligne -----
@@ -247,6 +248,20 @@ namespace Idara.API.Data
                 .HasIndex(n => new { n.SchoolId, n.CreatedAt });
             modelBuilder.Entity<NotificationLog>()
                 .HasIndex(n => new { n.Recipient, n.CreatedAt });
+
+            // --- AuthCodeRequest : les trois index des garde-fous ---
+            // Mêmes raisons que pour NotificationLog ci-dessus : cette table est
+            // lue AVANT CHAQUE envoi de code, sur trois axes différents. Sans
+            // ces index, le dispositif anti-abus balaierait la table entière à
+            // chaque inscription et deviendrait lui-même la panne.
+            modelBuilder.Entity<AuthCodeRequest>()
+                .HasIndex(a => new { a.IpHash, a.CreatedAt });
+            modelBuilder.Entity<AuthCodeRequest>()
+                .HasIndex(a => new { a.Recipient, a.CreatedAt });
+            // Le taux de vérification ne regarde que les envois SMS RÉELLEMENT
+            // partis, sur une fenêtre d'une heure.
+            modelBuilder.Entity<AuthCodeRequest>()
+                .HasIndex(a => new { a.IsSms, a.CreatedAt });
 
             // --- SmsProviderInvoice : une seule facture par mois ---
             // L'unicité n'est pas cosmétique : deux lignes pour le même mois

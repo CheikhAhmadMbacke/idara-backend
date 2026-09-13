@@ -6,6 +6,7 @@ using Idara.API.Data;
 using Idara.API.Options;
 using Idara.API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.EntityFrameworkCore;
@@ -148,6 +149,10 @@ builder.Services.AddSingleton<Idara.API.Common.Utilities.IPdfFileNamer,
     Idara.API.Common.Utilities.PdfFileNamer>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
+// Garde-fous des codes d'authentification (anti « SMS pumping ») — point de
+// passage unique de l'inscription par numéro et de la réinitialisation.
+builder.Services.AddScoped<Idara.API.Services.Auth.IAuthCodeThrottle,
+                           Idara.API.Services.Auth.AuthCodeThrottle>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
 // Création d'un compte par une école : source unique, partagée par le
@@ -376,7 +381,38 @@ using (var scope = app.Services.CreateScope())
 }
 
 // ---------- Pipeline HTTP ----------
-// Code de corrélation en PREMIER : le middleware d'exceptions juste en dessous
+// ========================================================================
+// Adresse RÉELLE du client — avant TOUT le reste, y compris la journalisation
+// des requêtes, qui l'écrit.
+//
+// 🔴 L'API tourne derrière nginx. Sans ce middleware, chaque requête arrive
+// avec l'adresse du proxy : la MÊME pour tout le monde. Un compteur par
+// adresse serait alors deux fois faux — il ne freinerait aucun robot, et il
+// bloquerait tous les visiteurs ensemble dès que l'un d'eux atteint la limite.
+// C'est le préalable des garde-fous anti « SMS pumping » de l'inscription.
+//
+// 🔒 KnownProxies est la partie qui SÉCURISE le dispositif, et l'omettre le
+// vide entièrement : ASP.NET n'accepte alors l'en-tête que de sauts déclarés
+// de confiance — ici nginx, en local. Sans cette restriction, n'importe qui
+// enverrait son propre X-Forwarded-For et se choisirait une adresse neuve à
+// chaque appel : la limite par adresse deviendrait décorative.
+// ForwardLimit = 1 pour la même raison : on ne remonte QU'UN saut, celui de
+// nginx, jamais une chaîne d'en-têtes fabriquée par l'appelant.
+// ========================================================================
+var forwardedHeaders = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    ForwardLimit = 1,
+};
+// Vide la liste par défaut (::1 / 127.0.0.1 y sont déjà, mais on est explicite :
+// cette liste est la frontière de confiance, elle doit se lire d'un coup d'œil).
+forwardedHeaders.KnownProxies.Clear();
+forwardedHeaders.KnownNetworks.Clear();
+forwardedHeaders.KnownProxies.Add(System.Net.IPAddress.Loopback);
+forwardedHeaders.KnownProxies.Add(System.Net.IPAddress.IPv6Loopback);
+app.UseForwardedHeaders(forwardedHeaders);
+
+// Code de corrélation ensuite : le middleware d'exceptions juste en dessous
 // doit pouvoir l'annoncer au client quand tout casse. Une réponse d'erreur sans
 // code, c'est le retour à « ça ne marche pas ».
 app.UseMiddleware<TraceContextMiddleware>();

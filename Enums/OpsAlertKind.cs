@@ -48,5 +48,15 @@ namespace Idara.API.Enums
         /// <summary>Anomalie comptable de décaissement (double dépense corrigée,
         /// réconciliation rompue, correction impossible).</summary>
         PayoutAnomaly = 13,
+
+        // ===== Codes d'authentification (anti « SMS pumping ») =====
+
+        /// <summary>
+        /// Le canal SMS des codes s'est fermé de lui-même : bourse quotidienne
+        /// épuisée, ou taux de vérification effondré. Le second cas est le plus
+        /// parlant — des codes partent et personne ne les saisit, ce qui est la
+        /// signature d'un robot qui tire des numéros au hasard.
+        /// </summary>
+        AuthCodeChannelClosed = 20,
     }
 }

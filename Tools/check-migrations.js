@@ -146,9 +146,15 @@ function champ(bloc, nom) {
 function reposeCetteColonne(source, colonne) {
   if (!colonne || colonne === '?') return false;
   for (const m of source.matchAll(/migrationBuilder\.Sql\(/g)) {
-    // Fenêtre généreuse : un UPDATE tient rarement en moins, et le découpage
-    // exact des parenthèses coûterait un analyseur C# pour rien.
-    const fenetre = source.slice(m.index, m.index + 600);
+    // L'appel va jusqu'au prochain `migrationBuilder.` (ou la fin du Up).
+    // ⚠️ Une fenêtre de taille FIXE ne marche pas : un seul UPDATE peut reposer
+    // dix colonnes et dépasser n'importe quelle borne qu'on se donne. C'est
+    // arrivé dès le deuxième usage — les neuf réglages anti-pumping, dont la
+    // dernière colonne tombait juste après la limite, et le contrôle criait au
+    // défaut sur une colonne parfaitement reposée.
+    const suite = source.slice(m.index + 1);
+    const prochain = suite.indexOf('migrationBuilder.');
+    const fenetre = prochain === -1 ? suite : suite.slice(0, prochain);
     if (fenetre.includes(colonne)) return true;
   }
   return false;

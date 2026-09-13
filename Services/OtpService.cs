@@ -76,13 +76,21 @@ namespace Idara.API.Services
             });
             await _context.SaveChangesAsync();
 
-            var platform = await _context.GetPlatformSettingsAsync();
             await _notif.SendSmsAsync(new NotificationSmsRequest(
                 UserId: userId,
                 RawPhone: phoneE164,
                 PreferredLanguage: preferredLanguage,
                 Message: NotificationTemplates.OtpCode(otpCode),
-                Bilingual: platform.SmsBilingual,
+                // 🔴 MONO-LANGUE, quoi que dise le réglage SmsBilingual.
+                // Mesuré : français seul 79 caractères en GSM-7 = 1 segment ·
+                // arabe seul 54 caractères en UCS-2 = 1 segment AUSSI · les deux
+                // ensemble 136 caractères en UCS-2 = 3 SEGMENTS. Un code bilingue
+                // coûterait donc trois fois le prix sans rien apporter : son
+                // destinataire n'a qu'une langue, et elle est connue.
+                // ⚠️ Mono-langue ne veut PAS dire « en français » : le message
+                // part dans la langue de l'utilisateur — l'arabe ne coûte pas un
+                // centime de plus que le français.
+                Bilingual: false,
                 TemplateCode: "OTP",
                 RelatedEntityId: null,
                 TriggerSource: "api:auth/request-code"));

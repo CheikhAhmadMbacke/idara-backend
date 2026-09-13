@@ -248,6 +248,79 @@ namespace Idara.API.Models
         /// </summary>
         public double SmsRutelPercent { get; set; } = 5.0;
 
+        // ================================================================
+        // Garde-fous des codes d'authentification (anti « SMS pumping »)
+        // ----------------------------------------------------------------
+        // Deux portes envoient un SMS à la demande d'un inconnu : la création
+        // de compte par numéro, et la réinitialisation du mot de passe. Le
+        // trafic honnête y est minuscule — quelques inscriptions par mois — et
+        // c'est cette asymétrie qui permet d'être très sévère sans jamais
+        // gêner un vrai directeur.
+        // ================================================================
+
+        /// <summary>
+        /// Préfixes mobiles réellement attribués au Sénégal (70, 75, 76, 77, 78).
+        /// 71, 72, 73, 74 et 79 n'existent chez aucun opérateur : les refuser
+        /// divise par deux l'espace de tir d'un robot.
+        ///
+        /// <para>⚠️ En réglage, jamais en dur : l'ARTP peut en ouvrir un demain.
+        /// Vide = aucun contrôle de préfixe (on n'enferme personne dehors sur un
+        /// réglage oublié).</para>
+        ///
+        /// <para>⚠️ Ne vaut que pour les parcours PUBLICS. L'enregistrement d'un
+        /// responsable d'élève continue d'accepter tout mobile en 7 — durcir
+        /// partout refuserait des numéros déjà en base.</para>
+        /// </summary>
+        public string SenegalMobilePrefixes { get; set; } = "70,75,76,77,78";
+
+        /// <summary>
+        /// Bourse quotidienne des SMS d'authentification, en FCFA — <b>commune
+        /// aux deux portes</b> : même budget, même risque, un seul chiffre à régler.
+        ///
+        /// <para>🔑 C'est la barrière qui <b>borne le dégât</b>, et la seule qui
+        /// tienne contre une attaque venue de centaines d'adresses. Sans elle,
+        /// une attaque consomme le budget SMS commun et éteint <b>tout</b> —
+        /// reçus de paiement, identifiants, rappels — pour la journée entière.
+        /// Avec elle, elle ne ferme que l'envoi de codes ; l'email reste ouvert.</para>
+        ///
+        /// <para>150 F ≈ 23 SMS/jour, soit environ trente fois le trafic réel.</para>
+        /// </summary>
+        public long SmsAuthDailyCapFcfa { get; set; } = 150;
+
+        /// <summary>Numéros distincts qu'une même adresse peut viser en une heure.</summary>
+        public int AuthCodeMaxPerIpPerHour { get; set; } = 3;
+
+        /// <summary>Numéros distincts qu'une même adresse peut viser en un jour.</summary>
+        public int AuthCodeMaxPerIpPerDay { get; set; } = 5;
+
+        /// <summary>Délai minimal entre deux codes pour un même destinataire (secondes).</summary>
+        public int AuthCodeMinSecondsBetween { get; set; } = 120;
+
+        /// <summary>Codes maximum pour un même destinataire sur 24 h.</summary>
+        public int AuthCodeMaxPerRecipientPerDay { get; set; } = 3;
+
+        /// <summary>Codes maximum pour un même destinataire sur 30 jours.</summary>
+        public int AuthCodeMaxPerRecipientPerMonth { get; set; } = 5;
+
+        /// <summary>
+        /// Taux de vérification minimal, en pourcentage, sur la dernière heure.
+        ///
+        /// <para>🔑 <b>Le seul signal qui mesure l'intention plutôt que le
+        /// volume.</b> Un vrai directeur saisit le code qu'il reçoit ; un robot
+        /// qui tire des numéros au hasard ne le saisit jamais — il n'a pas les
+        /// téléphones. Sous ce seuil, l'envoi de codes par SMS se ferme seul et
+        /// l'alerte part. Un vrai pic d'inscriptions garde 80 à 90 % et passe
+        /// sans encombre.</para>
+        /// </summary>
+        public int AuthCodeMinVerifyRatePercent { get; set; } = 30;
+
+        /// <summary>
+        /// Nombre d'envois en dessous duquel le taux de vérification ne décide
+        /// de rien — trois codes non saisis un dimanche matin ne sont pas une
+        /// attaque.
+        /// </summary>
+        public int AuthCodeVerifyRateMinSamples { get; set; } = 10;
+
         // ----- Coupe-circuit global (deux paliers, décision 2026-09-01) -----
 
         /// <summary>

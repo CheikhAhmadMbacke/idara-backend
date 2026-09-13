@@ -8,6 +8,7 @@ using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
 using Idara.API.Services;
+using Idara.API.Services.Auth;
 using Idara.API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -29,6 +30,7 @@ namespace Idara.API.Controllers
         private readonly IEmailService _emailService;
         private readonly INotificationService _notif;
         private readonly IUserInvitationService _invitations;
+        private readonly IAuthCodeThrottle _throttle;
         private readonly IMemoryCache _cache;
         private readonly UploadSettings _uploads;
         private readonly ILogger<AuthController> _logger;
@@ -42,6 +44,7 @@ namespace Idara.API.Controllers
             IEmailService emailService,
             INotificationService notif,
             IUserInvitationService invitations,
+            IAuthCodeThrottle throttle,
             IMemoryCache cache,
             IOptions<UploadSettings> uploads,
             ILogger<AuthController> logger)
@@ -54,6 +57,7 @@ namespace Idara.API.Controllers
             _emailService = emailService;
             _notif = notif;
             _invitations = invitations;
+            _throttle = throttle;
             _cache = cache;
             _uploads = uploads.Value;
             _logger = logger;
@@ -83,7 +87,16 @@ namespace Idara.API.Controllers
         [HttpPost("send-otp")]
         public async Task<IActionResult> SendOtp([FromBody] SendOtpRequest request)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
+            // Lit RawIdentifier et non Email : la nouvelle application envoie
+            // « identifier », l'ancienne « email ». Cette porte-ci ne traite que
+            // les adresses — un numéro passe par phone/request-code, qui sait
+            // envoyer un SMS et porte les garde-fous de dépense.
+            var email = AuthIdentifier.Parse(request.RawIdentifier);
+            if (!email.IsEmail)
+                return Ok(ApiResponse<bool>.Ok(true, "Si cet email existe, un code de 6 chiffres a été envoyé."));
+
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.Email != null && u.Email.ToLower() == email.Value);
             if (user != null)
             {
                 // Priorité : DTO > préférence persistée du user > header Accept-Language > "fr".
@@ -92,29 +105,83 @@ namespace Idara.API.Controllers
                     : !string.IsNullOrWhiteSpace(user.PreferredLanguage)
                         ? user.PreferredLanguage
                         : HttpContext.GetPreferredLanguage();
-                await _otpService.GenerateAndSendOtpAsync(request.Email, OtpPurpose.ResetPassword, lang);
+                await _otpService.GenerateAndSendOtpAsync(email.Value, OtpPurpose.ResetPassword, lang);
             }
             // Même message dans les deux cas (anti-énumération).
             return Ok(ApiResponse<bool>.Ok(true, "Si cet email existe, un code de 6 chiffres a été envoyé."));
         }
 
         /// <summary>
-        /// Envoie un OTP pour l'inscription après vérification que l'email n'existe pas déjà.
+        /// Envoie un code d'inscription, par SMS ou par email selon l'identifiant
+        /// fourni, après avoir vérifié qu'il n'est pas déjà pris.
         /// </summary>
+        /// <remarks>
+        /// 🔴 <b>C'est le seul endroit d'Idara où un inconnu peut faire envoyer un
+        /// SMS à un numéro DE SON CHOIX.</b> Partout ailleurs — réinitialisation
+        /// comprise — un code ne part qu'à un numéro qui a déjà un compte, et
+        /// c'est cette contrainte-là, gratuite, qui protège le mieux. Ici elle
+        /// est impossible par construction : le numéro est justement inconnu.
+        /// D'où le passage obligé par <see cref="IAuthCodeThrottle"/>.
+        /// </remarks>
         [HttpPost("send-otp-register")]
         [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(ApiResponse<bool>))]
         [ProducesResponseType(StatusCodes.Status400BadRequest, Type = typeof(ApiResponse<bool>))]
         public async Task<IActionResult> SendOtpForRegister([FromBody] SendOtpRequest request)
         {
-            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
-                return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
+            var settings = await _context.GetPlatformSettingsAsync();
+            var id = AuthIdentifier.Parse(request.RawIdentifier, settings.SenegalMobilePrefixes);
+            if (!id.IsValid)
+                return BadRequest(ApiResponse<bool>.Fail(AuthIdentifier.MessageFor(id.Error)));
+
+            // Unicité AVANT toute dépense : inutile d'envoyer un SMS pour un
+            // numéro qui ne pourra pas créer de compte.
+            if (id.IsEmail)
+            {
+                if (await _context.Users.AnyAsync(u => u.Email != null && u.Email.ToLower() == id.Value))
+                    return BadRequest(ApiResponse<bool>.Fail(
+                        "Cette adresse a déjà un compte Idara. Connectez-vous, ou inscrivez-vous avec une autre adresse."));
+            }
+            else
+            {
+                // 🔑 Le cas le plus fréquent, et ce n'est PAS une faute de frappe :
+                // le numéro est la clé d'unicité GLOBALE des comptes (§198), et un
+                // directeur est très souvent déjà en base comme responsable d'un
+                // élève. Le message le dit, et l'écran offre deux portes (se
+                // connecter / mot de passe oublié) plus un contact humain.
+                if (await _context.Users.AnyAsync(u => u.PhoneNumber == id.Value && !u.IsDeleted))
+                    return BadRequest(ApiResponse<bool>.Fail(
+                        "Ce numéro a déjà un compte Idara. Connectez-vous, ou inscrivez-vous avec un autre numéro."));
+            }
+
+            var ip = HttpContext.GetClientIp();
+            var verdict = await _throttle.EvaluateAsync(ip, id.Value, OtpPurpose.Register, id.IsPhone);
+            if (!verdict.Allowed)
+            {
+                // La demande refusée est écrite QUAND MÊME : c'est exactement ce
+                // qu'on cherchait à voir (§191).
+                await _throttle.RecordAsync(ip, id.Value, OtpPurpose.Register, id.IsPhone, verdict.LogReason);
+                var status = verdict.Outcome == ThrottleOutcome.SmsChannelClosed
+                    ? StatusCodes.Status503ServiceUnavailable
+                    : StatusCodes.Status429TooManyRequests;
+                return StatusCode(status, ApiResponse<bool>.Fail(verdict.UserMessage));
+            }
 
             // Priorité : DTO > header Accept-Language > "fr". Pas de user encore.
             var lang = !string.IsNullOrWhiteSpace(request.PreferredLanguage)
                 ? request.PreferredLanguage!
                 : HttpContext.GetPreferredLanguage();
-            await _otpService.GenerateAndSendOtpAsync(request.Email, OtpPurpose.Register, lang);
-            return Ok(ApiResponse<bool>.Ok(true, "Un code OTP a été envoyé à votre adresse email."));
+
+            if (id.IsEmail)
+            {
+                await _otpService.GenerateAndSendOtpAsync(id.Value, OtpPurpose.Register, lang);
+                await _throttle.RecordAsync(ip, id.Value, OtpPurpose.Register, isSms: false, null);
+                return Ok(ApiResponse<bool>.Ok(true, "Un code à 6 chiffres a été envoyé à votre adresse email."));
+            }
+
+            await _otpService.GenerateAndSendSmsOtpAsync(
+                id.Value, OtpPurpose.Register, userId: null, preferredLanguage: lang);
+            await _throttle.RecordAsync(ip, id.Value, OtpPurpose.Register, isSms: true, null);
+            return Ok(ApiResponse<bool>.Ok(true, "Un code à 6 chiffres a été envoyé par SMS."));
         }
 
         /// <summary>
@@ -129,18 +196,58 @@ namespace Idara.API.Controllers
         [ProducesResponseType(StatusCodes.Status400BadRequest, Type = typeof(ApiResponse<bool>))]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
         {
-            if (!await _otpService.VerifyOtpAsync(request.Email, request.OtpCode, OtpPurpose.Register))
-                return BadRequest(ApiResponse<bool>.Fail("OTP invalide ou expiré."));
+            var settings = await _context.GetPlatformSettingsAsync();
+            var id = AuthIdentifier.Parse(request.RawIdentifier, settings.SenegalMobilePrefixes);
+            if (!id.IsValid)
+                return BadRequest(ApiResponse<bool>.Fail(AuthIdentifier.MessageFor(id.Error)));
 
-            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
-                return BadRequest(ApiResponse<bool>.Fail("Cet email est déjà utilisé."));
+            // Anti brute-force du code à 6 chiffres : 5 essais ratés / 15 min,
+            // sur l'identifiant NORMALISÉ. Même règle qu'à phone/set-password —
+            // sans quoi cette porte-ci serait la faille de l'autre.
+            var rlKey = $"register-fail:{id.Value}";
+            if (IsRateLimited(rlKey, 5))
+                return StatusCode(429, ApiResponse<bool>.Fail(
+                    "Trop d'essais. Attendez 15 minutes avant de réessayer."));
+
+            // La clé d'un OtpRecord est l'identité, adresse OU numéro
+            // (OtpService range le numéro dans la colonne Email, qui sert de clé
+            // générique). VerifyOtpAsync compare sur cette clé.
+            if (!await _otpService.VerifyOtpAsync(id.Value, request.OtpCode, OtpPurpose.Register))
+            {
+                RegisterAttempt(rlKey);
+                return BadRequest(ApiResponse<bool>.Fail("Ce code n'est pas le bon, ou il a expiré."));
+            }
+            ResetAttempts(rlKey);
+
+            // 🔴 Unicité RE-CONTRÔLÉE ici, et pas seulement à l'envoi du code :
+            // entre les deux, quelqu'un a pu prendre le même identifiant. La
+            // fenêtre est étroite (10 minutes) mais elle existe.
+            var dejaPris = id.IsEmail
+                ? await _context.Users.AnyAsync(u => u.Email != null && u.Email.ToLower() == id.Value)
+                : await _context.Users.AnyAsync(u => u.PhoneNumber == id.Value && !u.IsDeleted);
+            if (dejaPris)
+                return BadRequest(ApiResponse<bool>.Fail(id.IsEmail
+                    ? "Cette adresse vient d'être utilisée pour un autre compte."
+                    : "Ce numéro vient d'être utilisé pour un autre compte."));
+
+            // 🔴 Marque le code comme SAISI. Sans cet appel, le taux de
+            // vérification (barrière 4) lit 0 % et ferme l'inscription à tout le
+            // monde au bout de dix envois.
+            await _throttle.MarkVerifiedAsync(id.Value, OtpPurpose.Register);
 
             var user = new User
             {
-                Email = request.Email,
+                // L'un des deux seulement. User.Email est nullable depuis §91, et
+                // les index uniques sont filtrés (§98) : deux comptes sans adresse
+                // ne se marchent pas dessus.
+                Email = id.IsEmail ? id.Value : null,
+                PhoneNumber = id.IsPhone ? id.Value : null,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
                 Role = UserRoles.SchoolAdmin,
-                IsEmailVerified = true,
+                // Vrai seulement si c'est bien une adresse qui vient d'être
+                // prouvée par le code. Un compte ouvert par numéro n'a pas
+                // d'adresse : la marquer « vérifiée » serait écrire un fait faux.
+                IsEmailVerified = id.IsEmail,
                 AccountStatus = AccountStatus.Inactive,
                 CreatedAt = DateTime.UtcNow,
                 LastLoginAt = DateTime.UtcNow,
@@ -293,6 +400,9 @@ namespace Idara.API.Controllers
             if (phone == null) return Ok(generic);
 
             // Anti-spam / abus de coût SMS : 3 envois max / 15 min par numéro.
+            // ⚠️ Compteur EN MÉMOIRE, donc remis à zéro à chaque redéploiement
+            // (§92). Conservé comme premier filtre gratuit ; le garde-fou
+            // persistant ci-dessous est celui qui tient dans la durée.
             var rlKey = $"reqcode:{phone}";
             if (IsRateLimited(rlKey, 3)) return Ok(generic);
 
@@ -305,8 +415,30 @@ namespace Idara.API.Controllers
             // on n'envoie pas de code (réponse générique inchangée, anti-énumération).
             if (!user.CanLogin) return Ok(generic);
 
+            // ===== Garde-fous anti « SMS pumping », mêmes que l'inscription =====
+            // 🔑 Cette porte est déjà la mieux protégée des deux, et pas par
+            // hasard : elle n'envoie QUE si le compte existe. Un inconnu ne peut
+            // donc pas viser un numéro au hasard — au pire les numéros déjà
+            // clients. Cette contrainte-là ne coûte rien et vaut mieux que tout
+            // le reste ; on la garde intacte.
+            // Ce qui manquait : un plafond qui survive aux redéploiements, un
+            // comptage par appelant, et une borne à la dépense.
+            var ip = HttpContext.GetClientIp();
+            var verdict = await _throttle.EvaluateAsync(
+                ip, phone, OtpPurpose.ResetPassword, isSms: true);
+            if (!verdict.Allowed)
+            {
+                await _throttle.RecordAsync(
+                    ip, phone, OtpPurpose.ResetPassword, isSms: true, verdict.LogReason);
+                // 🔒 Réponse GÉNÉRIQUE, même en cas de refus : dire « trop de
+                // demandes » révélerait que ce numéro a un compte, ce que les
+                // autres retours de cette méthode taisent soigneusement.
+                return Ok(generic);
+            }
+
             await _otpService.GenerateAndSendSmsOtpAsync(
                 phone, OtpPurpose.ResetPassword, user.Id, user.PreferredLanguage);
+            await _throttle.RecordAsync(ip, phone, OtpPurpose.ResetPassword, isSms: true, null);
             RegisterAttempt(rlKey);
             return Ok(generic);
         }
@@ -336,6 +468,12 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<bool>.Fail("Code invalide ou expiré."));
             }
             ResetAttempts(rlKey);
+
+            // 🔴 Marque le code comme SAISI — l'autre moitié de la barrière 4.
+            // Un code vérifié est la preuve qu'un humain était au bout du fil.
+            // Sans ce marquage, le taux tomberait à zéro et fermerait le canal
+            // SMS pour tout le monde, inscription comprise.
+            await _throttle.MarkVerifiedAsync(phone, OtpPurpose.ResetPassword);
 
             var user = await _context.Users.Include(u => u.School)
                 .Where(u => u.PhoneNumber == phone && !u.IsDeleted)
