@@ -12,7 +12,9 @@ namespace Idara.API.Models
     /// Status Pending = créé en DB, attendant le webhook SenePay. Les transitions
     /// terminales (Completed/Failed/...) ne reviennent jamais en arrière.
     ///
-    /// AmountFcfa = montant débité du payeur (inclut +8 % si FeesPayer = Parent).
+    /// AmountFcfa = montant débité du payeur (majoré si FeesPayer = Parent — le
+    /// taux vient de PlatformSettings.ParentFeeMultiplier, ~7,55 %, et n'est
+    /// écrit en dur nulle part).
     /// NetCreditedFcfa = ce que touche réellement le SchoolWallet (net de TOUT,
     /// y compris la réserve payout — modèle "prélèvement à la source").
     /// </summary>
@@ -91,7 +93,7 @@ namespace Idara.API.Models
         public long NetCreditedFcfa { get; set; }
 
         /// <summary>
-        /// Montant cible original demandé à l'init (avant majoration parent +8%).
+        /// Montant cible original demandé à l'init (avant majoration parent).
         /// C'est ce qu'on crédite à l'Invoice quand le webhook confirme — pas
         /// le net SenePay, qui est rogné des frais et laisserait l'invoice
         /// éternellement "presque payée" en mode FeesPayer=Parent.

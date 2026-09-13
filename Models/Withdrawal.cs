@@ -7,12 +7,21 @@ namespace Idara.API.Models
     /// (entité financière, pas de soft-delete — cf. gotcha §55). Une correction
     /// = une nouvelle écriture wallet, jamais un update rétroactif du montant.
     ///
-    /// Modèle de frais (spec §4.4) : le SchoolWallet.AvailableBalance est DÉJÀ
-    /// net de payout (prélèvement à la source au payin). L'école retire
-    /// <see cref="AmountFcfa"/> = ce qu'elle voit dans son wallet = ce que le
-    /// bénéficiaire reçoit. On envoie à SenePay <see cref="SepayAmountFcfa"/> =
-    /// AmountFcfa / (1 − 0,0177) majoré, pour que les frais opérateur 1,77 %
-    /// soient absorbés et que le bénéficiaire reçoive exactement AmountFcfa.
+    /// Modèle de frais : l'école retire <see cref="AmountFcfa"/> = ce qu'elle
+    /// voit dans son wallet = ce que le bénéficiaire reçoit, à l'unité près.
+    ///
+    /// <para>🔴 <b>On envoie à SenePay le montant EXACT</b>, jamais un montant
+    /// majoré : <c>fee_mode = "on_top"</c> fait prélever les 1,77 % <b>en
+    /// plus</b>, sur la réserve marchand. Le commentaire d'origine décrivait ici
+    /// une majoration <c>AmountFcfa / (1 − 0,0177)</c> qui n'existe plus depuis
+    /// le modèle de frais SenePay 2026 (elle sur-versait le bénéficiaire :
+    /// retrait de 500, 510 reçus). Cette description périmée a survécu assez
+    /// longtemps pour fausser le calcul de la majoration au payeur — d'où sa
+    /// réécriture le 2026-09-13.</para>
+    ///
+    /// <para>Conséquence, et c'est elle qui commande
+    /// <c>PlatformSettings.ParentFeeMultiplier</c> : sortir T de la réserve en
+    /// coûte <c>T × (1 + 0,0177)</c>, et non <c>T / (1 − 0,0177)</c>.</para>
     /// </summary>
     public class Withdrawal
     {
@@ -36,7 +45,9 @@ namespace Idara.API.Models
         /// <summary>Montant débité du wallet école = net reçu par le bénéficiaire (FCFA).</summary>
         public long AmountFcfa { get; set; }
 
-        /// <summary>Montant majoré réellement envoyé à SenePay (= AmountFcfa / (1 − 0,0177)).</summary>
+        /// <summary>Montant réellement envoyé à SenePay. Depuis le modèle de frais
+        /// 2026 il est ÉGAL à <see cref="AmountFcfa"/> (les frais sont en <c>on_top</c>).
+        /// Colonne conservée : les retraits d'avant portent bien un montant majoré.</summary>
         public long SepayAmountFcfa { get; set; }
 
         /// <summary>Frais opérateur prélevés (rempli au webhook depuis fees.provider).</summary>

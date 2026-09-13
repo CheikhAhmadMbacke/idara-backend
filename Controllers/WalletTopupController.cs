@@ -21,8 +21,8 @@ namespace Idara.API.Controllers
     /// Recharge du wallet école par le SchoolAdmin (« Recharger mon wallet »,
     /// spec §5.2). Réutilise la mécanique payin SenePay (Phase 1.4) mais sans
     /// Student/Guardian/Invoice : c'est l'école qui paie son propre wallet.
-    /// Majoration +8 % (<see cref="FeesPayer.Parent"/>) : l'école est débitée de
-    /// target×1,08 et le wallet est crédité du target EXACT (§82) → recharger
+    /// Majoration (<see cref="FeesPayer.Parent"/>) : l'école est débitée de
+    /// target × ParentFeeMultiplier et le wallet est crédité du target EXACT (§82) → recharger
     /// 5000 coûte 5400 mais crédite bien 5000. Cas d'usage clé :
     /// une école qui termine son essai 30j sans paiement parent encaissé →
     /// wallet à 0 → impossible de prélever l'abo → ce flux débloque.
@@ -85,11 +85,14 @@ namespace Idara.API.Controllers
 
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
-            // Majoration +8 % (comme un paiement parent, FeesPayer=Parent) : l'école
-            // veut recevoir EXACTEMENT dto.Amount dans son wallet, donc on la débite
-            // de target×1,08 et le webhook crédite le wallet du TargetAmountFcfa
-            // (§82). TargetAmountFcfa = ce qui atterrit dans le wallet (5000),
-            // AmountFcfa = ce qui est débité du payeur (5400).
+            // Majoration (comme un paiement parent, FeesPayer=Parent) : l'école
+            // veut recevoir EXACTEMENT dto.Amount dans son wallet ET pouvoir le
+            // ressortir, donc on la débite de target × ParentFeeMultiplier et le
+            // webhook crédite le wallet du TargetAmountFcfa (§82).
+            // TargetAmountFcfa = ce qui atterrit dans le wallet (5000),
+            // AmountFcfa = ce qui est débité du payeur (5378 au taux courant).
+            // ⚠️ Ne jamais réécrire le taux en dur ici : il se déduit des frais
+            // réels dans PlatformSettings et a déjà changé deux fois.
             var targetAmount = dto.Amount;
             var amountToCharge = (long)Math.Ceiling(targetAmount * platform.ParentFeeMultiplier);
             var payment = new Payment

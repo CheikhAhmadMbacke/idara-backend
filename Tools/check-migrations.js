@@ -32,6 +32,19 @@
  *   « que vaudra cette colonne pour la ligne déjà en base ? » — c'est
  *   exactement la question qui n'a pas été posée cinq fois.
  *
+ *   Et, depuis le 2026-09-13, une SECONDE forme du même piège : tout
+ *   `RenameColumn` visant une table de réglages. Un renommage CONSERVE la
+ *   valeur — ce qui est sans danger tant que la colonne garde son sens, et
+ *   dangereux dès qu'elle en change. C'est arrivé en renommant
+ *   `ParentFeePercent` (la majoration, 7,14) en `PayinFeePercent` (le taux
+ *   prélevé, 5,37) : la ligne aurait gardé 7,14, et la majoration recalculée
+ *   serait passée à 9,6 % — deux points de trop réclamés à chaque famille.
+ *
+ *   Pire que le défaut à zéro : un zéro se remarque, un 7,14 vraisemblable à
+ *   la place d'un 5,37 attendu, non. Le renommage doit donc soit REPOSER la
+ *   valeur (`migrationBuilder.Sql("UPDATE …")` dans le même fichier), soit
+ *   porter la dérogation `// valeur-conservee-voulue: <raison>`.
+ *
  * CE QUI N'EST PAS VÉRIFIÉ, ET C'EST VOULU
  *   Les autres tables. Une colonne ajoutée à `Payments` ou `Students` concerne
  *   des lignes métier dont zéro est souvent la bonne valeur de départ. Élargir
@@ -50,6 +63,9 @@ const SETTINGS_TABLES = ['PlatformSettings', 'SchoolPaymentSettings'];
 
 /** Marqueur de dérogation à poser dans le fichier de migration. */
 const WAIVER = 'defaut-zero-voulu:';
+
+/** Dérogation pour un renommage dont la valeur conservée reste la bonne. */
+const WAIVER_RENAME = 'valeur-conservee-voulue:';
 
 /**
  * Migrations ANTÉRIEURES à la mise en place de ce contrôle (2026-09-12).
@@ -78,6 +94,21 @@ function blocsAddColumn(source) {
   let m;
   while ((m = re.exec(source)) !== null) {
     // Le bloc court jusqu'au « ); » qui ferme l'appel.
+    const fin = source.indexOf(');', m.index);
+    if (fin === -1) continue;
+    blocs.push({
+      texte: source.slice(m.index, fin),
+      ligne: source.slice(0, m.index).split('\n').length,
+    });
+  }
+  return blocs;
+}
+
+function blocsRenameColumn(source) {
+  const blocs = [];
+  const re = /migrationBuilder\.RenameColumn\(/g;
+  let m;
+  while ((m = re.exec(source)) !== null) {
     const fin = source.indexOf(');', m.index);
     if (fin === -1) continue;
     blocs.push({
@@ -138,20 +169,57 @@ function main() {
         `         Si c'est voulu, écrire dans ce fichier :  // ${WAIVER} <raison>`
       );
     }
+
+    // --- Seconde forme : un renommage TRANSPORTE la valeur existante ---
+    // On accepte le renommage s'il est accompagné d'un UPDATE explicite dans
+    // le même fichier : c'est le geste qui repose la valeur du nouveau sens.
+    const reposeLaValeur = /migrationBuilder\.Sql\(/.test(source);
+
+    for (const bloc of blocsRenameColumn(source)) {
+      const table = champ(bloc.texte, 'table');
+      if (!table || !SETTINGS_TABLES.includes(table)) continue;
+
+      const avant = champ(bloc.texte, 'name') || '?';
+      const apres = champ(bloc.texte, 'newName') || '?';
+      verifies++;
+
+      if (herite) continue;
+      if (reposeLaValeur) continue;
+      if (source.includes(WAIVER_RENAME)) continue;
+
+      enDefaut++;
+      console.log(
+        `  ÉCHEC ${fichier}:${bloc.ligne} — ${table}.${avant} → ${apres}`
+      );
+      console.log(
+        `         Le renommage CONSERVE la valeur de ${avant}. Si ${apres} ne ` +
+          `veut pas dire la même chose, la ligne singleton portera un chiffre ` +
+          `vraisemblable et FAUX.`
+      );
+      console.log(
+        `         Reposer la valeur :  migrationBuilder.Sql("UPDATE \\"${table}\\" SET …")`
+      );
+      console.log(
+        `         Ou, si la valeur reste la bonne :  // ${WAIVER_RENAME} <raison>`
+      );
+    }
   }
 
   console.log('');
   if (enDefaut === 0) {
     console.log(
-      `${verifies} défaut(s) nul(s) sur table de réglages · 0 en échec.`
+      `${verifies} point(s) de vigilance sur table de réglages · 0 en échec.`
     );
     process.exit(0);
   }
   console.log(
-    `${verifies} défaut(s) nul(s) sur table de réglages · ${enDefaut} EN ÉCHEC.`
+    `${verifies} point(s) de vigilance sur table de réglages · ${enDefaut} EN ÉCHEC.`
   );
   console.log(
-    'Ce piège a déjà coûté cinq fonctionnalités nées mortes (§193, §202, §207, §232).'
+    'Ce piège a déjà coûté cinq fonctionnalités nées mortes (§193, §202, §207, §232),'
+  );
+  console.log(
+    'et failli faire réclamer 9,6 % aux familles au lieu de 7,55 % (§255).'
   );
   process.exit(1);
 }

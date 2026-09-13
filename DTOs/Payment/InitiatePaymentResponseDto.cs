@@ -18,7 +18,7 @@ namespace Idara.API.DTOs.Payment
         public string? ErrorCode { get; set; }
         public string? FailureReason { get; set; }
 
-        /// <summary>Montant effectivement débité du parent (inclut +8% si FeesPayer=Parent).</summary>
+        /// <summary>Montant effectivement débité du parent (majoré si FeesPayer=Parent).</summary>
         public long AmountChargedFcfa { get; set; }
     }
 }

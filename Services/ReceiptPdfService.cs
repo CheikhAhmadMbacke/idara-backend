@@ -398,7 +398,12 @@ namespace Idara.API.Services
 
                 // Détail frais (FeesPayer=Parent) : montant EXACT réellement majoré
                 // = débité − cible (indépendant du % courant, qui peut changer à
-                // tout moment). Fallback /1.08 pour d'anciens Payments sans cible.
+                // tout moment).
+                //
+                // 🔴 Le fallback /1.08 vise les Payments d'AVANT TargetAmountFcfa,
+                // émis quand la majoration valait réellement 8 %. Ne PAS le
+                // "mettre à jour" au taux courant : ce serait réécrire de vieux
+                // reçus avec un taux qui ne leur a jamais été appliqué.
                 if (payment.FeesPayer == FeesPayer.Parent)
                 {
                     var approxFees = payment.TargetAmountFcfa > 0

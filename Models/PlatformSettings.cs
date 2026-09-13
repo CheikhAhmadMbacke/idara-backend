@@ -8,9 +8,14 @@ namespace Idara.API.Models
     /// ou qu'on veut ajuster un seuil. Table singleton : une seule ligne, PK
     /// figée à <see cref="SingletonId"/>.
     ///
-    /// Les pourcentages sont stockés sous forme humaine (8 = +8 %, 1.77 =
-    /// 1,77 %) ; les taux exploités par le code sont dérivés via
+    /// Les pourcentages sont stockés sous forme humaine (5.37 = 5,37 %) ; les
+    /// taux exploités par le code sont dérivés via
     /// <see cref="ParentFeeMultiplier"/> / <see cref="PayoutFeeRate"/>.
+    ///
+    /// 🔴 <b>On ne saisit ici que ce qui est OBSERVABLE sur un relevé</b> — ce
+    /// que le prestataire prélève. Tout le reste se calcule. La majoration au
+    /// payeur a été un champ saisi jusqu'au 2026-09-13 : elle a dérivé de
+    /// 0,45 point sans que rien ne le signale.
     /// </summary>
     public class PlatformSettings
     {
@@ -110,10 +115,50 @@ namespace Idara.API.Models
         /// </remarks>
         public string LegalVersion { get; set; } = "2026-09";
 
-        /// <summary>Majoration appliquée au parent quand FeesPayer=Parent (8 = +8 %).</summary>
-        public double ParentFeePercent { get; set; } = 8.0;
+        // ================================================================
+        // ===== Les DEUX seuls taux saisis — la majoration se DÉDUIT ======
+        //
+        // 🔴 Pourquoi ils sont deux, et pourquoi la majoration n'en est plus un.
+        //
+        // La majoration au payeur a longtemps été un troisième champ saisi à la
+        // main. Elle valait 7,14 en production, calée en ADDITIONNANT les taux
+        // prélevés (3,6 + 1,77 + 1,77). C'était faux de 0,45 point, pour une
+        // raison purement arithmétique : majorer de t ne compense pas un
+        // prélèvement de t. Prélever 5,37 % de 107,14 laisse 101,39, d'où il
+        // faut encore sortir 1,77 % de frais de retrait — il manquait 4 154 F
+        // par million facturé, payés par la plateforme et visibles nulle part.
+        //
+        // Un chiffre saisi à la main dérive dès que le prestataire change sa
+        // grille. On ne saisit donc plus que ce qui est OBSERVABLE sur un relevé
+        // — ce que le prestataire prélève — et la majoration en découle.
+        // ================================================================
 
-        /// <summary>Frais opérateur+taxe au payout (1,77 %), absorbés par la majoration sortante.</summary>
+        /// <summary>
+        /// Taux réellement retenu sur un ENCAISSEMENT, en pourcentage humain
+        /// (5.37 = 5,37 %). Mesuré en production le 2026-09-12 sur 199 paiements :
+        /// 3,6 % SenePay + 1,77 % opérateur.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ <b>Ce taux ne se lit pas dans <c>Payments.FeesFcfa</c></b>, qui
+        /// n'enregistre que la part SenePay (~3,66 %). Le vrai taux est
+        /// <c>(Σ AmountFcfa − Σ NetCreditedFcfa) / Σ AmountFcfa</c> sur les
+        /// paiements <c>Completed</c> hors espèces — c'est exactement ce que
+        /// l'écran SuperAdmin affiche en regard de ce champ, pour qu'une dérive
+        /// de la grille SenePay se VOIE au lieu de se payer.
+        /// </remarks>
+        public double PayinFeePercent { get; set; } = 5.37;
+
+        /// <summary>
+        /// Frais opérateur prélevés sur un DÉCAISSEMENT, en pourcentage humain
+        /// (1.77 = 1,77 %). Mesuré : 55 429 F sur 3 133 100 F retirés.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 Ce frais est prélevé <b>en plus</b> du montant envoyé
+        /// (<c>fee_mode = "on_top"</c>, cf. <c>SenePayPayoutRequest</c>) : un
+        /// retrait de T coûte <c>T × (1 + taux)</c> à la réserve marchand, pas
+        /// <c>T / (1 − taux)</c>. C'est ce qui donne sa forme au numérateur de
+        /// <see cref="ParentFeeMultiplier"/>.
+        /// </remarks>
         public double PayoutFeePercent { get; set; } = 1.77;
 
         /// <summary>
@@ -410,9 +455,67 @@ namespace Idara.API.Models
 
         public DateTime? UpdatedAt { get; set; }
 
-        /// <summary>Multiplicateur appliqué au montant cible parent : 1 + p/100.</summary>
+        /// <summary>
+        /// 🔑 <b>LE point unique de la majoration au payeur.</b> Multiplicateur
+        /// appliqué au montant CIBLE pour obtenir ce qu'on débite réellement.
+        /// Les 7 appelants passent tous par lui (§199).
+        /// </summary>
+        /// <remarks>
+        /// <para><b>La règle qu'il fait tenir</b> : si l'école annonce T, elle
+        /// doit encaisser T dans son wallet <b>et</b> pouvoir retirer T, sans
+        /// que la plateforme avance quoi que ce soit. Deux prélèvements
+        /// s'interposent :</para>
+        /// <list type="number">
+        ///   <item>à l'encaissement, la réserve ne reçoit que <c>C × (1 − a)</c>
+        ///   de ce qu'on débite au payeur ;</item>
+        ///   <item>au décaissement, sortir T de la réserve en coûte
+        ///   <c>T × (1 + b)</c>, le frais étant prélevé <b>en plus</b>
+        ///   (<c>on_top</c>).</item>
+        /// </list>
+        /// <para>La neutralité s'écrit donc <c>C × (1 − a) = T × (1 + b)</c>,
+        /// soit <c>C = T × (1 + b) / (1 − a)</c>. Avec a = 5,37 % et b = 1,77 %,
+        /// le multiplicateur vaut <b>1,0755</b> — une majoration de
+        /// <b>7,55 %</b>, contre 7,14 % saisis auparavant.</para>
+        /// <para>🔴 <b>Ne jamais « simplifier » en 1 + a + b.</b> C'est
+        /// précisément l'erreur d'origine : les taux ne s'additionnent pas, ils
+        /// se composent. Et ne pas écrire <c>1 / ((1 − a)(1 − b))</c> non plus —
+        /// cette forme-là suppose un frais de retrait prélevé DANS le montant
+        /// envoyé, ce que <c>fee_mode = "on_top"</c> ne fait pas.</para>
+        /// <para>⚠️ <b>Date de péremption</b> : l'article 8.2 du contrat Wave
+        /// interdit toute majoration au payeur. À la bascule vers Wave direct,
+        /// cette majoration disparaît et c'est le wallet qui devra porter le
+        /// frais de retrait (§145).</para>
+        /// </remarks>
         [NotMapped]
-        public double ParentFeeMultiplier => 1 + ParentFeePercent / 100.0;
+        public double ParentFeeMultiplier
+        {
+            get
+            {
+                // Bornage défensif : ces deux taux sont saisis par un humain et
+                // se retrouvent au dénominateur. Un 100 saisi par erreur
+                // donnerait +∞, donc un montant à débiter absurde — on préfère
+                // un multiplicateur borné à un crash au moment de payer.
+                var a = Math.Clamp(PayinFeePercent, 0.0, 95.0) / 100.0;
+                var b = Math.Clamp(PayoutFeePercent, 0.0, 95.0) / 100.0;
+                return (1.0 + b) / (1.0 - a);
+            }
+        }
+
+        /// <summary>
+        /// Majoration au payeur en pourcentage humain (7.55 = +7,55 %), telle
+        /// qu'affichée au parent et au donateur. <b>DÉRIVÉE</b> depuis le
+        /// 2026-09-13 : plus de colonne, donc plus de valeur qui dérive.
+        /// </summary>
+        /// <remarks>
+        /// Le nom est conservé tel quel dans les réponses API : tous les écrans
+        /// parents et les pages publiques qui l'affichent continuent de marcher
+        /// et montrent le nouveau taux sans qu'une seule ligne ne change chez
+        /// eux. Seul l'écran SuperAdmin qui l'ÉDITAIT a changé — il édite
+        /// désormais <see cref="PayinFeePercent"/> et affiche ceci en lecture
+        /// seule (un champ accepté mais jamais utilisé serait un §196).
+        /// </remarks>
+        [NotMapped]
+        public double ParentFeePercent => (ParentFeeMultiplier - 1.0) * 100.0;
 
         /// <summary>Taux de frais payout : p/100. Sert à majorer le montant envoyé à SenePay.</summary>
         [NotMapped]

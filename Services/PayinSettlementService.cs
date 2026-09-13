@@ -162,10 +162,14 @@ namespace Idara.API.Services
 
             var netAmount = payment.NetCreditedFcfa;
 
-            // FeesPayer=Parent : créditer le montant CIBLE (l'école reçoit ce
-            // qu'elle a fixé ; la majoration +8% couvre les frais). FeesPayer=
-            // School : créditer le NET (l'école absorbe les frais). Fallback net
-            // pour les anciens Payments sans TargetAmountFcfa. (Cf. §82.)
+            // FeesPayer=Parent : créditer le montant CIBLE — l'école reçoit
+            // exactement ce qu'elle a fixé, la majoration au payeur ayant déjà
+            // couvert le prélèvement d'entrée ET celui du retrait à venir
+            // (PlatformSettings.ParentFeeMultiplier). FeesPayer=School :
+            // créditer le NET (l'école absorbe les frais d'entrée ; le frais de
+            // retrait, lui, reste à la charge de la plateforme — c'est le
+            // chantier §145, distinct). Fallback net pour les anciens Payments
+            // sans TargetAmountFcfa. (Cf. §82.)
             var amountToCredit = payment.FeesPayer == FeesPayer.Parent && payment.TargetAmountFcfa > 0
                 ? payment.TargetAmountFcfa
                 : netAmount;

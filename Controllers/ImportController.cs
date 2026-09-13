@@ -466,7 +466,7 @@ namespace Idara.API.Controllers
             //     au payeur (§145) — donc pas de majoration : l'école paie le
             //     prix affiché, la plateforme absorbe la commission ;
             //   - ce couple exclut mécaniquement ce paiement du calcul de la
-            //     marge +8 % dans P (§112), qui exige FeesPayer=Parent ET
+            //     marge de majoration dans P (§112), qui exige FeesPayer=Parent ET
             //     TargetAmountFcfa > 0. Sans quoi la recette serait comptée deux
             //     fois.
             var payment = new Models.Payment

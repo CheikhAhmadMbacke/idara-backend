@@ -16,7 +16,7 @@ namespace Idara.API.DTOs.Donation
         /// <summary>Montant du don (ce que reçoit le daara).</summary>
         public long AmountFcfa { get; set; }
 
-        /// <summary>Montant débité du donateur (don + frais +8 %).</summary>
+        /// <summary>Montant débité du donateur (don + frais de transaction).</summary>
         public long AmountChargedFcfa { get; set; }
 
         public PaymentOperator Operator { get; set; }

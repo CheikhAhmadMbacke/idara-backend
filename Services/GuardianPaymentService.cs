@@ -30,7 +30,7 @@ namespace Idara.API.Services
         public FeesPayer FeesPayer { get; init; }
         public long MinPayinFcfa { get; init; }
         public double ParentFeeMultiplier { get; init; }
-        /// <summary>Majoration affichée (ex : 8 = +8 %).</summary>
+        /// <summary>Majoration affichée (ex : 7.545 = +7,545 %). Dérivée des frais réels.</summary>
         public double ParentFeePercent { get; init; }
         public List<OutstandingLine> Lines { get; init; } = new();
         public List<OutstandingChild> Children { get; init; } = new();

@@ -23,7 +23,7 @@ namespace Idara.API.Controllers
     /// Espace DONATEUR : auto-inscription, liste publique des daaras, envoi d'un
     /// don, historique « mes dons ». Un don est un <see cref="Payment"/> avec
     /// <c>Purpose=Donation</c> + <c>DonorId</c> (StudentId/GuardianId null),
-    /// FeesPayer=Parent (le donateur porte les frais +8 %, le daara reçoit le
+    /// FeesPayer=Parent (le donateur porte les frais, le daara reçoit le
     /// montant plein). Réutilise toute la mécanique payin SenePay (Phase 1.4) et
     /// le webhook (crédit de la poche « Don » du wallet, cf.
     /// <see cref="IPayinSettlementService"/>).

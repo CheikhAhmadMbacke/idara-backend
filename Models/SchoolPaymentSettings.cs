@@ -15,7 +15,7 @@ namespace Idara.API.Models
         public BillingMode BillingMode { get; set; } = BillingMode.FixedAmount;
 
         /// <summary>Qui paie les frais SenePay sur les PAIEMENTS PARENTS.
-        /// Parent = le parent (majoration +8 %, l'école reçoit le montant plein) ;
+        /// Parent = le parent (majoration, l'école reçoit le montant plein) ;
         /// School = l'école (absorbe les frais, reçoit le net).</summary>
         public FeesPayer FeesPayer { get; set; } = FeesPayer.Parent;
 

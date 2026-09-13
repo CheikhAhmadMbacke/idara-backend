@@ -13,7 +13,7 @@ namespace Idara.API.Services
     /// <summary>
     /// Calcule la réconciliation R = D + P sans hook ni ledger de revenu : les
     /// gains plateforme P sont RECALCULÉS à la volée depuis Payments (excédent
-    /// +8%), SubscriptionInvoices (revenus abo) et Withdrawals (frais payout),
+    /// majorés), SubscriptionInvoices (revenus abo) et Withdrawals (frais payout),
     /// moins les sorties plateforme enregistrées (PlatformOutflows). Aucune
     /// modification des flux monétaires → aucun risque de casse ni de dérive.
     /// </summary>
@@ -47,7 +47,7 @@ namespace Idara.API.Services
                 .SumAsync(w => w.AvailableBalance + w.PendingBalance, ct);
 
             // --- P : gains plateforme, recalculés depuis les sources ---
-            // Excédent +8% : en mode Parent, l'école est créditée du montant CIBLE
+            // Excédent de majoration : en mode Parent, l'école est créditée du montant CIBLE
             // et la réserve reçoit le net SenePay (> cible) ; l'écart est le gain
             // plateforme. En mode School, l'école est créditée du net → 0 (le
             // filtre FeesPayer=Parent l'exclut donc du calcul).

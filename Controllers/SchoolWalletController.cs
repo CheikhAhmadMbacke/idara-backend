@@ -143,12 +143,18 @@ namespace Idara.API.Controllers
             // Depuis le modèle de frais SenePay 2026, on force fee_mode="on_top"
             // (cf. SenePayPayoutRequest.FeeMode) : le bénéficiaire reçoit
             // précisément dto.Amount, les frais opérateur (~1,77%) sont prélevés
-            // EN PLUS sur la réserve marchand — financés par le coussin de la
-            // majoration payin +8% (§82). L'ancienne majoration `dto.Amount /
+            // EN PLUS sur la réserve marchand. L'ancienne majoration `dto.Amount /
             // (1 - PayoutFeeRate)` faisait SUR-verser le bénéficiaire (bug réel :
             // retrait de 500 → 510 reçu), car le nouveau modèle SenePay verse le
-            // montant saisi tel quel. `PayoutFeePercent` (PlatformSettings) n'est
-            // donc plus utilisé pour le calcul — conservé pour estimation/affichage.
+            // montant saisi tel quel.
+            //
+            // 🔑 `PayoutFeePercent` ne sert donc plus ICI, mais il n'est pas
+            // décoratif pour autant : c'est lui qui, dans
+            // PlatformSettings.ParentFeeMultiplier, fait provisionner ce frais
+            // de sortie DÈS l'encaissement. Sans quoi la plateforme l'avancerait
+            // — ce qu'elle a fait quatre mois durant (55 429 F sur 4 mois).
+            // ⚠️ En mode FeesPayer=School, elle l'avance toujours : le wallet
+            // n'a été crédité que du net d'entrée (§145).
             var sepayAmount = dto.Amount;
 
             var withdrawal = new Withdrawal

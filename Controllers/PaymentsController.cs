@@ -31,7 +31,7 @@ namespace Idara.API.Controllers
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<PaymentsController> _logger;
 
-        // Majoration parent (+8 %) et minimum de paiement (200 FCFA) ne sont
+        // Majoration parent et minimum de paiement (200 FCFA) ne sont
         // plus codés en dur : lus depuis PlatformSettings (éditable SuperAdmin).
 
         public PaymentsController(
@@ -272,7 +272,8 @@ namespace Idara.API.Controllers
                     $"Le montant minimum est de {platform.MinPayinFcfa} FCFA."));
             }
 
-            // Majoration parent : si FeesPayer=Parent, on charge targetAmount × 1.08
+            // Majoration parent : si FeesPayer=Parent, on charge
+            // targetAmount × ParentFeeMultiplier (~1,0755 — jamais en dur)
             // (le parent porte les frais SenePay+opérateurs). Si FeesPayer=School,
             // on charge targetAmount tel quel (l'école absorbe les frais au net).
             long amountToCharge = settings.FeesPayer == FeesPayer.Parent
@@ -288,7 +289,7 @@ namespace Idara.API.Controllers
             // résultat (`/pay/{id}/{token}`) — empêche un attaquant qui
             // énumère les PaymentId de voir les reçus des autres parents.
             // TargetAmountFcfa : montant que l'invoice doit considérer comme
-            // payé quand le webhook confirme (l'amountToCharge inclut la +8%
+            // payé quand le webhook confirme (l'amountToCharge inclut la majoration
             // de majoration, qui est censée couvrir les frais SenePay).
             var payment = new Payment
             {

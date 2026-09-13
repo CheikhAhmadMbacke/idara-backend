@@ -5,7 +5,7 @@ namespace Idara.API.DTOs.Donation
     /// <summary>
     /// Corps de `POST /api/donations/initiate` : un donateur envoie un don libre
     /// à un daara. Même mécanique payin que le paiement parent (Wave/Orange, OTP
-    /// Orange), FeesPayer=Parent (le donateur porte les frais +8 %, le daara
+    /// Orange), FeesPayer=Parent (le donateur porte les frais, le daara
     /// reçoit le montant plein).
     /// </summary>
     public class DonationInitiateRequest

@@ -55,7 +55,9 @@ namespace Idara.API.DTOs.Admin
         /// <summary>Revenus d'abonnement encaissés (factures abo payées).</summary>
         public long SubscriptionRevenueFcfa { get; set; }
 
-        /// <summary>Excédent de la majoration +8% des payins (part au-dessus du crédit école).</summary>
+        /// <summary>Excédent de la majoration des payins (part au-dessus du crédit école).
+        /// ⚠️ Depuis le 2026-09-13 la majoration est calibrée pour être NEUTRE : cet
+        /// excédent couvre le frais de retrait à venir, il n'est pas un gain.</summary>
         public long Surplus8PercentFcfa { get; set; }
 
         /// <summary>
