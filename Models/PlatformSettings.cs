@@ -135,9 +135,20 @@ namespace Idara.API.Models
 
         /// <summary>
         /// Taux réellement retenu sur un ENCAISSEMENT, en pourcentage humain
-        /// (5.37 = 5,37 %). Mesuré en production le 2026-09-12 sur 199 paiements :
-        /// 3,6 % SenePay + 1,77 % opérateur.
+        /// (5.40 = 5,40 %).
         /// </summary>
+        /// <remarks>
+        /// 🔴 <b>5,40 et non 5,37, et la nuance a coûté une mesure pour être
+        /// vue.</b> Le taux contractuel additionné (3,6 % SenePay + 1,77 %
+        /// opérateur) donne 5,37 — mais c'est un <b>plancher</b>, jamais une
+        /// moyenne : SenePay arrondit ses frais au franc supérieur sur
+        /// <i>chaque</i> transaction, et ce supplément pèse d'autant plus que le
+        /// montant est petit. Mesuré en production sur 197 paiements réglés :
+        /// minimum <b>5,370</b>, moyenne pondérée <b>5,379</b>, et par tranche
+        /// 5,749 % sous 1 000 F · 5,532 % de 1 à 5 k · 5,380 % de 5 à 20 k ·
+        /// 5,373 % au-delà. Saisir le plancher laissait donc ~2 F de déficit par
+        /// transaction — 29 fois moins qu'avant, mais toujours du déficit.
+        /// </remarks>
         /// <remarks>
         /// ⚠️ <b>Ce taux ne se lit pas dans <c>Payments.FeesFcfa</c></b>, qui
         /// n'enregistre que la part SenePay (~3,66 %). Le vrai taux est
@@ -146,7 +157,7 @@ namespace Idara.API.Models
         /// l'écran SuperAdmin affiche en regard de ce champ, pour qu'une dérive
         /// de la grille SenePay se VOIE au lieu de se payer.
         /// </remarks>
-        public double PayinFeePercent { get; set; } = 5.37;
+        public double PayinFeePercent { get; set; } = 5.40;
 
         /// <summary>
         /// Frais opérateur prélevés sur un DÉCAISSEMENT, en pourcentage humain

@@ -29,9 +29,23 @@
  *   1. La formule de `ParentFeeMultiplier` est bien celle-là — et pas une
  *      addition des taux, la faute d'origine.
  *   2. Sur toute la plage des montants réels, l'aller-retour ne coûte JAMAIS
- *      un franc à la plateforme, arrondis compris.
+ *      un franc à la plateforme — au taux SAISI.
  *   3. Le taux par défaut du code et celui posé par la migration coïncident.
  *      Sinon, une base neuve et la production ne calculent pas pareil (§193).
+ *
+ * CE QUE LE CONTRÔLE 2 NE DIT PAS, ET IL FAUT LE SAVOIR
+ *   Il applique le taux saisi des DEUX côtés : ce qu'on majore et ce qu'on
+ *   suppose prélevé. Il valide donc la cohérence du calcul, pas le comportement
+ *   réel du prestataire — qui arrondit ses frais au franc SUPÉRIEUR sur chaque
+ *   transaction. Mesuré en production : le taux effectif va de 5,373 % sur les
+ *   gros montants à 5,749 % sous 1 000 FCFA, alors que le contractuel additionné
+ *   vaut 5,37. Autrement dit, le taux contractuel est un PLANCHER.
+ *
+ *   Vouloir modéliser cet arrondi ici serait une illusion de précision : il
+ *   dépend de la décomposition interne du prestataire (3,6 % puis 1,77 %, chacun
+ *   arrondi), qu'on n'observe pas. C'est l'écran SuperAdmin qui couvre ce
+ *   terrain — il compare les taux saisis à ceux RÉELLEMENT prélevés et chiffre
+ *   l'écart. Un garde-fou qui ment sur sa portée est pire qu'un garde-fou absent.
  *
  * Même esprit que check-migrations.js (§254), check-html-pages.js (§218) et
  * check-i18n-pages.js (§228) : ce qui ne se voit pas à la relecture doit se
@@ -140,7 +154,18 @@ if (payin !== null) {
   let posee = null;
   let posePar = null;
   for (const fichier of fichiers) {
-    const source = fs.readFileSync(path.join(MIGRATIONS, fichier), 'utf8');
+    const brut = fs.readFileSync(path.join(MIGRATIONS, fichier), 'utf8');
+
+    // 🔴 Ne lire que le corps de `Up()`. Le `Down()` d'une migration de
+    // recalibrage repose la valeur PRÉCÉDENTE — la prendre pour la valeur
+    // courante ferait échouer le contrôle sur une migration pourtant juste
+    // (constaté au premier recalibrage : 5.37 lu dans le Down au lieu de 5.40).
+    const debutUp = brut.indexOf('void Up(');
+    const debutDown = brut.indexOf('void Down(');
+    const source =
+      debutUp === -1
+        ? brut
+        : brut.slice(debutUp, debutDown === -1 ? undefined : debutDown);
     // Un UPDATE (ou un defaultValue) qui fixe PayinFeePercent. Le `\\?` couvre
     // le guillemet échappé du SQL PostgreSQL écrit dans une chaîne C# :
     //   "UPDATE \"PlatformSettings\" SET \"PayinFeePercent\" = 5.37;"
@@ -179,7 +204,12 @@ if (echecs.length === 0) {
   const pct = (((1 + b) / (1 - a) - 1) * 100).toFixed(3);
   console.log(
     `Majoration déduite ${pct} % (encaissement ${payin} %, retrait ${payout} %) · ` +
-      `neutre de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA · 3 contrôles, 0 en échec.`
+      `neutre de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA AU TAUX SAISI · ` +
+      `3 contrôles, 0 en échec.`
+  );
+  console.log(
+    "L'arrondi réel du prestataire n'est pas modélisé ici — c'est l'écran " +
+      'SuperAdmin qui le mesure.'
   );
   process.exit(0);
 }
