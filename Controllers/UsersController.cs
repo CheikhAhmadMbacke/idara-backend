@@ -60,11 +60,36 @@ namespace Idara.API.Controllers
             if (!string.IsNullOrWhiteSpace(search))
             {
                 var s = search.Trim().ToLower();
+
+                // 🔑 **Chercher par NUMÉRO.** C'est lui la clé d'unicité des
+                // comptes (§198), et depuis l'inscription par téléphone c'est
+                // par lui qu'arrive le cas à traiter : un directeur appelle
+                // parce qu'on lui répond « ce numéro a déjà un compte ». Sans
+                // cette ligne, le SuperAdmin ne pouvait pas retrouver le compte
+                // en question — la porte de sortie humaine promise par l'écran
+                // d'inscription ne menait nulle part.
+                //
+                // ⚠️ En base, le numéro est en **E.164** (« +221774677217 »,
+                // vérifié : 122 comptes sur 122). On ramène donc la saisie aux
+                // 9 chiffres nationaux et on cherche en sous-chaîne : les deux
+                // écritures tombent alors sur la même ligne. On accepte ce
+                // qu'un humain recopie vraiment : « 77 467 72 17 »,
+                // « +221 77 467 72 17 », « 00221774677217 ».
+                var chiffres = new string(s.Where(char.IsDigit).ToArray());
+                chiffres = chiffres.TrimStart('0');
+                if (chiffres.Length > 9 && chiffres.StartsWith("221"))
+                    chiffres = chiffres[3..];
+
+                // Une recherche sans aucun chiffre ne désigne pas un numéro :
+                // on repasse le texte, qui ne peut alors matcher aucun numéro.
+                var numero = chiffres.Length == 0 ? s : chiffres;
+
                 query = query.Where(u =>
                     (u.Email != null && u.Email.ToLower().Contains(s)) ||
                     (u.FullName != null && u.FullName.ToLower().Contains(s)) ||
                     (u.FirstName != null && u.FirstName.ToLower().Contains(s)) ||
-                    (u.LastName != null && u.LastName.ToLower().Contains(s)));
+                    (u.LastName != null && u.LastName.ToLower().Contains(s)) ||
+                    (u.PhoneNumber != null && u.PhoneNumber.Contains(numero)));
             }
 
             var items = await query
