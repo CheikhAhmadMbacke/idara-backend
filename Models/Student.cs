@@ -16,6 +16,24 @@ namespace Idara.API.Models
         public string? Nationality { get; set; }
         public string? PhotoUrl { get; set; }
 
+        /// <summary>
+        /// Toutes les formes sous lesquelles cet élève doit pouvoir être trouvé :
+        /// nom plié (sans accents), translittération latine s'il est écrit en
+        /// caractères arabes, et squelette consonantique.
+        ///
+        /// <para>🔑 C'est ce champ qui rend <b>« Cheikh »</b> et <b>« شيخ »</b>
+        /// interchangeables à la recherche. Au Sénégal les noms wolof s'écrivent
+        /// aussi en orthographe arabe, et un cahier en ajami lu par l'IA crée
+        /// des dizaines d'élèves qu'aucun secrétaire ne retrouverait en latin.</para>
+        ///
+        /// <para>⚠️ DÉRIVÉ, jamais saisi : produit par
+        /// <see cref="Common.Utilities.SearchText.IndexPourPersonne"/>. Toute
+        /// écriture du nom doit le recalculer — un champ dérivé qu'on oublie de
+        /// mettre à jour est la deuxième forme du piège du §140 : l'élève reste
+        /// trouvable sous son ANCIEN nom, et sous lui seul.</para>
+        /// </summary>
+        public string? SearchIndex { get; set; }
+
         // ----- Adresse -----
         public string? Address { get; set; }
         public string? City { get; set; }

@@ -106,10 +106,13 @@ namespace Idara.API.Controllers
 
             if (!string.IsNullOrWhiteSpace(search))
             {
-                var term = search.Trim().ToLower();
+                // Accents ignorés : on cherche un daara par « Mbacke » comme par
+                // « Mbacké », et par son quartier écrit sans accent.
+                var term = PersonSearch.MotifTexteLibre(search);
                 query = query.Where(s =>
-                    (s.Name != null && s.Name.ToLower().Contains(term))
-                    || (s.Address != null && s.Address.ToLower().Contains(term)));
+                    EF.Functions.ILike(AppDbContext.Unaccent(s.Name ?? ""), term)
+                    || EF.Functions.ILike(AppDbContext.Unaccent(s.NameAr ?? ""), term)
+                    || EF.Functions.ILike(AppDbContext.Unaccent(s.Address ?? ""), term));
             }
 
             var schools = await query
@@ -416,9 +419,9 @@ namespace Idara.API.Controllers
             {
                 query = query.Where(p =>
                     (p.SenePayTransactionId != null
-                        && EF.Functions.ILike(p.SenePayTransactionId, pattern))
+                        && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))
                     || _context.Schools.Any(sc => sc.Id == p.SchoolId
-                        && EF.Functions.ILike(sc.Name!, pattern)));
+                        && EF.Functions.ILike(AppDbContext.Unaccent(sc.Name!), pattern)));
             }
 
             return query;

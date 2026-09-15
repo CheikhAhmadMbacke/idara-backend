@@ -1,5 +1,6 @@
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
+using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
 using Idara.API.DTOs.Common;
@@ -84,11 +85,17 @@ namespace Idara.API.Controllers
                 // on repasse le texte, qui ne peut alors matcher aucun numéro.
                 var numero = chiffres.Length == 0 ? s : chiffres;
 
+                // Le nom passe par PersonSearch : accents ignorés, et un nom en
+                // caractères arabes trouvable en latin. Le numéro garde son
+                // traitement propre (les 9 chiffres nationaux, ci-dessus), que
+                // l'index de recherche ne porte pas.
+                var (a, b, c) = PersonSearch.TroisMotifs(s);
+                var motifEmail = PersonSearch.MotifTexteLibre(s);
                 query = query.Where(u =>
-                    (u.Email != null && u.Email.ToLower().Contains(s)) ||
-                    (u.FullName != null && u.FullName.ToLower().Contains(s)) ||
-                    (u.FirstName != null && u.FirstName.ToLower().Contains(s)) ||
-                    (u.LastName != null && u.LastName.ToLower().Contains(s)) ||
+                    (a != null && EF.Functions.ILike(u.SearchIndex ?? "", a)) ||
+                    (b != null && EF.Functions.ILike(u.SearchIndex ?? "", b)) ||
+                    (c != null && EF.Functions.ILike(u.SearchIndex ?? "", c)) ||
+                    EF.Functions.ILike(AppDbContext.Unaccent(u.Email ?? ""), motifEmail) ||
                     (u.PhoneNumber != null && u.PhoneNumber.Contains(numero)));
             }
 

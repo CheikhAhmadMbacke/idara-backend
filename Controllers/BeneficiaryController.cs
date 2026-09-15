@@ -68,9 +68,9 @@ namespace Idara.API.Controllers
             if (category.HasValue) query = query.Where(w => w.Category == category.Value);
             if (TransactionSearch.Pattern(search) is string pattern)
                 query = query.Where(w =>
-                    (w.School != null && EF.Functions.ILike(w.School!.Name!, pattern))
-                    || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
-                    || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern)));
+                    (w.School != null && EF.Functions.ILike(AppDbContext.Unaccent(w.School!.Name!), pattern))
+                    || (w.Motif != null && EF.Functions.ILike(AppDbContext.Unaccent(w.Motif), pattern))
+                    || (w.CategoryLabel != null && EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel), pattern)));
 
             var candidates = await query
                 .OrderByDescending(w => w.CreatedAt)
@@ -116,9 +116,9 @@ namespace Idara.API.Controllers
                 if (category.HasValue) query = query.Where(w => w.Category == category.Value);
                 if (TransactionSearch.Pattern(search) is string pattern)
                     query = query.Where(w =>
-                        (w.School != null && EF.Functions.ILike(w.School!.Name!, pattern))
-                        || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
-                        || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern)));
+                        (w.School != null && EF.Functions.ILike(AppDbContext.Unaccent(w.School!.Name!), pattern))
+                        || (w.Motif != null && EF.Functions.ILike(AppDbContext.Unaccent(w.Motif), pattern))
+                        || (w.CategoryLabel != null && EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel), pattern)));
 
 
                 var candidates = await query.OrderByDescending(w => w.CreatedAt).ToListAsync(ct);

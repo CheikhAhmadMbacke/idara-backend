@@ -314,7 +314,11 @@ namespace Idara.API.Controllers
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                var term = q.Trim();
+                // Plié comme les colonnes en face (règle d'or : un accent
+                // n'empêche jamais de trouver). Sans ce pliage, chercher
+                // « Mbacké » ne renverrait plus RIEN, la colonne étant
+                // désormais comparée sans ses accents.
+                var term = SearchText.Fold(q);
                 // La référence « RET-000087 » est saisie telle qu'elle est
                 // affichée : on en extrait l'identifiant, sinon la recherche la
                 // plus naturelle (recopier ce qu'on a sous les yeux) ne
@@ -325,11 +329,11 @@ namespace Idara.API.Controllers
                     && int.TryParse(digits, out var parsed)) byRef = parsed;
 
                 query = query.Where(w =>
-                    EF.Functions.ILike(w.RecipientName, $"%{term}%")
-                    || EF.Functions.ILike(w.RecipientPhone, $"%{term}%")
-                    || EF.Functions.ILike(w.Motif ?? "", $"%{term}%")
-                    || EF.Functions.ILike(w.CategoryLabel ?? "", $"%{term}%")
-                    || EF.Functions.ILike(w.SenePayDisbursementId ?? "", $"%{term}%")
+                    EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientName), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.Motif ?? ""), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel ?? ""), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.SenePayDisbursementId ?? ""), $"%{term}%")
                     || (byRef != null && w.Id == byRef));
             }
 

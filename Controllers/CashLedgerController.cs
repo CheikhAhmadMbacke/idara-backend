@@ -51,8 +51,8 @@ namespace Idara.API.Controllers
             // l'argent physique deja constate : elle n'a pas de statut a filtrer.)
             if (Common.Utilities.TransactionSearch.Pattern(search) is string pattern)
                 q = q.Where(e =>
-                    (e.Category != null && EF.Functions.ILike(e.Category, pattern))
-                    || (e.Note != null && EF.Functions.ILike(e.Note, pattern)));
+                    (e.Category != null && EF.Functions.ILike(AppDbContext.Unaccent(e.Category), pattern))
+                    || (e.Note != null && EF.Functions.ILike(AppDbContext.Unaccent(e.Note), pattern)));
 
             var items = await q
                 .OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id)
@@ -206,8 +206,8 @@ namespace Idara.API.Controllers
             // l'argent physique deja constate : elle n'a pas de statut a filtrer.)
             if (Common.Utilities.TransactionSearch.Pattern(search) is string pattern)
                 q = q.Where(e =>
-                    (e.Category != null && EF.Functions.ILike(e.Category, pattern))
-                    || (e.Note != null && EF.Functions.ILike(e.Note, pattern)));
+                    (e.Category != null && EF.Functions.ILike(AppDbContext.Unaccent(e.Category), pattern))
+                    || (e.Note != null && EF.Functions.ILike(AppDbContext.Unaccent(e.Note), pattern)));
 
             var items = await q
                 .OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id)

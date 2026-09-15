@@ -280,12 +280,13 @@ namespace Idara.API.Controllers
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                var term = q.Trim();
+                // Plié comme les colonnes en face (cf. AdminWithdrawals).
+                var term = SearchText.Fold(q);
                 query = query.Where(n =>
-                    EF.Functions.ILike(n.Recipient, $"%{term}%")
-                    || EF.Functions.ILike(n.SchoolNameSnapshot ?? "", $"%{term}%")
-                    || EF.Functions.ILike(n.TriggerSource ?? "", $"%{term}%")
-                    || EF.Functions.ILike(n.TemplateCode, $"%{term}%"));
+                    EF.Functions.ILike(AppDbContext.Unaccent(n.Recipient), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(n.SchoolNameSnapshot ?? ""), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(n.TriggerSource ?? ""), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(n.TemplateCode), $"%{term}%"));
             }
 
             var total = await query.CountAsync(ct);

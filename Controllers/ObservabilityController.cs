@@ -150,16 +150,16 @@ namespace Idara.API.Controllers
                         // traduit en COALESCE, et une valeur absente ne
                         // correspond de toute façon à aucune recherche.
                         query = query.Where(i =>
-                            EF.Functions.ILike(i.Code, pattern) ||
-                            EF.Functions.ILike(i.Message, pattern) ||
-                            EF.Functions.ILike(i.Route, pattern) ||
+                            EF.Functions.ILike(AppDbContext.Unaccent(i.Code), pattern) ||
+                            EF.Functions.ILike(AppDbContext.Unaccent(i.Message), pattern) ||
+                            EF.Functions.ILike(AppDbContext.Unaccent(i.Route), pattern) ||
                             // Le commentaire de l'utilisateur est le texte le
                             // PLUS signifiant d'un signalement (« le bouton
                             // retrait ne fait rien ») : c'est le premier réflexe
                             // de recherche, il serait absurde de l'exclure.
-                            EF.Functions.ILike(i.UserComment ?? string.Empty, pattern) ||
-                            (i.User != null && EF.Functions.ILike(i.User.FullName ?? string.Empty, pattern)) ||
-                            (i.School != null && EF.Functions.ILike(i.School.Name ?? string.Empty, pattern)));
+                            EF.Functions.ILike(AppDbContext.Unaccent(i.UserComment ?? string.Empty), pattern) ||
+                            (i.User != null && EF.Functions.ILike(i.User.SearchIndex ?? string.Empty, pattern)) ||
+                            (i.School != null && EF.Functions.ILike(AppDbContext.Unaccent(i.School.Name ?? string.Empty), pattern)));
                     }
                 }
             }

@@ -73,14 +73,10 @@ namespace Idara.API.Services
                     : query.Where(s => s.ClassId != null && restrictToClassIds.Contains(s.ClassId.Value));
             }
 
-            if (!string.IsNullOrWhiteSpace(pagination.Search))
-            {
-                var search = pagination.Search.ToLower();
-                query = query.Where(s =>
-                    s.FirstName.ToLower().Contains(search) ||
-                    s.LastName.ToLower().Contains(search) ||
-                    (s.StudentNumber != null && s.StudentNumber.ToLower().Contains(search)));
-            }
+            // Un accent n'empêche jamais de trouver, et un nom écrit en
+            // caractères arabes se trouve en latin — les deux règles sont dans
+            // PersonSearch, pas ici (§199).
+            query = query.OuLeNomCorrespond(pagination.Search);
 
             // ----- Filtres (2026-08-09) -----
             // Appliqués AVANT le Count et la pagination : sans quoi le total et

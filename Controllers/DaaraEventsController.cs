@@ -144,8 +144,8 @@ namespace Idara.API.Controllers
                 if (TransactionSearch.Pattern(q) is string pattern)
                 {
                     query = query.Where(e =>
-                        EF.Functions.ILike(e.Title, pattern) ||
-                        (e.Description != null && EF.Functions.ILike(e.Description, pattern)));
+                        EF.Functions.ILike(AppDbContext.Unaccent(e.Title), pattern) ||
+                        (e.Description != null && EF.Functions.ILike(AppDbContext.Unaccent(e.Description), pattern)));
                 }
             }
 

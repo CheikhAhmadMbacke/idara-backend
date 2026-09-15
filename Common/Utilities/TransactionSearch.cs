@@ -33,6 +33,15 @@ namespace Idara.API.Common.Utilities
             var term = raw.Trim();
             if (term.Length > MaxLength) term = term[..MaxLength];
 
+            // 🔑 Les accents sont retirés ICI, et les colonnes sont pliées en
+            // face par AppDbContext.Unaccent(...) : c'est la règle d'or
+            // « un accent n'empêche jamais de trouver », appliquée d'un coup aux
+            // neuf écrans qui passent par ce point unique. Les deux côtés
+            // doivent rester d'accord — plier ici sans plier la colonne (ou
+            // l'inverse) ne renverrait plus rien, en silence.
+            term = SearchText.Fold(term);
+            if (term.Length == 0) return null;
+
             // \ d'abord : sinon on ré-échapperait les antislashs qu'on vient d'ajouter.
             term = term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
             return $"%{term}%";

@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Common.Utilities;
 
 namespace Idara.API.Data
 {
@@ -109,6 +110,32 @@ namespace Idara.API.Data
 
         // ----- Factures SMS du fournisseur, saisies pour confrontation -----
         public DbSet<SmsProviderInvoice> SmsProviderInvoices { get; set; }
+
+        /// <summary>
+        /// La fonction <c>unaccent()</c> de PostgreSQL, appelable depuis LINQ.
+        ///
+        /// <para>🔑 <b>C'est elle qui tient la règle d'or : un accent n'empêche
+        /// jamais de trouver.</b> Elle s'applique à la COLONNE dans le SQL, le
+        /// terme étant plié côté C# par <see cref="SearchText.Fold"/> — les deux
+        /// doivent donc rester d'accord (accents retirés, rien d'autre).</para>
+        ///
+        /// <para>Choisie plutôt qu'une colonne normalisée sur chaque table parce
+        /// que la règle vaut PARTOUT : elle couvre d'un coup les noms d'élèves,
+        /// mais aussi les notes de caisse, les motifs de retrait, les catégories
+        /// et les titres d'événements — que personne n'aurait songé à doter
+        /// d'une colonne de recherche.</para>
+        ///
+        /// <para>⚠️ L'extension est créée par la migration
+        /// <c>SearchFoldAndAjami</c>. Sans elle, TOUTE recherche lèverait une
+        /// erreur SQL : c'est pourquoi la migration la crée avant d'ajouter
+        /// quoi que ce soit, et que <c>CREATE EXTENSION</c> est à la portée du
+        /// compte <c>idara</c> (propriétaire de la base — vérifié en production
+        /// le 2026-09-15, <c>unaccent</c> étant « trusted » depuis PG 13).</para>
+        /// </summary>
+        [DbFunction("unaccent", IsBuiltIn = false)]
+        public static string Unaccent(string input) => throw new NotSupportedException(
+            "unaccent() ne s'évalue qu'en base : cette méthode ne doit apparaître "
+            + "que dans une requête LINQ traduite en SQL.");
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -1376,6 +1403,87 @@ namespace Idara.API.Data
 
             modelBuilder.Entity<SubscriptionInvoice>()
                 .HasIndex(i => i.SchoolId);
+
+            // --- Index de recherche des noms (accents + ajami) ---
+            // Interrogés par un LIKE sur la totalité du champ : un index B-tree
+            // ne servirait à rien. Les volumes (des centaines de lignes par
+            // école) rendent le balayage négligeable, et un index GIN/trigram
+            // demanderait pg_trgm sans rien gagner de mesurable aujourd'hui.
+            modelBuilder.Entity<Student>().Property(s => s.SearchIndex).HasMaxLength(1000);
+            modelBuilder.Entity<User>().Property(u => u.SearchIndex).HasMaxLength(1000);
+        }
+
+        // -----------------------------------------------------------------
+        //  L'index de recherche se recalcule TOUT SEUL
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Recalcule <c>SearchIndex</c> sur tout élève et tout compte ajouté ou
+        /// modifié, juste avant l'écriture.
+        ///
+        /// <para>🔑 <b>C'est ici, et pas dans les services, que ça doit se
+        /// faire.</b> Un champ dérivé qu'on recalcule « à chaque endroit qui
+        /// écrit » finit toujours par être oublié dans un endroit — et
+        /// l'oubli est invisible : l'élève reste trouvable sous son ANCIEN nom,
+        /// et sous lui seul. Sept chemins écrivent un nom aujourd'hui (saisie,
+        /// import fichier, import photo, invitation, inscription, seed de démo,
+        /// fusion de responsable) ; il y en aura d'autres. Tous passent par
+        /// <c>SaveChanges</c>.</para>
+        ///
+        /// <para>⚠️ Seule exception connue : <c>ExecuteUpdateAsync</c>, qui
+        /// contourne le change tracker (§52). Aucun appel n'écrit un nom
+        /// aujourd'hui — vérifié. Si cela devait changer, l'index devrait être
+        /// recalculé à la main dans ce chemin-là.</para>
+        /// </summary>
+        private void RafraichirIndexDeRecherche()
+        {
+            foreach (var entree in ChangeTracker.Entries<Student>())
+            {
+                if (entree.State is not (EntityState.Added or EntityState.Modified)) continue;
+                var e = entree.Entity;
+                e.SearchIndex = Tronquer(
+                    SearchText.IndexPourPersonne(e.FirstName, e.MiddleName, e.LastName));
+            }
+
+            foreach (var entree in ChangeTracker.Entries<User>())
+            {
+                if (entree.State is not (EntityState.Added or EntityState.Modified)) continue;
+                var u = entree.Entity;
+                // FullName ET le couple prénom/nom : selon le chemin de création,
+                // l'un ou l'autre peut être seul renseigné.
+                u.SearchIndex = Tronquer(
+                    SearchText.IndexPourPersonne(u.FullName, u.FirstName, u.LastName));
+            }
+        }
+
+        /// <summary>1000 caractères, la limite de la colonne. Un nom très long
+        /// perdrait ses dernières formes plutôt que de faire échouer l'écriture
+        /// de l'élève — jamais l'inverse.</summary>
+        private static string Tronquer(string s) => s.Length <= 1000 ? s : s[..1000];
+
+        public override int SaveChanges()
+        {
+            RafraichirIndexDeRecherche();
+            return base.SaveChanges();
+        }
+
+        public override int SaveChanges(bool acceptAllChangesOnSuccess)
+        {
+            RafraichirIndexDeRecherche();
+            return base.SaveChanges(acceptAllChangesOnSuccess);
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            RafraichirIndexDeRecherche();
+            return base.SaveChangesAsync(cancellationToken);
+        }
+
+        public override Task<int> SaveChangesAsync(
+            bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            RafraichirIndexDeRecherche();
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
         }
     }
 }

@@ -17,6 +17,18 @@ namespace Idara.API.Models
         public string? FirstName { get; set; }
         public string? LastName { get; set; }
         public string? PhoneNumber { get; set; }
+
+        /// <summary>
+        /// Les formes sous lesquelles ce compte doit pouvoir être trouvé — même
+        /// rôle que <see cref="Student.SearchIndex"/>, et pour la même raison :
+        /// un responsable saisi « الحاج صو » doit sortir quand on cherche
+        /// « Elhaj Sow », sans quoi l'école ne peut plus rattacher un frère à
+        /// sa famille.
+        ///
+        /// <para>⚠️ DÉRIVÉ de FullName / FirstName / LastName, jamais saisi.</para>
+        /// </summary>
+        public string? SearchIndex { get; set; }
+
         public string PasswordHash { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
 

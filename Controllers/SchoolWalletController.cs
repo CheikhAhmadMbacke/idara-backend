@@ -587,12 +587,12 @@ namespace Idara.API.Controllers
                 // et « 771234567 » doivent ramener le même virement.
                 var digits = TransactionSearch.PhonePattern(search);
                 query = query.Where(w =>
-                    EF.Functions.ILike(w.RecipientName, pattern)
-                    || EF.Functions.ILike(w.RecipientPhone, pattern)
-                    || (digits != null && EF.Functions.ILike(w.RecipientPhone, digits))
-                    || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern))
-                    || (w.CategoryLabel != null && EF.Functions.ILike(w.CategoryLabel, pattern))
-                    || (w.SenePayDisbursementId != null && EF.Functions.ILike(w.SenePayDisbursementId, pattern)));
+                    EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientName), pattern)
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), pattern)
+                    || (digits != null && EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), digits))
+                    || (w.Motif != null && EF.Functions.ILike(AppDbContext.Unaccent(w.Motif), pattern))
+                    || (w.CategoryLabel != null && EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel), pattern))
+                    || (w.SenePayDisbursementId != null && EF.Functions.ILike(AppDbContext.Unaccent(w.SenePayDisbursementId), pattern)));
             }
 
             return query;

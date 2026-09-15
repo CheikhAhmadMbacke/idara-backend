@@ -1520,21 +1520,21 @@ namespace Idara.API.Controllers
             if (TransactionSearch.Pattern(search) is string pattern)
             {
                 query = query.Where(t =>
-                    (t.Note != null && EF.Functions.ILike(t.Note, pattern))
+                    (t.Note != null && EF.Functions.ILike(AppDbContext.Unaccent(t.Note), pattern))
                     || _context.Payments.Any(p => p.Id == t.RelatedId
                         && (t.Source == WalletSource.Payment || t.Source == WalletSource.Donation
                             || t.Source == WalletSource.Topup)
-                        && ((p.Student != null && (EF.Functions.ILike(p.Student!.FirstName, pattern)
-                                                || EF.Functions.ILike(p.Student!.LastName, pattern)))
-                            || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.FullName!, pattern))
-                            || (p.Donor != null && EF.Functions.ILike(p.Donor!.FullName!, pattern))
+                        && ((p.Student != null && (EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)
+                                                || EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)))
+                            || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.SearchIndex ?? "", pattern))
+                            || (p.Donor != null && EF.Functions.ILike(p.Donor!.SearchIndex ?? "", pattern))
                             || (p.SenePayTransactionId != null
-                                && EF.Functions.ILike(p.SenePayTransactionId, pattern))))
+                                && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))))
                     || _context.Withdrawals.Any(w => w.Id == t.RelatedId
                         && t.Source == WalletSource.Withdrawal
-                        && (EF.Functions.ILike(w.RecipientName, pattern)
-                            || EF.Functions.ILike(w.RecipientPhone, pattern)
-                            || (w.Motif != null && EF.Functions.ILike(w.Motif, pattern)))));
+                        && (EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientName), pattern)
+                            || EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), pattern)
+                            || (w.Motif != null && EF.Functions.ILike(AppDbContext.Unaccent(w.Motif), pattern)))));
             }
 
             var recentRaw = await query
@@ -1921,12 +1921,12 @@ namespace Idara.API.Controllers
             {
                 query = query.Where(p =>
                     (p.Student != null && (
-                        EF.Functions.ILike(p.Student!.FirstName, pattern) ||
-                        EF.Functions.ILike(p.Student!.LastName, pattern) ||
-                        (p.Student.StudentNumber != null && EF.Functions.ILike(p.Student!.StudentNumber!, pattern))))
-                    || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.FullName!, pattern))
-                    || (p.Donor != null && EF.Functions.ILike(p.Donor!.FullName!, pattern))
-                    || (p.SenePayTransactionId != null && EF.Functions.ILike(p.SenePayTransactionId, pattern)));
+                        EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern) ||
+                        EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern) ||
+                        (p.Student.StudentNumber != null && EF.Functions.ILike(AppDbContext.Unaccent(p.Student!.StudentNumber!), pattern))))
+                    || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.SearchIndex ?? "", pattern))
+                    || (p.Donor != null && EF.Functions.ILike(p.Donor!.SearchIndex ?? "", pattern))
+                    || (p.SenePayTransactionId != null && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern)));
             }
 
             if (status.HasValue)

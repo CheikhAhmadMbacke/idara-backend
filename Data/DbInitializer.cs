@@ -43,6 +43,7 @@ namespace Idara.API.Data
             await SeedSubscriptionPlansAsync();
             await SeedSubscriptionsAsync();
             await NormalizeUserPhonesAsync();
+            await BackfillSearchIndexAsync();
             await RetypeQuranSubjectsAsync();
             await SeedDemoSchoolAsync();
             await SeedDemoTeacherAsync();
@@ -50,6 +51,44 @@ namespace Idara.API.Data
             await PurgeStaleIdempotencyRecordsAsync();
             await PurgeStaleIncidentsAsync();
             await PurgeStaleOpsAlertsAsync();
+        }
+
+        /// <summary>
+        /// 🔍 Donne son index de recherche à tout élève et tout compte qui n'en
+        /// a pas encore.
+        ///
+        /// <para><b>Sans cette passe, la fonctionnalité serait vraie pour les
+        /// nouveaux et fausse pour les anciens</b> — c'est-à-dire pour la
+        /// totalité des élèves déjà inscrits. Un import en ajami fait hier
+        /// resterait introuvable en latin, et personne ne comprendrait pourquoi
+        /// la recherche « marche parfois ».</para>
+        ///
+        /// <para>Ne touche QUE les lignes à <c>NULL</c> : elle est donc
+        /// idempotente et ne coûte plus rien aux démarrages suivants. Le calcul
+        /// lui-même est fait par <c>SaveChanges</c>, qui recalcule l'index de
+        /// toute entité modifiée — il suffit ici de marquer les lignes comme
+        /// modifiées, sans réécrire la règle une seconde fois (§199).</para>
+        /// </summary>
+        private async Task BackfillSearchIndexAsync()
+        {
+            var eleves = await _context.Students
+                .Where(s => s.SearchIndex == null)
+                .ToListAsync();
+            var comptes = await _context.Users
+                .Where(u => u.SearchIndex == null)
+                .ToListAsync();
+
+            if (eleves.Count == 0 && comptes.Count == 0) return;
+
+            // Marquer comme modifié suffit : SaveChanges pose l'index.
+            foreach (var e in eleves) _context.Entry(e).State = EntityState.Modified;
+            foreach (var u in comptes) _context.Entry(u).State = EntityState.Modified;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "[recherche] Index de recherche posé sur {Eleves} élève(s) et {Comptes} compte(s) "
+                + "— accents et ajami désormais trouvables pour les fiches existantes.",
+                eleves.Count, comptes.Count);
         }
 
         /// <summary>

@@ -569,12 +569,12 @@ namespace Idara.API.Controllers
             if (TransactionSearch.Pattern(search) is string pattern)
             {
                 query = query.Where(p =>
-                    (p.Student != null && (EF.Functions.ILike(p.Student!.FirstName, pattern)
-                                        || EF.Functions.ILike(p.Student!.LastName, pattern)))
+                    (p.Student != null && (EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)
+                                        || EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)))
                     || (p.SenePayTransactionId != null
-                        && EF.Functions.ILike(p.SenePayTransactionId, pattern))
+                        && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))
                     || _context.Schools.Any(sc => sc.Id == p.SchoolId
-                        && EF.Functions.ILike(sc.Name!, pattern)));
+                        && EF.Functions.ILike(AppDbContext.Unaccent(sc.Name!), pattern)));
             }
 
             if (status.HasValue)
