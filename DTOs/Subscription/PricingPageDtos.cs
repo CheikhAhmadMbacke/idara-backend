@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace Idara.API.DTOs.Subscription
 {
@@ -72,5 +72,16 @@ namespace Idara.API.DTOs.Subscription
         public PricingContentDto Content { get; set; } = new();
         public List<SubscriptionPlanDto> Plans { get; set; } = new();
         public List<PricingFaqDto> Faqs { get; set; } = new();
+
+        /// <summary>
+        /// Durée de l'essai gratuit, en jours — la constante qui fixe réellement
+        /// <c>TrialEndsAt</c> à la création d'une école, pas une valeur d'affichage.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 Elle est exposée pour que la page d'accueil puisse écrire
+        /// « 30 jours gratuits » sur son bouton <b>sans recopier le chiffre</b>.
+        /// Le jour où l'essai changera de durée, l'annonce suivra d'elle-même.
+        /// </remarks>
+        public int TrialDays { get; set; }
     }
 }

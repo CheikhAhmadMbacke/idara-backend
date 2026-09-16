@@ -1,4 +1,4 @@
-using Idara.API.Data;
+﻿using Idara.API.Data;
 using Idara.API.DTOs.Subscription;
 using Idara.API.Models;
 using Microsoft.EntityFrameworkCore;
@@ -72,6 +72,7 @@ namespace Idara.API.Services
 
             return new PublicPricingDto
             {
+                TrialDays = Common.Extensions.SubscriptionExtensions.TrialDays,
                 Content = MapContent(content),
                 Plans = plans.Select(MapPlan).ToList(),
                 Faqs = faqs.Select(MapFaq).ToList()
