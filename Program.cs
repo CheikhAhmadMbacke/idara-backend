@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json.Serialization;
 using Idara.API.Common.Middleware;
 using Idara.API.Common.Observability;
@@ -350,7 +350,29 @@ builder.Services.AddCors(options =>
     {
         if (allowedOrigins is { Length: > 0 })
         {
-            policy.WithOrigins(allowedOrigins)
+            policy.SetIsOriginAllowed(origin =>
+                  {
+                      if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+                          return true;
+
+                      // 🖥️ **La machine du développeur, quel que soit le port.**
+                      //
+                      // Flutter web tire un port au hasard à chaque `flutter run`
+                      // (57616, puis 61204, puis…). Sans cette règle, toute
+                      // requête partie de localhost était refusée par le
+                      // navigateur — et l'application, qui ne distingue pas un
+                      // refus CORS d'une coupure réseau, affichait « Activez vos
+                      // données ou le Wi-Fi » (§125). Impossible, donc, de
+                      // relire une page publique avant de la livrer.
+                      //
+                      // 🔒 Ce que ça n'ouvre PAS : l'authentification passe par
+                      // un jeton porté en en-tête, lu dans le stockage de
+                      // `idara.sn` — une page servie depuis le localhost de
+                      // quelqu'un n'y a aucun accès, CORS ou pas. Elle ne peut
+                      // donc appeler que ce qui est déjà anonyme.
+                      return Uri.TryCreate(origin, UriKind.Absolute, out var u)
+                             && (u.IsLoopback || u.Host.Equals("10.0.2.2", StringComparison.Ordinal));
+                  })
                   .AllowAnyMethod()
                   .AllowAnyHeader()
                   // ⚠️ Sans cette ligne, le navigateur MASQUE l'en-tête au
