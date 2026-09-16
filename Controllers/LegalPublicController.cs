@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -43,6 +43,19 @@ namespace Idara.API.Controllers
         {
             var settings = await _context.GetPlatformSettingsAsync(ct);
             return Content(LegalHtmlRenderer.Privacy(settings), "text/html; charset=utf-8");
+        }
+
+        /// <summary>
+        /// Les mentions légales, sur leur propre page — c'est le lien attendu
+        /// en pied de page de tout service commercial.
+        /// </summary>
+        [HttpGet("/mentions-legales")]
+        [HttpGet("/legal-notice")]
+        [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
+        public async Task<IActionResult> Notice(CancellationToken ct)
+        {
+            var settings = await _context.GetPlatformSettingsAsync(ct);
+            return Content(LegalHtmlRenderer.Notice(settings), "text/html; charset=utf-8");
         }
 
         /// <summary>

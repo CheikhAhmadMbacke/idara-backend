@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using Idara.API.Models;
 
@@ -128,6 +128,53 @@ namespace Idara.API.Services
             Row("Déclaration CDP", p.LegalCdpNumber);
             sb.Append("</table>");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// L'identité de l'éditeur, sur sa propre page.
+        ///
+        /// <para>Elle figurait déjà en tête des CGU et de la politique de
+        /// confidentialité, mais personne ne va chercher « qui édite ce
+        /// service » au milieu d'un contrat : l'usage veut un lien « Mentions
+        /// légales » qui mène directement au bloc d'identité.</para>
+        ///
+        /// <para>⚠️ Chaque ligne s'affiche seulement si elle est renseignée, et
+        /// la mention CDP disparaît tant qu'aucun récépissé n'existe. Une page
+        /// de mentions qui invente une ligne vaut moins que pas de page.</para>
+        /// </summary>
+        public static string Notice(PlatformSettings p)
+        {
+            var editor = H(Editor(p));
+            var identity = IdentityBlock(p);
+            var body = $$"""
+<h1>Mentions légales</h1>
+<p>
+  Les informations ci-dessous identifient l'éditeur du service Idara, accessible
+  à l'adresse <a href="https://idara.sn">idara.sn</a> et par son application mobile.
+</p>
+{{identity}}
+<h2>Hébergement</h2>
+<p>
+  Les données sont hébergées dans l'Union européenne, sur une infrastructure
+  louée à Hetzner Online GmbH (Allemagne).
+</p>
+<h2>Propriété</h2>
+<p>
+  L'ensemble des contenus du service — marque, textes, interfaces, code — est la
+  propriété de {{editor}}, à l'exception des données que chaque établissement y
+  enregistre, qui restent les siennes.
+</p>
+<h2>Documents liés</h2>
+<ul>
+  <li><a href="/cgu">Conditions générales d'utilisation</a></li>
+  <li><a href="/confidentialite">Politique de confidentialité</a></li>
+</ul>
+""";
+            return Page("Mentions légales",
+                "Qui édite Idara, et sous quelle responsabilité",
+                H(p.LegalVersion), body)
+                .Replace("%%EDITOR%%", editor)
+                .Replace("%%CONTACT%%", H(Contact(p)));
         }
 
         // ================================================================
