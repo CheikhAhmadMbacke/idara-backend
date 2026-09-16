@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Idara.API.Models
 {
@@ -64,6 +64,23 @@ namespace Idara.API.Models
         /// injoignable.
         /// </remarks>
         public string? LandingHeroImagePath { get; set; }
+
+        /// <summary>
+        /// Captures d'écran de l'application montrées sur la page publique,
+        /// sous forme de tableau JSON de chemins relatifs
+        /// (<c>["/uploads/landing/a.jpg", …]</c>). Trois au plus.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Elles ne sont PAS livrées avec l'application, et c'est le
+        /// point.</b> Une capture codée en dur vieillit à chaque refonte
+        /// d'écran et finit par montrer un produit qui n'existe plus — sur la
+        /// première page que voit un directeur. Posées ici, elles se
+        /// remplacent depuis le back-office, sans redéploiement.
+        ///
+        /// <c>null</c> ou tableau vide = la section entière ne s'affiche pas.
+        /// Mieux vaut pas de captures que de fausses captures.
+        /// </remarks>
+        public string? LandingScreenshotsJson { get; set; }
 
         // ================================================================
         // ===== Mentions légales (2026-09-04) =====

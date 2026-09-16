@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -150,7 +150,7 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(s => s.Id == schoolId.Value, ct);
             if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
 
-            return Ok(MapToBrandingDto(school));
+            return Ok(await MapToBrandingDtoAsync(school, ct));
         }
 
         /// <summary>
@@ -170,12 +170,12 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(s => s.Id == schoolId, ct);
             if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
 
-            return Ok(MapToBrandingDto(school));
+            return Ok(await MapToBrandingDtoAsync(school, ct));
         }
 
         /// <summary>
-        /// Met à jour le branding de MON école (SchoolAdmin only) : logo, sous-titre,
-        /// couleur et/ou image de couverture. Le nom (titre) s'édite via my-info.
+        /// Met à jour le branding de MON école (SchoolAdmin only) : logo et couleur,
+        /// rien d'autre. Le nom (titre) s'édite via my-info.
         /// </summary>
         [Authorize(Roles = UserRoles.SchoolAdmin)]
         [HttpPut("branding")]
@@ -188,7 +188,11 @@ namespace Idara.API.Controllers
             var school = await _context.Schools.FirstOrDefaultAsync(s => s.Id == schoolId.Value, ct);
             if (school == null) return NotFound(ApiResponse<bool>.Fail("École introuvable."));
 
-            // Sous-titre : null = inchangé ; "" = revenir au défaut (stocké null).
+            // ⚠️ Sous-titre — OBSOLÈTE. Plus proposé par l'application depuis le
+            // 2026-09-16, mais toujours honoré : une version antérieure, encore
+            // installée sur des téléphones, l'envoie. L'accepter sans l'écrire
+            // ferait croire à l'école que sa modification a été prise en compte
+            // (§196). null = inchangé ; "" = revenir au défaut (stocké null).
             if (dto.WelcomeSubtitle != null)
                 school.WelcomeSubtitle = string.IsNullOrWhiteSpace(dto.WelcomeSubtitle)
                     ? null : dto.WelcomeSubtitle.Trim();
@@ -212,7 +216,7 @@ namespace Idara.API.Controllers
                 school.LogoUrl = saved;
             }
 
-            // Image de couverture : idem.
+            // ⚠️ Image de couverture — OBSOLÈTE, mêmes raisons que le sous-titre.
             if (dto.RemoveCoverImage)
             {
                 DeleteBrandingFile(school.CoverImageUrl);
@@ -220,27 +224,41 @@ namespace Idara.API.Controllers
             }
             else if (!string.IsNullOrWhiteSpace(dto.CoverImageBase64))
             {
-                var saved = await SaveBrandingImageAsync(dto.CoverImageBase64);
-                if (saved == null)
+                var savedCover = await SaveBrandingImageAsync(dto.CoverImageBase64);
+                if (savedCover == null)
                     return BadRequest(ApiResponse<bool>.Fail("Image de couverture invalide (format ou taille non supportés)."));
                 DeleteBrandingFile(school.CoverImageUrl);
-                school.CoverImageUrl = saved;
+                school.CoverImageUrl = savedCover;
             }
 
             await _context.SaveChangesAsync(ct);
             _logger.LogInformation("[school] Branding de l'école {SchoolId} mis à jour par {AdminId}", schoolId, User.GetUserId());
-            return Ok(MapToBrandingDto(school));
+            return Ok(await MapToBrandingDtoAsync(school, ct));
         }
 
-        private static SchoolBrandingDto MapToBrandingDto(SchoolModel s) => new()
+        /// <summary>
+        /// Carte d'identité du daara. Le sous-titre n'est plus un texte libre :
+        /// c'est l'<b>année scolaire en cours</b>, lue ici pour que TOUS les
+        /// rôles l'obtiennent — un enseignant ou un parent n'a pas accès à
+        /// <c>GET /school/stats</c>, qui la porte aussi.
+        /// </summary>
+        private async Task<SchoolBrandingDto> MapToBrandingDtoAsync(
+            SchoolModel s, CancellationToken ct) => new()
         {
             SchoolId = s.Id,
             Name = s.Name ?? string.Empty,
             NameAr = s.NameAr,
             LogoUrl = s.LogoUrl,
-            WelcomeSubtitle = s.WelcomeSubtitle,
             CoverColor = s.CoverColor,
-            CoverImageUrl = s.CoverImageUrl
+            // Obsolètes, servis aux applications antérieures au 2026-09-16 :
+            // sans eux, leur bandeau perdrait sa photo du jour au lendemain.
+            WelcomeSubtitle = s.WelcomeSubtitle,
+            CoverImageUrl = s.CoverImageUrl,
+            CurrentAcademicYearName = await _context.AcademicYears
+                .AsNoTracking()
+                .Where(y => y.SchoolId == s.Id && y.IsCurrent)
+                .Select(y => y.Name)
+                .FirstOrDefaultAsync(ct)
         };
 
         /// <summary>Décode + valide + sauvegarde une image de branding dans /uploads/school-branding/.</summary>

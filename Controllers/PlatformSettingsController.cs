@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Options;
 using Microsoft.Extensions.Options;
@@ -186,6 +186,125 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<LandingImageDto>.Ok(
                 new LandingImageDto { ImageUrl = s.LandingHeroImagePath },
                 dto.Remove ? "Image d'origine rétablie." : "Image d'accueil remplacée."));
+        }
+
+        // ================================================================
+        // ===== Captures d'écran de la page publique (2026-09-16) =====
+        // ================================================================
+
+        /// <summary>
+        /// `GET /api/platform-settings/landing-screenshots` — les captures
+        /// montrées sur idara.sn. **Anonyme** : la page d'accueil est vue par
+        /// des visiteurs sans compte.
+        /// </summary>
+        [HttpGet("landing-screenshots")]
+        [AllowAnonymous]
+        public async Task<ActionResult<ApiResponse<LandingScreenshotsDto>>> GetLandingScreenshots(
+            CancellationToken ct)
+        {
+            var s = await _context.GetPlatformSettingsAsync(ct);
+            return Ok(ApiResponse<LandingScreenshotsDto>.Ok(
+                new LandingScreenshotsDto { ImageUrls = ReadScreenshots(s) }));
+        }
+
+        /// <summary>
+        /// `PUT /api/platform-settings/landing-screenshots` — ajouter une
+        /// capture (base64) ou en retirer une par son rang.
+        /// </summary>
+        /// <remarks>
+        /// Trois au plus : au-delà, la section devient une galerie que personne
+        /// ne fait défiler, et chaque image supplémentaire retarde l'affichage
+        /// de la page sur une connexion lente.
+        /// </remarks>
+        [HttpPut("landing-screenshots")]
+        public async Task<ActionResult<ApiResponse<LandingScreenshotsDto>>> SetLandingScreenshots(
+            [FromBody] SetLandingScreenshotDto dto, CancellationToken ct)
+        {
+            var s = await _context.GetPlatformSettingsAsync(ct);
+            var list = ReadScreenshots(s);
+            string? removed = null;
+
+            if (dto.RemoveIndex is int idx)
+            {
+                if (idx < 0 || idx >= list.Count)
+                    return BadRequest(ApiResponse<LandingScreenshotsDto>.Fail("Capture introuvable."));
+                removed = list[idx];
+                list.RemoveAt(idx);
+            }
+            else
+            {
+                if (list.Count >= MaxLandingScreenshots)
+                    return BadRequest(ApiResponse<LandingScreenshotsDto>.Fail(
+                        $"Trois captures au maximum. Retirez-en une avant d'en ajouter."));
+
+                var decoded = FileUploadValidator.DecodeAndValidate(
+                    dto.ImageBase64 ?? string.Empty,
+                    _uploads.MaxPhotoSizeMb, _uploads.AllowedPhotoMimeTypes);
+                if (decoded == null)
+                    return BadRequest(ApiResponse<LandingScreenshotsDto>.Fail("Image invalide ou trop lourde."));
+
+                var folder = Path.Combine(_env.WebRootPath, "uploads", "landing");
+                Directory.CreateDirectory(folder);
+                var fileName = $"{Guid.NewGuid():N}{decoded.Extension}";
+                await System.IO.File.WriteAllBytesAsync(
+                    Path.Combine(folder, fileName), decoded.Bytes, ct);
+                list.Add($"/uploads/landing/{fileName}");
+            }
+
+            s.LandingScreenshotsJson = list.Count == 0
+                ? null
+                : System.Text.Json.JsonSerializer.Serialize(list);
+            s.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+
+            // Le fichier part APRÈS l'enregistrement — même raison que pour
+            // l'image d'accueil : un échec d'écriture ne doit pas détruire ce
+            // qui s'affiche encore.
+            if (removed != null) DeleteUploadedFile(removed);
+
+            _logger.LogInformation("[platform] Captures de la page d'accueil : {Count} au total", list.Count);
+            return Ok(ApiResponse<LandingScreenshotsDto>.Ok(
+                new LandingScreenshotsDto { ImageUrls = list },
+                removed != null ? "Capture retirée." : "Capture ajoutée."));
+        }
+
+        /// <summary>Trois au plus (cf. remarques de l'endpoint).</summary>
+        public const int MaxLandingScreenshots = 3;
+
+        /// <summary>
+        /// Lit la liste stockée. Une colonne illisible (JSON corrompu à la main)
+        /// est traitée comme une absence de captures : la page publique doit
+        /// s'afficher quoi qu'il arrive.
+        /// </summary>
+        private static List<string> ReadScreenshots(Models.PlatformSettings s)
+        {
+            if (string.IsNullOrWhiteSpace(s.LandingScreenshotsJson)) return new List<string>();
+            try
+            {
+                return System.Text.Json.JsonSerializer
+                           .Deserialize<List<string>>(s.LandingScreenshotsJson!)
+                       ?? new List<string>();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return new List<string>();
+            }
+        }
+
+        /// <summary>Supprime un fichier d'upload (best-effort, défense path-traversal).</summary>
+        private void DeleteUploadedFile(string relativePath)
+        {
+            try
+            {
+                var root = Path.GetFullPath(_env.WebRootPath);
+                var full = Path.GetFullPath(Path.Combine(_env.WebRootPath, relativePath.TrimStart('/')));
+                if (full.StartsWith(root) && System.IO.File.Exists(full))
+                    System.IO.File.Delete(full);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[platform] Fichier {Path} non supprimé (non bloquant)", relativePath);
+            }
         }
 
         [HttpGet]
@@ -376,6 +495,20 @@ namespace Idara.API.Controllers
     public class LandingImageDto
     {
         public string? ImageUrl { get; set; }
+    }
+
+    public class LandingScreenshotsDto
+    {
+        public List<string> ImageUrls { get; set; } = new();
+    }
+
+    public class SetLandingScreenshotDto
+    {
+        /// <summary>Capture à ajouter, encodée en base64 (préfixe `data:` accepté).</summary>
+        public string? ImageBase64 { get; set; }
+
+        /// <summary>Rang de la capture à retirer. Renseigné, il l'emporte sur l'ajout.</summary>
+        public int? RemoveIndex { get; set; }
     }
 
     public class SetLandingImageDto
