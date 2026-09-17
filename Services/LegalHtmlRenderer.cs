@@ -49,16 +49,17 @@ namespace Idara.API.Services
         /// contractuelle en plus. Le texte lit donc la source, comme le
         /// calcul de la majoration.
         /// </remarks>
+        // 🔑 Les taux viennent de `ProviderFees`, JAMAIS d'un calcul refait
+        // ici. Ces deux méthodes recomposaient `provider + opHt × (1+TVA)` de
+        // leur côté : une seconde implémentation de la règle, dans un texte
+        // CONTRACTUEL, qui aurait divergé en silence au premier changement de
+        // structure. Un document qui engage l'école ne peut pas avoir sa propre
+        // arithmétique.
         private static string PayinRate(PlatformSettings p) =>
-            FormatRate(
-                (p.PayinProviderFeePercent ?? -1) < 0 ? (double?)null
-                : (p.PayinProviderFeePercent ?? 0)
-                  + (p.PayinOperatorFeePercentHt ?? 0) * (1 + (p.FeeVatPercent ?? 0) / 100.0));
+            FormatRate(p.Fees.PayinRatePercent);
 
         private static string PayoutRate(PlatformSettings p) =>
-            FormatRate(
-                (p.PayoutOperatorFeePercentHt ?? -1) < 0 ? (double?)null
-                : (p.PayoutOperatorFeePercentHt ?? 0) * (1 + (p.FeeVatPercent ?? 0) / 100.0));
+            FormatRate(p.Fees.PayoutRatePercent);
 
         /// <summary>
         /// Un taux en toutes lettres. Non renseigné → on ne promet rien : le

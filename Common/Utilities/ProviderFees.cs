@@ -294,6 +294,41 @@ namespace Idara.API.Common.Utilities
         }
 
         /// <summary>
+        /// Le taux NOMINAL d'un encaissement, en % — commission du prestataire
+        /// plus part opérateur TTC. <c>null</c> si les taux ne sont pas saisis.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>C'est LA source de tout taux d'encaissement affiché</b> : CGU,
+        /// page des tarifs, écrans. Il existe parce que le recomposer ailleurs
+        /// — <c>provider + opHt × (1+TVA)</c> écrit une seconde fois — crée une
+        /// deuxième implémentation de la règle, qui diverge en silence le jour
+        /// où la structure change. C'est exactement ce qui s'était produit : les
+        /// pages juridiques portaient leur propre calcul.
+        ///
+        /// <para>⚠️ <b>Un taux nominal n'est pas ce que paie le payeur.</b> Les
+        /// frais réels sont deux arrondis au franc (§256) : ce pourcentage sert
+        /// à ANNONCER, jamais à facturer. Pour ce que règle réellement une
+        /// famille, voir <see cref="EffectiveMarkupPercent"/> ; pour ce qui est
+        /// débité, <see cref="ChargeFor"/>.</para>
+        /// </remarks>
+        public double? PayinRatePercent => IsConfigured
+            ? PayinProviderPercent + PayinOperatorPercentHt * Vat
+            : null;
+
+        /// <summary>
+        /// Le taux NOMINAL d'un décaissement, en % (part opérateur TTC).
+        /// <c>null</c> si les taux ne sont pas saisis.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 Même rôle que <see cref="PayinRatePercent"/>, et même
+        /// avertissement : il ANNONCE, il ne facture pas. ⚠️ Il se prélève <b>en
+        /// sus</b> du montant envoyé, et au moment du RETRAIT — plus jamais à
+        /// l'encaissement (§275). Tout texte qui l'affiche doit le dire.
+        /// </remarks>
+        public double? PayoutRatePercent =>
+            IsConfigured ? PayoutOperatorPercentHt * Vat : null;
+
+        /// <summary>
         /// Majoration effective d'une cible donnée, en %. <b>Pour l'AFFICHAGE
         /// seulement</b> — elle varie d'un montant à l'autre.
         /// </summary>

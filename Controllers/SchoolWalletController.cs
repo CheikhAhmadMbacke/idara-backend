@@ -69,6 +69,91 @@ namespace Idara.API.Controllers
         /// (Available → Pending), appelle SenePay Payout, puis attend le webhook
         /// final (3.3) pour le débit définitif ou la restitution.
         /// </summary>
+        /// <summary>
+        /// Ce qu'un retrait coûtera, <b>avant</b> de le lancer : les deux
+        /// montants dépendants de l'écran, et le plafond du bouton « Tout ».
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>Il évite à l'application de calculer un frais.</b> Les frais ne
+        /// sont pas un pourcentage (§256) mais deux arrondis au franc qui
+        /// s'enchaînent : une multiplication par 1 % côté téléphone tomberait
+        /// parfois un franc à côté de ce qui sera débité, et l'écran annoncerait
+        /// autre chose que ce qui se passe.
+        ///
+        /// <para>On donne <c>receive</c> (ce que doit toucher le bénéficiaire) OU
+        /// <c>debit</c> (ce qu'on accepte de sortir du portefeuille) : le second
+        /// champ suit. Aucun des deux → le devis décrit la poche, ce qui
+        /// renseigne « Tout » à l'ouverture de l'écran.</para>
+        ///
+        /// <para>⚠️ Il ne réserve rien et ne verrouille rien : c'est une lecture.
+        /// Le refus qui engage l'argent reste celui de <c>POST withdraw</c>,
+        /// prononcé sous le verrou du portefeuille.</para>
+        /// </remarks>
+        [HttpGet("withdrawal-quote")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<ActionResult<ApiResponse<WithdrawalQuoteDto>>> WithdrawalQuote(
+            [FromQuery] long? receive, [FromQuery] long? debit,
+            [FromQuery] WithdrawalSource source = WithdrawalSource.Total,
+            [FromQuery] bool beneficiary = false,
+            CancellationToken ct = default)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null)
+                return Forbid();
+
+            var platform = await _context.GetPlatformSettingsAsync(ct);
+            if (!platform.Fees.IsConfigured)
+                return BadRequest(ApiResponse<WithdrawalQuoteDto>.Fail(
+                    "Le service de retrait est momentanément indisponible. Réessayez plus tard."));
+
+            var wallet = await _context.SchoolWallets
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.SchoolId == schoolId.Value, ct);
+            if (wallet == null)
+                return NotFound(ApiResponse<WithdrawalQuoteDto>.Fail("Portefeuille introuvable."));
+
+            var schoolName = await _context.Schools
+                .Where(x => x.Id == schoolId.Value)
+                .Select(x => x.Name)
+                .FirstOrDefaultAsync(ct);
+
+            var balance = source switch
+            {
+                WithdrawalSource.Fee => wallet.FeeBalance(),
+                WithdrawalSource.Donation => wallet.DonationBalanceFcfa,
+                _ => wallet.AvailableBalance
+            };
+            var maxReceivable = platform.Fees.MaxReceivableFrom(balance);
+
+            // `debit` est une INTENTION, pas un montant exact : le plus grand
+            // montant qui sort réellement de cette somme n'est presque jamais
+            // « debit moins 1 % ». On résout, puis on recompose le débit vrai —
+            // il peut être inférieur de quelques francs à celui demandé, et c'est
+            // normal : le franc suivant ne passait pas.
+            var receiveAmount = receive ?? (debit != null
+                ? platform.Fees.MaxReceivableFrom(Math.Max(0, debit.Value))
+                : 0);
+            if (receiveAmount < 0) receiveAmount = 0;
+
+            var fees = platform.Fees.PayoutFeesFor(receiveAmount);
+            var quote = new WithdrawalQuoteDto
+            {
+                ReceiveFcfa = receiveAmount,
+                FeesFcfa = fees,
+                DebitFcfa = receiveAmount + fees,
+                MaxReceivableFcfa = maxReceivable,
+                SourceBalanceFcfa = balance,
+                MinReceiveFcfa = platform.MinWithdrawalFcfa,
+                PaymentReasonPreview = beneficiary
+                    ? PayoutReason.ForBeneficiaryTransfer(schoolName)
+                    : PayoutReason.ForSchoolWithdrawal(schoolName),
+                Affordable = receiveAmount > 0
+                             && receiveAmount + fees <= balance
+                             && receiveAmount >= platform.MinWithdrawalFcfa
+            };
+            return Ok(ApiResponse<WithdrawalQuoteDto>.Ok(quote));
+        }
+
         [HttpPost("withdraw")]
         [Authorize(Roles = UserRoles.SchoolAdmin)]
         public async Task<ActionResult<ApiResponse<WithdrawalDto>>> Withdraw(

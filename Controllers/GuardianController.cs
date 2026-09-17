@@ -450,16 +450,22 @@ namespace Idara.API.Controllers
             }
             else
             {
-                // Defaut "A payer" : Pending + Overdue, MAIS on cache aussi les
-                // invoices essentiellement payees (remaining < 200) — c'est le
-                // minimum SenePay, donc impayable par les voies normales. Sinon
-                // l'invoice apparait en zombie avec "Montant a payer 0 FCFA" et
-                // bloque le UI. Cas typique : facture legacy crediree avec
-                // netAmount (196) au lieu de targetAmount (200) avant gotcha §59.
-                const long senepayMinAmountFcfa = 200;
+                // Défaut « À payer » : Pending + Overdue, MAIS on cache aussi les
+                // factures essentiellement réglées, dont le reste à payer est
+                // sous le minimum d'encaissement : elles sont impayables par les
+                // voies normales et apparaîtraient en zombies, « Montant à payer
+                // 0 FCFA », bloquant l'écran. Cas typique : facture ancienne
+                // créditée du net (196) au lieu de la cible (200), avant le §59.
+                //
+                // 🔑 Le seuil vient des RÉGLAGES, jamais d'un nombre écrit ici.
+                // Il valait 200 en dur, sous le nom du précédent prestataire : le
+                // jour où le minimum change au back-office, ce filtre serait
+                // resté seul à l'ancienne valeur, et des factures auraient
+                // disparu de l'écran d'un parent sans que rien ne le dise.
+                var minPayin = (await _context.GetPlatformSettingsAsync(ct)).MinPayinFcfa;
                 query = query.Where(i =>
                     (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.Overdue)
-                    && (i.AmountDueFcfa - i.AmountPaidFcfa) >= senepayMinAmountFcfa);
+                    && (i.AmountDueFcfa - i.AmountPaidFcfa) >= minPayin);
             }
 
             var items = await query

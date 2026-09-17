@@ -22,6 +22,20 @@
  *   2. Les propriétés de frais de `PlatformSettings` n'ont AUCUN
  *      initialisateur — sinon une base neuve repartirait sur une valeur
  *      inventée au lieu de refuser.
+ *   3. 🔴 Personne ne RECOMPOSE un taux hors de `ProviderFees`. Lire les
+ *      colonnes brutes pour refaire `provider + opHt × (1+TVA)` crée une
+ *      SECONDE implémentation de la règle, qui diverge en silence au premier
+ *      changement de structure. C'est arrivé : les pages juridiques — un texte
+ *      contractuel — portaient leur propre arithmétique.
+ *   4. Aucun taux écrit en toutes lettres dans ce que LIT un utilisateur :
+ *      traductions Flutter et pages HTML servies par le backend. Un « 2 % »
+ *      figé dans une phrase survit à tous les changements de grille, et
+ *      personne ne pense à le relire.
+ *
+ * LA RÈGLE, EN UNE PHRASE : un seul endroit calcule les frais
+ * (`Common/Utilities/ProviderFees.cs`), un seul endroit les stocke
+ * (`PlatformSettings`), et tout écran, page, facture ou reçu qui affiche un
+ * taux le tient de là.
  *
  * CE QUI EST TOLÉRÉ, ET POURQUOI
  *   - `Migrations/` : une migration POSE des valeurs, c'est son rôle. Elles y
@@ -135,14 +149,121 @@ if (fs.existsSync(modele)) {
 }
 
 // ====================================================================
+// 3. Personne ne RECOMPOSE un taux hors de ProviderFees
+// ====================================================================
+// Les colonnes brutes n'ont que deux lecteurs légitimes : le modèle, qui les
+// assemble en `ProviderFees`, et l'écran de réglages, qui les saisit et les
+// relit. Partout ailleurs, on passe par `PlatformSettings.Fees`.
+const COLONNES = /Payin(Provider|Operator)FeePercent\w*|PayoutOperatorFeePercentHt|FeeVatPercent/;
+const LECTEURS_LEGITIMES = [
+  path.join('Models', 'PlatformSettings.cs'),
+  path.join('Controllers', 'PlatformSettingsController.cs'),
+  path.join('DTOs', 'Platform', 'PlatformSettingsDto.cs'),
+];
+
+for (const dossier of SURVEILLES) {
+  const abs = path.join(RACINE, dossier);
+  if (!fs.existsSync(abs)) continue;
+
+  for (const fichier of fichiers(abs)) {
+    const rel = path.relative(RACINE, fichier);
+    if (LECTEURS_LEGITIMES.some((l) => rel.endsWith(l))) continue;
+
+    const lignes = fs.readFileSync(fichier, 'utf8').split('\n');
+    lignes.forEach((ligne, i) => {
+      if (estCommentaire(ligne)) return;
+      if (ligne.includes(WAIVER)) return;
+      if (!COLONNES.test(ligne)) return;
+      echecs.push({
+        fichier: rel,
+        ligne: i + 1,
+        valeur: ligne.match(COLONNES)[0],
+        texte: ligne.trim().slice(0, 90),
+        recompose: true,
+      });
+    });
+  }
+}
+
+// ====================================================================
+// 4. Aucun taux en toutes lettres dans ce que LIT un utilisateur
+// ====================================================================
+// Un taux dans une phrase ne se recalcule jamais : il faut un espace réservé
+// (`{percent}`, `{{payinRate}}`) que le serveur remplit.
+const TAUX_DANS_UN_TEXTE =
+  /(?<![\w.])[0-9]{1,2}([.,][0-9]{1,2})?\s?(%|٪)/;
+
+const TEXTES = [
+  path.join(RACINE, '..', 'idara', 'assets', 'translations', 'fr.json'),
+  path.join(RACINE, '..', 'idara', 'assets', 'translations', 'ar.json'),
+];
+
+// ⚠️ Le Dart aussi : les écrans SuperAdmin écrivent leurs libellés en clair
+// (décision produit), et c'est là qu'un « excédent 8% » a survécu des mois à
+// la majoration qu'il décrivait. Le fichier de traductions généré est ignoré :
+// il recopie les JSON, déjà contrôlés.
+function ecransDart(dir) {
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...ecransDart(p));
+    else if (e.name.endsWith('.dart') && !e.name.endsWith('.g.dart')) out.push(p);
+  }
+  return out;
+}
+TEXTES.push(...ecransDart(path.join(RACINE, '..', 'idara', 'lib')));
+
+function pagesHtml(dir) {
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...pagesHtml(p));
+    else if (e.name.endsWith('.html')) out.push(p);
+  }
+  return out;
+}
+TEXTES.push(...pagesHtml(path.join(RACINE, 'wwwroot')));
+
+for (const fichier of TEXTES) {
+  if (!fs.existsSync(fichier)) continue;
+  const rel = path.relative(path.join(RACINE, '..'), fichier);
+  const lignes = fs.readFileSync(fichier, 'utf8').split('\n');
+
+  lignes.forEach((ligne, i) => {
+    // Une feuille de style parle en pourcentages sans arrêt : ce n'est pas du
+    // texte lu, c'est de la mise en page.
+    if (/width|height|top|left|right|bottom|margin|padding|flex|transform|scale|gradient|font|line-height|translate|gap|rgba|hsl|radius|opacity|background|border|position|inset|stroke|offset|filter|animation|keyframes|calc\(/i.test(ligne)) return;
+    if (ligne.includes(WAIVER)) return;
+    // Un taux CITÉ dans une explication n'est pas un taux AFFICHÉ — même règle
+    // que pour le C#. La documentation doit pouvoir dire ce que la production a
+    // mesuré, et raconter d'où vient la règle.
+    if (fichier.endsWith('.dart') && estCommentaire(ligne)) return;
+    // Un espace réservé rempli par le serveur est exactement ce qu'on veut.
+    if (/\{percent\}|\{\{payinRate\}\}|\{\{payoutRate\}\}|\{\}/.test(ligne)) return;
+    const m = ligne.match(TAUX_DANS_UN_TEXTE);
+    if (!m) return;
+    echecs.push({
+      fichier: rel,
+      ligne: i + 1,
+      valeur: m[0],
+      texte: ligne.trim().slice(0, 90),
+      texteLu: true,
+    });
+  });
+}
+
+// ====================================================================
 console.log('');
 if (echecs.length === 0) {
   console.log(
-    'Aucun taux de commission en dur dans Controllers/, Services/, Models/, ' +
-      'DTOs/, Common/ · 0 en échec.'
+    'Aucun taux de commission en dur · aucune recomposition hors de ' +
+      'ProviderFees · aucun taux fig\u00e9 dans un texte lu · 4 contr\u00f4les, 0 en \u00e9chec.'
   );
   console.log(
-    'Les taux vivent dans PlatformSettings, saisis depuis le back-office.'
+    'Un seul endroit CALCULE (ProviderFees), un seul endroit STOCKE ' +
+      '(PlatformSettings).'
   );
   process.exit(0);
 }
@@ -153,6 +274,22 @@ for (const e of echecs) {
   if (e.defaut) {
     console.log(
       '         Une base neuve repartirait sur cette valeur au lieu de REFUSER.'
+    );
+  }
+  if (e.recompose) {
+    console.log(
+      '         Recomposer un taux ici = une SECONDE règle, qui divergera.'
+    );
+    console.log(
+      '         Passer par PlatformSettings.Fees (PayinRatePercent / PayoutRatePercent).'
+    );
+  }
+  if (e.texteLu) {
+    console.log(
+      "         Un taux figé dans une phrase survit à tous les changements de grille."
+    );
+    console.log(
+      '         Utiliser un espace réservé que le serveur remplit.'
     );
   }
 }
