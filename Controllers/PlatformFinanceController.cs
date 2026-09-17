@@ -457,6 +457,10 @@ namespace Idara.API.Controllers
                 AmountFcfa = dto.Amount,
                 SepayAmountFcfa = dto.Amount,
                 FeesFcfa = feeEstimate, // estimation ; réécrite à la complétion
+                // Pas de portefeuille côté plateforme (P est recalculé des
+                // sources, §112) : la colonne dit simplement ce que l'opération
+                // coûte à la réserve, pour se lire comme un retrait d'école.
+                WalletDebitedFcfa = dto.Amount + feeEstimate,
                 Operator = operatorEnum,
                 Category = TransferCategory.Withdrawal,
                 RecipientName = recipientName,
@@ -498,7 +502,7 @@ namespace Idara.API.Controllers
                     ReceiveAmount = WaveClient.FormatAmount(dto.Amount),
                     Name = recipientName,
                     ClientReference = withdrawal.Id.ToString(),
-                    PaymentReason = "Idara gains plateforme"
+                    PaymentReason = PayoutReason.ForPlatformWithdrawal()
                 }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
             }
             catch (WaveApiException ex)
@@ -559,6 +563,7 @@ namespace Idara.API.Controllers
         {
             Id = w.Id,
             AmountFcfa = w.AmountFcfa,
+            WalletDebitedFcfa = w.WalletDebitedFcfa > 0 ? w.WalletDebitedFcfa : w.AmountFcfa,
             FeesFcfa = w.FeesFcfa,
             NetReceivedFcfa = w.NetReceivedFcfa,
             Operator = w.Operator,

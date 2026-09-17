@@ -146,29 +146,48 @@ namespace Idara.API.Controllers
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
                     $"Le montant minimum est de {platform.MinWithdrawalFcfa} FCFA."));
 
-            // Montant EXACT envoyé à SenePay — plus de majoration côté Idara.
-            // Depuis le modèle de frais SenePay 2026, on force fee_mode="on_top"
-            // (cf. SenePayPayoutRequest.FeeMode) : le bénéficiaire reçoit
-            // précisément dto.Amount, les frais opérateur (~1,77%) sont prélevés
-            // EN PLUS sur la réserve marchand. L'ancienne majoration `dto.Amount /
-            // (1 - PayoutFeeRate)` faisait SUR-verser le bénéficiaire (bug réel :
-            // retrait de 500 → 510 reçu), car le nouveau modèle SenePay verse le
-            // montant saisi tel quel.
+            // ================================================================
+            // Ce que TOUCHE le bénéficiaire, et ce que COÛTE l'opération.
             //
-            // 🔑 `PayoutFeePercent` ne sert donc plus ICI, mais il n'est pas
-            // décoratif pour autant : c'est lui qui, dans
-            // PlatformSettings.ParentFeeMultiplier, fait provisionner ce frais
-            // de sortie DÈS l'encaissement. Sans quoi la plateforme l'avancerait
-            // — ce qu'elle a fait quatre mois durant (55 429 F sur 4 mois).
-            // ⚠️ En mode FeesPayer=School, elle l'avance toujours : le wallet
-            // n'a été crédité que du net d'entrée (§145).
-            var sepayAmount = dto.Amount;
+            // `receive_amount` est ce que Wave verse : le bénéficiaire reçoit
+            // précisément dto.Amount, et les frais s'ajoutent au débit de notre
+            // compte marchand (§274 — mesuré en production : 500 F reçus,
+            // 505 F sortis).
+            //
+            // 🔑 DEPUIS LE 2026-09-17, C'EST LE PORTEFEUILLE DE L'ÉCOLE QUI LES
+            // PORTE, au moment du retrait. Ils ne sont plus provisionnés à
+            // l'encaissement : la provision se constituait UNE fois, à l'entrée,
+            // alors qu'un retrait fractionné paie son propre arrondi au franc
+            // supérieur à chaque fois — 75 % des suites de retraits partiels
+            // finissaient en déficit, comblé en silence par la plateforme.
+            //
+            // ⚠️ Cette estimation sert à RÉSERVER et à AFFICHER. C'est le `fee`
+            // réellement renvoyé par Wave qui fait foi au règlement.
+            // ================================================================
+            if (!platform.Fees.IsConfigured)
+            {
+                // 🔑 Refus explicite plutôt qu'un repli inventé (§256) : sans
+                // les taux, on ne sait pas ce que la sortie coûte, et un retrait
+                // sous-réservé fait avancer la différence par la plateforme.
+                _logger.LogError(
+                    "[withdraw] School {SchoolId} : retrait refusé, commissions non renseignées",
+                    schoolId.Value);
+                return BadRequest(ApiResponse<WithdrawalDto>.Fail(
+                    "Le service de retrait est momentanément indisponible. Réessayez plus tard."));
+            }
+
+            var receiveAmount = dto.Amount;
+            var estimatedFee = platform.Fees.PayoutFeesFor(receiveAmount);
+            var walletDebit = receiveAmount + estimatedFee;
 
             var withdrawal = new Withdrawal
             {
                 SchoolId = schoolId.Value,
                 AmountFcfa = dto.Amount,
-                SepayAmountFcfa = sepayAmount,
+                SepayAmountFcfa = receiveAmount,
+                WalletDebitedFcfa = walletDebit,
+                // Estimation, écrasée au règlement par le frais réel de Wave.
+                FeesFcfa = estimatedFee,
                 Operator = operatorEnum,
                 Category = dto.Category,
                 CategoryLabel = dto.Category == TransferCategory.Other
@@ -201,7 +220,12 @@ namespace Idara.API.Controllers
 
                 // Check de solde PAR POCHE (le daara a choisi Total / Paiements /
                 // Dons). Sous le verrou → l'état est figé.
-                if (!wallet.HasEnoughForSource(dto.Amount, dto.Source))
+                //
+                // 🔑 Il porte sur le DÉBIT, frais compris — pas sur le montant
+                // reçu. Sans quoi une école au solde exact verrait son retrait
+                // accepté, puis son portefeuille passer sous zéro de quelques
+                // francs.
+                if (!wallet.HasEnoughForSource(walletDebit, dto.Source))
                 {
                     await tx.RollbackAsync(ct);
                     var (label, avail) = dto.Source switch
@@ -210,8 +234,12 @@ namespace Idara.API.Controllers
                         WithdrawalSource.Donation => ("solde don", wallet.DonationBalanceFcfa),
                         _ => ("solde disponible", wallet.AvailableBalance)
                     };
+                    // Le message NOMME les frais : « solde insuffisant » alors
+                    // que le solde affiché couvre le montant demandé serait
+                    // incompréhensible.
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                        $"Solde insuffisant. {char.ToUpper(label[0]) + label[1..]} : {avail} FCFA."));
+                        $"Solde insuffisant. Envoyer {receiveAmount} FCFA coûte {walletDebit} FCFA "
+                        + $"(dont {estimatedFee} FCFA de frais). {char.ToUpper(label[0]) + label[1..]} : {avail} FCFA."));
                 }
 
                 // --- Idempotence anti double-dépense ---
@@ -240,15 +268,15 @@ namespace Idara.API.Controllers
 
                 // Part prélevée sur la poche « Don » (figée sur le retrait pour une
                 // restitution exacte en cas d'échec, cf. PayoutSettlementService).
-                var donationDraw = wallet.DonationDrawFor(dto.Amount, dto.Source);
+                var donationDraw = wallet.DonationDrawFor(walletDebit, dto.Source);
                 withdrawal.DonationAmountFcfa = donationDraw;
 
                 _context.Withdrawals.Add(withdrawal);
                 withdrawal.Provider = PaymentProviders.Wave;
                 await _context.SaveChangesAsync(ct); // assigne withdrawal.Id
 
-                wallet.AvailableBalance -= dto.Amount;
-                wallet.PendingBalance += dto.Amount;
+                wallet.AvailableBalance -= walletDebit;
+                wallet.PendingBalance += walletDebit;
                 wallet.DonationBalanceFcfa -= donationDraw; // la poche don suit la réservation
                 wallet.UpdatedAt = DateTime.UtcNow;
 
@@ -257,16 +285,24 @@ namespace Idara.API.Controllers
                     SchoolId = schoolId.Value,
                     Type = WalletTransactionType.Reservation,
                     Source = WalletSource.Withdrawal,
-                    AmountFcfa = -dto.Amount, // réservation = signé négatif
+                    AmountFcfa = -walletDebit, // réservation = signé négatif, frais compris
                     BalanceAfter = wallet.AvailableBalance,
                     RelatedEntity = WalletRelatedEntity.Withdrawal,
                     RelatedId = withdrawal.Id,
-                    Note = $"Réservation retrait #{withdrawal.Id}",
+                    Note = $"Réservation retrait #{withdrawal.Id} ({receiveAmount} reçus + {estimatedFee} de frais)",
                     OccurredAt = DateTime.UtcNow
                 });
                 await _context.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
             }
+
+            // Nom de l'école pour le motif du reçu. Lecture hors transaction :
+            // une école sans nom ne doit pas empêcher un retrait, le motif
+            // retombe alors sur un libellé générique.
+            var schoolName = await _context.Schools
+                .Where(x => x.Id == schoolId.Value)
+                .Select(x => x.Name)
+                .FirstOrDefaultAsync(ct);
 
             // --- Décaissement Wave (hors transaction) ---
             WavePayout resp;
@@ -279,11 +315,18 @@ namespace Idara.API.Controllers
                     // 🔑 `receive_amount` est ce que le bénéficiaire TOUCHE. Les
                     // frais Wave s'ajoutent au débit de notre compte : le daara
                     // reçoit exactement ce qu'il a demandé, ni plus ni moins.
-                    ReceiveAmount = WaveClient.FormatAmount(sepayAmount),
+                    ReceiveAmount = WaveClient.FormatAmount(receiveAmount),
                     Name = recipientName,
                     ClientReference = withdrawal.Id.ToString(),
-                    // Imprimé sur le reçu du bénéficiaire, 40 caractères au plus.
-                    PaymentReason = $"Idara retrait ecole {schoolId.Value}"
+                    // Imprimé sur le reçu du bénéficiaire, dans son application
+                    // de paiement : c'est souvent la seule chose qu'un directeur
+                    // lit quand l'argent arrive, des heures après l'avoir
+                    // demandé. Il doit donc nommer l'ÉCOLE, pas son numéro
+                    // interne — « Retrait Ecole de demonstration », jamais
+                    // « retrait ecole 5 ».
+                    PaymentReason = beneficiaryId != null
+                        ? PayoutReason.ForBeneficiaryTransfer(schoolName)
+                        : PayoutReason.ForSchoolWithdrawal(schoolName)
                 }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
             }
             catch (WaveApiException ex)
@@ -370,7 +413,7 @@ namespace Idara.API.Controllers
 
             _logger.LogInformation(
                 "[withdraw] Withdrawal {Id} en vérification (School {SchoolId}, {Amount} FCFA, envoyé={Sent}, payout={PayoutId}, status={Status})",
-                withdrawal.Id, schoolId.Value, dto.Amount, sepayAmount, resp.Id, resp.Status);
+                withdrawal.Id, schoolId.Value, dto.Amount, receiveAmount, resp.Id, resp.Status);
 
             return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
                 "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
@@ -590,6 +633,7 @@ namespace Idara.API.Controllers
         {
             Id = w.Id,
             AmountFcfa = w.AmountFcfa,
+            WalletDebitedFcfa = w.WalletDebitedFcfa > 0 ? w.WalletDebitedFcfa : w.AmountFcfa,
             FeesFcfa = w.FeesFcfa,
             NetReceivedFcfa = w.NetReceivedFcfa,
             Operator = w.Operator,

@@ -58,10 +58,15 @@ namespace Idara.API.Services
             //   • FeesPayer = School → crédité = le net moins la provision de
             //     retrait ; l'écart EST cette provision.
             //
-            // 🔑 Dans les deux cas, cet écart n'est PAS un bénéfice : c'est de
-            // quoi payer le décaissement que l'école n'a pas encore demandé. Il
-            // redescend quand elle retire (voir `schoolPayoutFees` plus bas).
-            // Sur une plateforme à l'équilibre, les deux se compensent.
+            // 🔑 À PARTIR DU 2026-09-17, cet écart est un vrai résidu d'arrondi,
+            // et il est minuscule : en mode « l'école paie » il vaut zéro (on
+            // crédite le net entier), en mode « le payeur paie » il vaut le franc
+            // que la résolution n'a pas pu économiser. Il ne provisionne plus rien :
+            // le décaissement se paie au décaissement.
+            //
+            // ⚠️ Pour les paiements ANTÉRIEURS, il reste ce qu'il était — une
+            // provision de sortie — et c'est bien ainsi qu'il faut les lire. La
+            // formule ne change pas ; c'est le modèle qui a changé sous elle.
             //
             // 🔴 On lit `WalletCreditedFcfa`, on ne le recalcule pas : le crédit
             // a eu lieu sous les taux de l'époque, et recalculer ferait bouger
@@ -103,11 +108,29 @@ namespace Idara.API.Services
                             && p.Purpose == PaymentPurpose.OcrPages)
                 .SumAsync(p => p.NetCreditedFcfa, ct);
 
-            // Frais de payout des retraits ÉCOLE complétés (absorbés par la plateforme).
+            // 🔑 CE QUE LA PLATEFORME A SUPPORTÉ sur les décaissements des
+            // écoles — et ce n'est plus la totalité des frais.
+            //
+            // La réserve perd toujours « montant reçu + frais ». Le portefeuille
+            // de l'école, lui, perd `WalletDebitedFcfa`. L'écart entre les deux
+            // est exactement ce que la plateforme a payé À LA PLACE de l'école :
+            //
+            //   • retraits d'AVANT le 2026-09-17 → WalletDebited = montant reçu,
+            //     l'écart vaut les frais. La plateforme les portait bien, sur la
+            //     provision constituée à l'encaissement ;
+            //   • retraits DEPUIS → WalletDebited = reçu + frais, l'écart vaut
+            //     ZÉRO : l'école paie sa propre sortie, R et D baissent du même
+            //     montant, et P ne bouge pas.
+            //
+            // 🔴 Une seule formule, historiquement exacte, parce qu'elle lit la
+            // colonne ÉCRITE au lieu de rejouer la règle du jour. Rejouer ferait
+            // bouger les comptes de juin à chaque changement de modèle — ce que
+            // §112 interdit.
+            //
             // On exclut les retraits plateforme (comptés séparément ci-dessous).
-            var schoolPayoutFees = await _db.Withdrawals
+            var payoutFeesAbsorbed = await _db.Withdrawals
                 .Where(w => w.Status == WithdrawalStatus.Completed && !w.IsPlatform)
-                .SumAsync(w => w.FeesFcfa, ct);
+                .SumAsync(w => w.AmountFcfa + w.FeesFcfa - w.WalletDebitedFcfa, ct);
 
             // Sorties plateforme = ajustements manuels (dashboard) + retraits gains
             // via API (Withdrawal.IsPlatform). Un retrait plateforme NON-Failed
@@ -143,13 +166,13 @@ namespace Idara.API.Services
                 SubscriptionRevenueFcfa = subscriptionRevenue,
                 Surplus8PercentFcfa = surplus8,
                 OcrPageRevenueFcfa = ocrPageRevenue,
-                SchoolPayoutFeesFcfa = schoolPayoutFees,
+                SchoolPayoutFeesFcfa = payoutFeesAbsorbed,
                 PlatformOutflowsFcfa = platformOutflows,
                 CapitalInjectionsFcfa = capitalInjections,
                 SchoolDebitReturnsFcfa = schoolDebitReturns,
                 TotalFcfa = surplus8 + subscriptionRevenue + ocrPageRevenue
                     + capitalInjections + schoolDebitReturns
-                    - schoolPayoutFees - platformOutflows
+                    - payoutFeesAbsorbed - platformOutflows
             };
 
             return (owedToSchools, platform);
@@ -466,10 +489,18 @@ namespace Idara.API.Services
                 .Select(i => new { When = i.PaidAt!.Value, i.AmountFcfa })
                 .ToListAsync(ct);
 
+            // ⚠️ On projette la part ABSORBÉE par la plateforme, pas les frais
+            // bruts : depuis le 2026-09-17 l'école paie sa propre sortie, et
+            // retrancher ces frais du chiffre d'affaires le sous-estimerait
+            // d'autant. Voir le commentaire de `payoutFeesAbsorbed`.
             var payoutFees = await _db.Withdrawals
                 .Where(w => w.Status == WithdrawalStatus.Completed && !w.IsPlatform
                             && w.CompletedAt != null)
-                .Select(w => new { When = w.CompletedAt!.Value, w.FeesFcfa })
+                .Select(w => new
+                {
+                    When = w.CompletedAt!.Value,
+                    FeesFcfa = w.AmountFcfa + w.FeesFcfa - w.WalletDebitedFcfa
+                })
                 .ToListAsync(ct);
 
             // Croissance : la date qui compte pour une école est la VALIDATION
@@ -524,9 +555,10 @@ namespace Idara.API.Services
                     // Marge sur paiements = écart entré en réserve − crédité à
                     // l'école — MÊME formule que P (§112), les deux modes
                     // confondus depuis le 2026-09-13.
-                    // ⚠️ Ce n'est pas un bénéfice : c'est la provision du
-                    // décaissement à venir, que `fees` ci-dessous fait
-                    // redescendre quand l'école retire.
+                    // ⚠️ Jusqu'au 2026-09-17 ce n'était pas un bénéfice mais la
+                    // provision du décaissement à venir, que `fees` ci-dessous
+                    // faisait redescendre. Depuis, l'école paie sa sortie : la
+                    // marge est un résidu d'arrondi, et `fees` tend vers zéro.
                     var margin = online.Sum(p => p.NetCreditedFcfa - p.WalletCreditedFcfa);
                     var subRev = subInvoices.Where(i => In(i.When)).Sum(i => i.AmountFcfa);
                     // Pages de lecture vendues : le net encaissé, en entier —
@@ -604,10 +636,12 @@ namespace Idara.API.Services
             };
             kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0
                 ? kpis.MrrActiveFcfa / kpis.SchoolsActivePaying : 0;
-            // Frais de décaissement cumulés (retraits ÉCOLE réglés) : la
-            // contrepartie de PaymentMarginTotalFcfa, qui n'est pas un gain mais
-            // une provision. Les additionner sans les retrancher gonflerait le
-            // CA d'un montant qui n'a jamais appartenu à la plateforme.
+            // Frais de décaissement RESTÉS À LA CHARGE DE LA PLATEFORME (retraits
+            // ÉCOLE réglés) : la contrepartie de PaymentMarginTotalFcfa, qui
+            // n'était pas un gain mais une provision. Les additionner sans les
+            // retrancher gonflerait le CA d'un montant qui n'a jamais appartenu
+            // à la plateforme. 🔑 Depuis le 2026-09-17 cette somme cesse de
+            // croître : les nouveaux retraits sont payés par l'école.
             kpis.PayoutFeesTotalFcfa = payoutFees.Sum(f => f.FeesFcfa);
             kpis.GrossRevenueTotalFcfa =
                 kpis.SubscriptionRevenueTotalFcfa

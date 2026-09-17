@@ -59,13 +59,19 @@ namespace Idara.API.DTOs.Admin
         /// Recette cumulée de la plateforme.
         /// </summary>
         /// <remarks>
-        /// 🔴 <b>Les frais de décaissement en sont DÉDUITS</b>, depuis le
-        /// 2026-09-13. Avant, ce chiffre valait « abonnements + marge sur
-        /// paiements » — or cette « marge » n'est pas un gain : c'est la
-        /// provision du retrait à venir, qui repart dès que l'école retire.
-        /// L'additionner sans en retrancher la sortie gonflait le chiffre
-        /// d'affaires montré à un investisseur d'un montant qui n'a jamais
-        /// appartenu à la plateforme.
+        /// 🔴 <b>Les frais de décaissement RESTÉS À NOTRE CHARGE en sont
+        /// DÉDUITS</b>, depuis le 2026-09-13. Avant, ce chiffre valait
+        /// « abonnements + marge sur paiements » — or cette « marge » n'était
+        /// pas un gain : c'était la provision du retrait à venir, qui repartait
+        /// dès que l'école retirait. L'additionner sans en retrancher la sortie
+        /// gonflait le chiffre d'affaires montré à un investisseur d'un montant
+        /// qui n'a jamais appartenu à la plateforme.
+        ///
+        /// <para>🔑 <b>Depuis le 2026-09-17, la déduction cesse de croître</b> :
+        /// l'école paie elle-même sa sortie, la marge n'est plus qu'un résidu
+        /// d'arrondi, et les deux chiffres tendent vers zéro. Ce qui reste
+        /// déduit vient des retraits ANTÉRIEURS, dont la provision avait bien
+        /// été prélevée à l'encaissement.</para>
         /// </remarks>
         public long GrossRevenueTotalFcfa { get; set; }
     }
@@ -89,7 +95,8 @@ namespace Idara.API.DTOs.Admin
         public long OcrPageRevenueFcfa { get; set; }
         /// <summary>CA du mois = abonnements + marge paiements + pages de lecture.</summary>
         public long GrossRevenueFcfa { get; set; }
-        /// <summary>Coût direct : frais des retraits écoles complétés ce mois.</summary>
+        /// <summary>Coût direct : la part des frais de retrait restée à la charge
+        /// de la plateforme (nulle depuis le 2026-09-17, l'école payant sa sortie).</summary>
         public long PayoutFeesFcfa { get; set; }
         /// <summary>CA net du mois = CA − frais de payout.</summary>
         public long NetRevenueFcfa { get; set; }

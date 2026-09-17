@@ -368,6 +368,7 @@ namespace Idara.API.Controllers
                         : $"Ecole #{w.SchoolId}"),
                 IsPlatform = w.IsPlatform,
                 AmountFcfa = w.AmountFcfa,
+                WalletDebitedFcfa = w.WalletDebitedFcfa > 0 ? w.WalletDebitedFcfa : w.AmountFcfa,
                 FeesFcfa = w.FeesFcfa,
                 NetReceivedFcfa = w.NetReceivedFcfa,
                 Operator = w.Operator,

@@ -67,7 +67,10 @@ namespace Idara.API.DTOs.Admin
         /// </summary>
         public long OcrPageRevenueFcfa { get; set; }
 
-        /// <summary>Frais de payout des retraits école (déduits, absorbés par la plateforme).</summary>
+        /// <summary>Part des frais de retrait école restée à la charge de la
+        /// plateforme = (montant reçu + frais) − débit du portefeuille. Nulle pour
+        /// les retraits postérieurs au 2026-09-17 : l'école paie sa propre sortie,
+        /// R et D baissent du même montant, P ne bouge pas.</summary>
         public long SchoolPayoutFeesFcfa { get; set; }
 
         /// <summary>Sorties plateforme enregistrées (retraits gains + ajustements manuels).</summary>

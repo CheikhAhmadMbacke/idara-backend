@@ -42,8 +42,34 @@ namespace Idara.API.Models
         /// </summary>
         public bool IsPlatform { get; set; }
 
-        /// <summary>Montant débité du wallet école = net reçu par le bénéficiaire (FCFA).</summary>
+        /// <summary>Ce que TOUCHE le bénéficiaire (FCFA). C'est le montant demandé,
+        /// et celui que Wave reçoit en <c>receive_amount</c>.</summary>
+        /// <remarks>
+        /// 🔴 <b>Ce n'est plus ce qui sort du portefeuille</b> depuis le
+        /// 2026-09-17 : les frais de décaissement sont prélevés EN SUS (§274),
+        /// donc le débit vaut <see cref="WalletDebitedFcfa"/> = ce montant + les
+        /// frais. Avant cette date les deux étaient confondus, la sortie étant
+        /// provisionnée dès l'encaissement.
+        /// </remarks>
         public long AmountFcfa { get; set; }
+
+        /// <summary>
+        /// 🔑 <b>Ce qui sort réellement du portefeuille</b> = <see cref="AmountFcfa"/>
+        /// + les frais de décaissement.
+        /// </summary>
+        /// <remarks>
+        /// <para>Rempli à la RÉSERVATION avec les frais estimés, puis ajusté au
+        /// règlement sur le <c>fee</c> réellement renvoyé par Wave — c'est lui
+        /// qui fait foi, jamais notre estimation. L'écart d'arrondi éventuel
+        /// donne une écriture d'ajustement, jamais une réécriture (§55).</para>
+        ///
+        /// <para>⚠️ <b>Les retraits d'AVANT le 2026-09-17 portent ici leur
+        /// <see cref="AmountFcfa"/></b>, reposé par la migration : sous l'ancien
+        /// modèle, le débit valait bien le montant reçu, la sortie ayant été
+        /// provisionnée à l'encaissement. L'historique dit donc vrai, et aucune
+        /// lecture n'a besoin d'un discriminant.</para>
+        /// </remarks>
+        public long WalletDebitedFcfa { get; set; }
 
         /// <summary>Montant réellement envoyé à SenePay. Depuis le modèle de frais
         /// 2026 il est ÉGAL à <see cref="AmountFcfa"/> (les frais sont en <c>on_top</c>).

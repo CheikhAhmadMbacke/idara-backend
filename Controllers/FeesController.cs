@@ -133,7 +133,7 @@ namespace Idara.API.Controllers
                     SchoolId = schoolId.Value,
                     BillingMode = BillingMode.FixedAmount,
                     FeesPayer = PayerMarkup.Effective(FeesPayer.Parent),
-                    DonationFeesPayer = FeesPayer.School,
+                    DonationFeesPayer = PayerMarkup.Effective(FeesPayer.Parent),
                     MonthlyDueDay = 5,
                     PaymentDeadlineDay = 15,
                     BillingPeriod = BillingPeriod.Monthly,

@@ -70,9 +70,10 @@ namespace Idara.API.Models
         /// de l'école à la création (<c>SchoolPaymentSettings.DonationFeesPayer</c>),
         /// puis figé : changer le réglage global ne doit pas modifier ce qu'un
         /// donateur voit sur un lien déjà partagé.
-        /// ⚠️ La branche <c>Parent</c> disparaîtra au passage à Wave direct (§145).
+        /// 🔑 Le défaut suit celui de l'école (<c>Parent</c> depuis le
+        /// 2026-09-17) ; il ne sert que si aucun réglage n'a pu être lu.
         /// </summary>
-        public FeesPayer FeesPayer { get; set; } = FeesPayer.School;
+        public FeesPayer FeesPayer { get; set; } = FeesPayer.Parent;
 
         /// <summary>Mur des donateurs sur la page publique (prénom + initiale).</summary>
         public bool ShowDonorWall { get; set; } = true;

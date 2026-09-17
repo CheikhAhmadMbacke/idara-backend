@@ -470,6 +470,25 @@ foi, et non le pourcentage, qui n'en est que l'expression approchée.</p>
   </ul>
   <p>Dans les deux cas, la facture de l'élève est soldée du <strong>montant dû</strong>,
   jamais d'un montant diminué des frais.</p>
+  <p><strong>Chaque commission est prélevée au moment de l'opération qu'elle
+  rémunère</strong> : celle d'encaissement à l'encaissement, celle de décaissement
+  au décaissement. Aucune n'est prélevée par avance.</p>
+</div>
+
+<div class="box">
+  <p><strong>Ce que cela change pour le retrait.</strong> La commission de
+  décaissement <em>s'ajoute</em> au montant envoyé : elle est supportée par
+  l'établissement qui retire, quel que soit le choix fait ci-dessus pour les
+  encaissements.</p>
+  <p>Un portefeuille ne se retire donc pas « en entier » : envoyer une somme à un
+  bénéficiaire en coûte un peu plus. L'écran de retrait affiche toujours les
+  <strong>deux montants</strong> — ce que reçoit le bénéficiaire, et ce qui est
+  débité du portefeuille — ainsi que la commission qui les sépare, <strong>avant
+  toute confirmation</strong>.</p>
+  <p class="muted">Le montant en francs affiché avant l'opération fait foi. Si la
+  commission réellement prélevée par le prestataire diffère de cette estimation, la
+  différence est portée au portefeuille de l'établissement, dans un sens comme dans
+  l'autre.</p>
 </div>
 
 <h3>9.3 Évolution des frais et changement de prestataire</h3>

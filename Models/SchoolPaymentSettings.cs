@@ -19,11 +19,25 @@ namespace Idara.API.Models
         /// School = l'école (absorbe les frais, reçoit le net).</summary>
         public FeesPayer FeesPayer { get; set; } = FeesPayer.Parent;
 
-        /// <summary>Qui paie les frais SenePay sur les DONS reçus par le daara.
+        /// <summary>Qui paie les frais du prestataire sur les DONS reçus par le daara.
         /// Parent = le donateur (majoration, le daara reçoit le montant plein) ;
-        /// School = le daara (absorbe les frais, reçoit le net). Défaut = School
-        /// (décision produit 2026-07-11 : le donateur ne doit pas payer les frais).</summary>
-        public FeesPayer DonationFeesPayer { get; set; } = FeesPayer.School;
+        /// School = le daara (absorbe les frais, reçoit le net).</summary>
+        /// <remarks>
+        /// 🔑 <b>Défaut = Parent depuis le 2026-09-17</b>, comme pour tous les
+        /// encaissements : le payeur porte le 1 % au payin, l'établissement porte
+        /// le 1 % au payout. Il valait <c>School</c> depuis le 2026-07-11, à une
+        /// époque où la commission approchait 7 % — la majorer à un donateur
+        /// était alors dissuasif. À 1 %, elle ne l'est plus.
+        ///
+        /// <para>⚠️ <b>Ce défaut ne vaut que pour les écoles CRÉÉES ENSUITE.</b>
+        /// Les cinq écoles dont les dons sont en mode « l'école paie » gardent
+        /// leur réglage et peuvent le changer elles-mêmes. Modifier un réglage
+        /// financier sans qu'on le demande est exactement ce qui s'est produit
+        /// le 2026-09-17 au matin avec <see cref="FeesPayer"/> : il a fallu
+        /// retrouver l'état d'origine dans les paiements passés pour le
+        /// restaurer.</para>
+        /// </remarks>
+        public FeesPayer DonationFeesPayer { get; set; } = FeesPayer.Parent;
 
         /// <summary>
         /// <b>Jour d'OUVERTURE du paiement</b> : jour du mois (1-28) où le cron

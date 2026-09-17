@@ -10,7 +10,22 @@ namespace Idara.API.DTOs.Payment
     public class WithdrawalDto
     {
         public int Id { get; set; }
+        /// <summary>Ce que TOUCHE le bénéficiaire.</summary>
         public long AmountFcfa { get; set; }
+
+        /// <summary>
+        /// Ce qui SORT du portefeuille = <see cref="AmountFcfa"/> + les frais.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 Les deux montants sont exposés parce que l'écran montre les
+        /// deux : le bénéficiaire reçoit 1 000 F, le portefeuille perd 1 010 F
+        /// (§274 — les frais de décaissement sont prélevés en sus). Les donner
+        /// séparément évite à l'application de recalculer un frais qu'elle
+        /// arrondirait autrement que le serveur.
+        /// </remarks>
+        public long WalletDebitedFcfa { get; set; }
+
+        /// <summary>Frais de décaissement. Estimés à l'initiation, réels dès la confirmation.</summary>
         public long FeesFcfa { get; set; }
         public long NetReceivedFcfa { get; set; }
         public PaymentOperator Operator { get; set; }

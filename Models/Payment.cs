@@ -116,8 +116,10 @@ namespace Idara.API.Models
         /// pas.</para>
         ///
         /// <para>Cette colonne unifie aussi les deux modes : Parent crédite la
-        /// cible, School crédite le net diminué de la provision de retrait, et
-        /// dans les deux cas la marge plateforme se lit de la même façon.</para>
+        /// cible, School crédite le net ENTIER (depuis le 2026-09-17 ; il était
+        /// auparavant diminué d'une provision de retrait), et dans les deux cas
+        /// la marge plateforme se lit de la même façon — c'est tout l'intérêt
+        /// d'avoir écrit le montant : le modèle a changé, la lecture non.</para>
         /// </remarks>
         public long WalletCreditedFcfa { get; set; }
 

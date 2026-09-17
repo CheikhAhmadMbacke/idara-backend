@@ -122,18 +122,21 @@ namespace Idara.API.Common.Utilities
         /// </summary>
         /// <remarks>
         /// 🔑 <b>Ils sont prélevés EN PLUS du montant envoyé</b>
-        /// (<c>fee_mode = "on_top"</c>) : sortir T de la réserve coûte
-        /// <c>T + PayoutFeesFor(T)</c>. C'est ce qui fait que la provision doit
-        /// être constituée dès l'encaissement.
+        /// (<c>receive_amount</c> est ce que TOUCHE le bénéficiaire, §274) :
+        /// sortir T de la réserve coûte <c>T + PayoutFeesFor(T)</c>. Mesuré en
+        /// production le 2026-09-17 — 500 F reçus, <b>505 F</b> sortis.
         ///
-        /// <para>⚠️ <b>Et c'est cet arrondi au franc supérieur qui rend les
-        /// retraits GROUPÉS sûrs.</b> Une école accumule plusieurs paiements et
-        /// retire d'un coup : le frais réel porte alors sur la somme, alors que
-        /// la provision a été constituée paiement par paiement. Comme
-        /// <c>ceil(a) + ceil(b) ≥ ceil(a+b)</c>, la somme des provisions couvre
-        /// toujours le frais du retrait groupé — vérifié sur 200 000 retraits
-        /// simulés de 2 à 12 paiements : <b>zéro découvert</b>. Un retrait
-        /// partiel coûte, lui, mécaniquement moins que sa provision.</para>
+        /// <para>🔑 <b>C'est le portefeuille de celui qui décaisse qui les
+        /// porte, au moment du retrait</b> : plus aucune provision n'est
+        /// constituée à l'encaissement (2026-09-17). Le débit vaut donc
+        /// « reçu + frais », et un solde n'est jamais retirable en entier —
+        /// voir <see cref="MaxReceivableFrom"/>.</para>
+        ///
+        /// <para>⚠️ <b>Cette estimation ne fait pas foi au règlement.</b> On la
+        /// calcule avant l'appel, pour l'afficher et pour réserver les fonds ;
+        /// c'est le <c>fee</c> réellement renvoyé par Wave qui décide du débit
+        /// définitif. Un écart d'arrondi entre les deux se solde par une
+        /// écriture d'ajustement, jamais par une réécriture du passé.</para>
         /// </remarks>
         public long PayoutFeesFor(long amountFcfa)
         {
@@ -146,12 +149,23 @@ namespace Idara.API.Common.Utilities
 
         /// <summary>
         /// 🔑 <b>LE point unique</b> : ce qu'il faut débiter au payeur pour que
-        /// l'école encaisse <paramref name="targetFcfa"/> <b>et</b> puisse le
-        /// retirer, sans que la plateforme avance un franc.
+        /// l'école encaisse exactement <paramref name="targetFcfa"/>, sans que
+        /// la plateforme avance un franc sur l'encaissement.
         /// </summary>
         /// <remarks>
         /// <para>On cherche le plus petit entier <c>C</c> vérifiant :</para>
-        /// <code>C − PayinFeesFor(C) ≥ targetFcfa + PayoutFeesFor(targetFcfa)</code>
+        /// <code>C − PayinFeesFor(C) ≥ targetFcfa</code>
+        ///
+        /// <para>🔴 <b>Le frais de SORTIE n'entre plus dans ce calcul</b>
+        /// (2026-09-17). Il était provisionné dès l'encaissement ; il est
+        /// désormais réglé au moment du retrait, par celui qui décaisse. Motif :
+        /// la provision était constituée <b>une fois</b>, à l'entrée, alors
+        /// qu'un retrait FRACTIONNÉ paie son propre arrondi au franc supérieur à
+        /// chaque fois. Mesuré : 75 % des suites de retraits partiels finissaient
+        /// en déficit (moyenne 2,15 F, pire 8 F) — un déficit que rien ne
+        /// signalait, la plateforme le comblant en silence. Chaque opération
+        /// paie maintenant ce qu'elle coûte, au moment où elle le coûte : exact
+        /// par construction, retraits fractionnés compris.</para>
         ///
         /// <para><b>Pourquoi une recherche et non une multiplication.</b> La
         /// commission d'entrée porte sur <c>C</c>, qui contient la majoration :
@@ -172,7 +186,9 @@ namespace Idara.API.Common.Utilities
             EnsureConfigured();
             if (targetFcfa <= 0) return 0;
 
-            var needed = targetFcfa + PayoutFeesFor(targetFcfa);
+            // Le frais de sortie n'est plus provisionné ici (cf. remarques) :
+            // la cible est la cible, et rien d'autre.
+            var needed = targetFcfa;
 
             // Estimation continue : la solution exacte en est toujours voisine.
             // Elle ne sert qu'à démarrer près du but ; c'est l'encadrement qui
@@ -213,66 +229,66 @@ namespace Idara.API.Common.Utilities
         }
 
         /// <summary>
-        /// 🔑 <b>Le symétrique de <see cref="ChargeFor"/>, pour le mode « l'école
-        /// paie les frais ».</b> Ce qu'on peut créditer au wallet à partir de
-        /// <paramref name="netReceivedFcfa"/> — le net réellement entré en
-        /// réserve — pour que l'école puisse le <b>sortir en entier</b>.
+        /// 🔑 <b>Le plus grand montant qu'un bénéficiaire peut RECEVOIR</b> avec
+        /// <paramref name="balanceFcfa"/> disponible — frais de sortie compris.
+        /// C'est la réponse au bouton « Tout » de l'écran Retrait.
         /// </summary>
         /// <remarks>
-        /// <para>On cherche le plus grand entier <c>W</c> vérifiant :</para>
-        /// <code>W + PayoutFeesFor(W) ≤ netReceivedFcfa</code>
+        /// <para>On cherche le plus grand entier <c>R</c> vérifiant :</para>
+        /// <code>R + PayoutFeesFor(R) ≤ balanceFcfa</code>
         ///
-        /// <para><b>Pourquoi ce n'est pas le net.</b> Créditer le net entier
-        /// paraît généreux et ne l'est pas : sortir ce net coûte le net
-        /// <b>plus</b> le frais de décaissement (<c>on_top</c>), que personne
-        /// n'a provisionné. La plateforme le payait — <b>55 429 F sur quatre
-        /// mois</b> — pour des écoles qui avaient justement choisi d'absorber
-        /// les frais elles-mêmes. Le solde affiché était donc un montant que
-        /// l'école ne pouvait pas réellement retirer.</para>
+        /// <para><b>Pourquoi un solde ne se retire pas « en entier ».</b> Les
+        /// frais de décaissement sont prélevés <b>en sus</b> du montant envoyé
+        /// (<c>receive_amount</c> est ce que touche le bénéficiaire, §274) :
+        /// sortir 1 000 F coûte 1 010 F. Avec 1 000 F au portefeuille, on envoie
+        /// donc 990 F, pas 1 000. Cette fonction dit exactement combien, et
+        /// c'est elle qui alimente le champ « Le bénéficiaire reçoit » quand le
+        /// directeur demande tout son solde.</para>
         ///
-        /// <para>Avec cette borne, <b>le solde affiché est exactement ce qui
-        /// peut sortir</b>, et l'écart reste en réserve pour payer le retrait.
-        /// L'école ne perd rien : elle absorbe le frais de sortie, comme elle
-        /// absorbait déjà celui d'entrée. C'est le sens même du mode « l'école
-        /// paie les frais ».</para>
+        /// <para>🔴 <b>Elle ne sert PLUS à créditer un portefeuille</b>
+        /// (2026-09-17). Elle bornait autrefois le crédit du mode « l'école paie
+        /// les frais », pour provisionner la sortie dès l'entrée ; cette
+        /// provision a disparu — chaque opération paie ses propres frais, au
+        /// moment où elle les engage. Le mode « l'école paie » crédite désormais
+        /// le net <b>entier</b>. Voir <see cref="ChargeFor"/>.</para>
         ///
         /// <para>⚠️ Même précaution que <see cref="ChargeFor"/> : la fonction
-        /// <c>W + frais(W)</c> n'est pas strictement croissante (les arrondis se
+        /// <c>R + frais(R)</c> n'est pas strictement croissante (les arrondis se
         /// croisent), donc on encadre puis on balaie pour trouver le vrai
         /// maximum — sinon on retient un franc de trop à l'école.</para>
         /// </remarks>
-        public long CreditableFrom(long netReceivedFcfa)
+        public long MaxReceivableFrom(long balanceFcfa)
         {
             EnsureConfigured();
-            if (netReceivedFcfa <= 0) return 0;
+            if (balanceFcfa <= 0) return 0;
 
             // Estimation continue, puis encadrement — l'estimation ne décide
             // jamais, elle ne fait que rapprocher.
-            var credited = (long)Math.Floor(netReceivedFcfa / (1.0 + PayoutOperatorPercentHt * Vat / 100.0));
-            if (credited < 0) credited = 0;
-            if (credited > netReceivedFcfa) credited = netReceivedFcfa;
+            var receivable = (long)Math.Floor(balanceFcfa / (1.0 + PayoutOperatorPercentHt * Vat / 100.0));
+            if (receivable < 0) receivable = 0;
+            if (receivable > balanceFcfa) receivable = balanceFcfa;
 
             var guard = 0;
-            while (credited > 0 && credited + PayoutFeesFor(credited) > netReceivedFcfa)
+            while (receivable > 0 && receivable + PayoutFeesFor(receivable) > balanceFcfa)
             {
-                credited--;
+                receivable--;
                 if (++guard > MaxIterations) break;
             }
-            while (credited + 1 <= netReceivedFcfa
-                   && (credited + 1) + PayoutFeesFor(credited + 1) <= netReceivedFcfa)
+            while (receivable + 1 <= balanceFcfa
+                   && (receivable + 1) + PayoutFeesFor(receivable + 1) <= balanceFcfa)
             {
-                credited++;
+                receivable++;
                 if (++guard > MaxIterations) break;
             }
 
-            // Remontée : le premier W qui « tient » n'est pas toujours le plus
+            // Remontée : le premier R qui « tient » n'est pas toujours le plus
             // grand, pour la même raison de non-monotonie.
-            var best = credited;
+            var best = receivable;
             for (var step = 1; step <= SearchWindow; step++)
             {
-                var candidate = credited + step;
-                if (candidate > netReceivedFcfa) break;
-                if (candidate + PayoutFeesFor(candidate) <= netReceivedFcfa) best = candidate;
+                var candidate = receivable + step;
+                if (candidate > balanceFcfa) break;
+                if (candidate + PayoutFeesFor(candidate) <= balanceFcfa) best = candidate;
             }
             return best;
         }

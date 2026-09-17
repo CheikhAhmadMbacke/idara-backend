@@ -2,35 +2,38 @@
 /*
  * Contrôle de NEUTRALITÉ : personne ne doit avancer un franc pour personne.
  *
- * Quel que soit le mode choisi par l'école :
- *   - elle encaisse ce qu'elle a facturé, et peut le SORTIR EN ENTIER ;
- *   - la plateforme n'avance rien ;
- *   - le payeur ne paie pas un franc de plus que nécessaire.
+ * LE MODÈLE, DEPUIS LE 2026-09-17 — les deux frais sont SÉPARÉS :
  *
- * POURQUOI CET OUTIL EXISTE
- * -------------------------
- * Ça n'a pas été le cas pendant quatre mois. La majoration au payeur valait
- * 7,14 %, obtenue en ADDITIONNANT les taux prélevés (3,6 + 1,77 + 1,77). Or
- * majorer de t ne compense pas un prélèvement de t : la commission porte sur le
- * montant DÉBITÉ, majoration comprise. Il manquait ~3 800 FCFA par million
- * facturé. Rien ne l'indiquait — aucune erreur, aucun écran, aucun journal.
- * L'école recevait bien son dû, donc personne ne pouvait s'en plaindre.
+ *     payin  : le PAYEUR porte la commission d'encaissement (réglage par
+ *              défaut). L'école peut choisir de l'absorber elle-même.
+ *     payout : CELUI QUI DÉCAISSE porte la commission de décaissement, au
+ *              moment où il décaisse. Toujours. Sans exception.
  *
- * Puis une seconde découverte a rendu ce premier correctif insuffisant :
+ * Plus aucune provision n'est constituée à l'encaissement pour une sortie à
+ * venir. Chaque opération paie ce qu'elle coûte, quand elle le coûte.
+ *
+ * POURQUOI CE CHANGEMENT
+ * ----------------------
+ * L'ancien modèle provisionnait la sortie dès l'entrée. Il tenait pour un
+ * retrait unique, et FUYAIT sur les retraits FRACTIONNÉS : la provision était
+ * constituée une fois, alors que chaque retrait partiel paie son propre arrondi
+ * au franc supérieur. Mesuré : 75 % des suites de retraits partiels finissaient
+ * en déficit (moyenne 2,15 F, pire 8 F), comblé en silence par la plateforme.
+ * Ce cas manquait à cet outil — c'est le contrôle 6, désormais.
+ *
+ * CE QUI RESTE VRAI, ET NE SE RE-DÉBAT PAS
+ * ----------------------------------------
  * LES FRAIS NE SONT PAS UN POURCENTAGE. Retrouvée sur les 197 paiements réglés
  * en production (197/197 exacts), la règle réelle est :
  *
  *     encaissement = round(C × provider %) + ceil( ceil(C × opIn % HT) × (1+TVA) )
  *     décaissement =                         ceil( ceil(T × opOut % HT) × (1+TVA) )
  *
- * Le « 1,77 % » n'existe nulle part : c'est 1,5 % HT + 18 % de TVA, chacun
- * arrondi au franc. Le « 5,40 % » d'encaissement est une moyenne vraie pour
- * AUCUN montant (mesurée : de 5,37 % à 6,05 % selon la taille). Appliquer un
- * taux moyen laissait 3 542 montants en déficit entre 200 et 100 000 FCFA.
- *
- * D'où ProviderFees, qui RÉSOUT au lieu d'appliquer — dans les deux sens :
- *   - ChargeFor(T)       : le plus PETIT montant à débiter qui couvre tout ;
- *   - CreditableFrom(N)  : le plus GRAND montant créditable qui pourra sortir.
+ * Majorer de t ne compense pas un prélèvement de t : la commission porte sur le
+ * montant DÉBITÉ, majoration comprise. D'où ProviderFees, qui RÉSOUT au lieu
+ * d'appliquer — dans les deux sens :
+ *   - ChargeFor(T)          : le plus PETIT montant à débiter pour encaisser T ;
+ *   - MaxReceivableFrom(S)  : le plus GRAND montant qui peut SORTIR de S.
  *
  * CE QUI EST VÉRIFIÉ
  *   1. Le code C# porte toujours la règle attendue, arrondis compris, et les
@@ -40,13 +43,13 @@
  *      bouger les comptes de juin à chaque changement de grille.
  *   3. Les taux viennent de la BASE (posés par migration), le code n'en portant
  *      aucun par défaut.
- *   4. Mode « le payeur paie les frais » : la plateforme n'avance jamais un
- *      franc, et la famille n'en paie jamais un de trop.
- *   5. Mode « l'école paie les frais » : le solde crédité sort EN ENTIER, et on
- *      ne retient pas un franc de trop à l'école. C'était le dernier résidu —
- *      55 429 F sur quatre mois.
- *   6. Un retrait GROUPÉ — plusieurs paiements accumulés, le cas courant —
- *      reste couvert par la somme des provisions constituées une à une.
+ *   4. Payin, mode « le payeur paie » : la plateforme n'avance jamais un franc,
+ *      et la famille n'en paie jamais un de trop.
+ *   5. Payout : ce qui sort du portefeuille est exactement ce qui sort de la
+ *      réserve, et un solde ne peut jamais sortir plus qu'il ne contient.
+ *   6. 🔴 LE CAS QUI MANQUAIT — suites de paiements aux modes MÉLANGÉS suivies
+ *      de retraits FRACTIONNÉS : la réserve doit rester supérieure ou égale à
+ *      la somme des portefeuilles, à chaque instant.
  *
  * CE QUE CET OUTIL NE DIT PAS
  *   Il rejoue la règle en JavaScript, à l'identique du C#. Il prouve donc que
@@ -64,6 +67,8 @@ const path = require('path');
 const RACINE = path.join(__dirname, '..');
 const CALCULATEUR = path.join(RACINE, 'Common', 'Utilities', 'ProviderFees.cs');
 const FINANCE = path.join(RACINE, 'Services', 'PlatformFinanceService.cs');
+const RETRAIT = path.join(RACINE, 'Controllers', 'SchoolWalletController.cs');
+const REGLEMENT = path.join(RACINE, 'Services', 'PayinSettlementService.cs');
 const MIGRATIONS = path.join(RACINE, 'Migrations');
 
 const MONTANT_MIN = 200;
@@ -106,16 +111,58 @@ if (!fs.existsSync(CALCULATEUR)) {
       "la redescente est obligatoire : le premier C qui couvre n'est pas le plus petit",
     ],
     [
-      /public long CreditableFrom\(long netReceivedFcfa\)/,
-      "le mode « l'école paie les frais » a besoin de CreditableFrom : sans lui, la plateforme avance le décaissement",
+      /public long MaxReceivableFrom\(long balanceFcfa\)/,
+      "le bouton « Tout » a besoin de MaxReceivableFrom : sans lui, l'écran proposerait de retirer un solde qui ne peut pas sortir",
     ],
     [
-      /candidate \+ PayoutFeesFor\(candidate\) <= netReceivedFcfa/,
-      "CreditableFrom doit chercher le plus GRAND montant qui tient, sinon on retient un franc de trop à l'école",
+      /candidate \+ PayoutFeesFor\(candidate\) <= balanceFcfa/,
+      "MaxReceivableFrom doit chercher le plus GRAND montant qui tient, sinon on retient un franc de trop à l'école",
     ],
   ];
   for (const [re, quoi] of attendus) {
     if (!re.test(src)) echec('La règle de calcul des frais a changé', quoi + '.');
+  }
+
+  // 🔴 L'interdit : la provision de sortie ne doit PAS revenir dans le payin.
+  if (/needed\s*=\s*targetFcfa\s*\+\s*PayoutFeesFor/.test(src)) {
+    echec(
+      "La provision de sortie est réapparue dans l'encaissement",
+      "ChargeFor ne doit couvrir QUE les frais d'entrée depuis le 2026-09-17. Provisionner la sortie une fois, à l'entrée, laisse les retraits FRACTIONNÉS en déficit — chacun payant son propre arrondi (75 % des suites, jusqu'à 8 F)."
+    );
+  }
+}
+
+// --- Le retrait débite-t-il bien « reçu + frais » ? ---
+if (fs.existsSync(RETRAIT)) {
+  const src = fs.readFileSync(RETRAIT, 'utf8');
+  if (!/var walletDebit = receiveAmount \+ estimatedFee;/.test(src)) {
+    echec(
+      'Le retrait ne calcule plus le débit « reçu + frais »',
+      "Les frais de décaissement sont prélevés EN SUS (§274) : sortir 1 000 F coûte 1 010 F. Débiter le seul montant reçu fait avancer la différence par la plateforme."
+    );
+  }
+  if (!/wallet\.AvailableBalance -= walletDebit;/.test(src)) {
+    echec(
+      'La réservation ne porte plus sur le débit',
+      'Le portefeuille doit être réservé de « reçu + frais », sinon le solde affiché promet une somme qui ne peut pas sortir.'
+    );
+  }
+  if (!/HasEnoughForSource\(walletDebit,/.test(src)) {
+    echec(
+      'Le contrôle de solde ignore les frais',
+      'Une école au solde exact verrait son retrait accepté, puis son portefeuille passer sous zéro.'
+    );
+  }
+}
+
+// --- Le crédit du portefeuille est-il resté SANS calcul de frais ? ---
+if (fs.existsSync(REGLEMENT)) {
+  const src = fs.readFileSync(REGLEMENT, 'utf8');
+  if (/CreditableFrom|MaxReceivableFrom|PayoutFeesFor/.test(src)) {
+    echec(
+      "Le règlement d'un encaissement calcule de nouveau un frais de sortie",
+      "Le mode « l'école paie » crédite le net ENTIER depuis le 2026-09-17 : la sortie se paie au retrait. Amputer le crédit ferait payer le décaissement DEUX fois."
+    );
   }
 }
 
@@ -133,7 +180,7 @@ if (fs.existsSync(FINANCE)) {
   if (/FeesPayer == FeesPayer\.Parent && p\.TargetAmountFcfa > 0/.test(src)) {
     echec(
       "L'ancienne formule de marge est réapparue",
-      "Le filtre FeesPayer=Parent exclut le mode « l'école paie les frais », dont la provision de décaissement ne serait alors comptée nulle part."
+      "Le filtre FeesPayer=Parent exclut le mode « l'école paie les frais », dont le résidu d'arrondi ne serait alors compté nulle part."
     );
   }
 }
@@ -183,7 +230,7 @@ if (!taux || [taux.opIn, taux.opOut, taux.vat].some((v) => v === null)) {
 }
 
 // ====================================================================
-// 4, 5 et 6 — la règle est-elle neutre, dans les deux modes ?
+// 4, 5 et 6 — la règle est-elle neutre ?
 // ====================================================================
 if (taux && echecs.length === 0) {
   const ceilF = (x) => Math.ceil(x - 1e-9);
@@ -194,9 +241,10 @@ if (taux && echecs.length === 0) {
     roundF((c * taux.provider) / 100) + ceilF(ceilF((c * taux.opIn) / 100) * vat);
   const fraisOut = (t) => ceilF(ceilF((t * taux.opOut) / 100) * vat);
 
-  // --- Le payeur paie les frais : le plus PETIT montant qui couvre tout ---
+  // --- Le payeur paie l'entrée : le plus PETIT montant qui la couvre ---
+  // 🔑 La cible est la cible : plus de « + fraisOut(t) ».
   const chargeFor = (t) => {
-    const besoin = t + fraisOut(t);
+    const besoin = t;
     const approx = (taux.provider + taux.opIn * vat) / 100;
     let c = approx < 0.95 ? Math.ceil(besoin / (1 - approx)) : besoin;
     if (c < besoin) c = besoin;
@@ -211,35 +259,34 @@ if (taux && echecs.length === 0) {
     return best;
   };
 
-  // --- L'école paie les frais : le plus GRAND montant qui pourra sortir ---
-  const creditableFrom = (net) => {
-    let w = Math.floor(net / (1 + (taux.opOut * vat) / 100));
-    if (w < 0) w = 0;
-    if (w > net) w = net;
-    while (w > 0 && w + fraisOut(w) > net) w--;
-    while (w + 1 <= net && w + 1 + fraisOut(w + 1) <= net) w++;
-    let best = w;
+  // --- Le plus GRAND montant qui peut SORTIR d'un solde ---
+  const maxReceivableFrom = (solde) => {
+    let r = Math.floor(solde / (1 + (taux.opOut * vat) / 100));
+    if (r < 0) r = 0;
+    if (r > solde) r = solde;
+    while (r > 0 && r + fraisOut(r) > solde) r--;
+    while (r + 1 <= solde && r + 1 + fraisOut(r + 1) <= solde) r++;
+    let best = r;
     for (let s = 1; s <= FENETRE; s++) {
-      const cand = w + s;
-      if (cand > net) break;
-      if (cand + fraisOut(cand) <= net) best = cand;
+      const cand = r + s;
+      if (cand > solde) break;
+      if (cand + fraisOut(cand) <= solde) best = cand;
     }
     return best;
   };
 
-  // --- 4. Mode « le payeur paie les frais » ---
+  // --- 4. Payin, mode « le payeur paie les frais » ---
   let deficits = 0;
   let pire = { montant: 0, cible: null };
   let nonMinimal = 0;
   for (let t = MONTANT_MIN; t <= MONTANT_MAX; t++) {
-    const besoin = t + fraisOut(t);
     const c = chargeFor(t);
-    const solde = c - fraisIn(c) - besoin;
+    const solde = c - fraisIn(c) - t;
     if (solde < 0) {
       deficits++;
       if (solde < pire.montant) pire = { montant: solde, cible: t };
     }
-    if (c - 1 >= besoin && c - 1 - fraisIn(c - 1) >= besoin) nonMinimal++;
+    if (c - 1 >= t && c - 1 - fraisIn(c - 1) >= t) nonMinimal++;
   }
   if (deficits > 0) {
     echec(
@@ -254,48 +301,76 @@ if (taux && echecs.length === 0) {
     );
   }
 
-  // --- 5. Mode « l'école paie les frais » ---
-  // L'école absorbe l'entrée ET provisionne sa sortie. Le solde affiché doit
-  // donc être exactement ce qu'elle peut retirer — sinon la plateforme comble
-  // la différence, ce qu'elle a fait quatre mois durant.
-  let nonSortables = 0;
+  // --- 5. Payout : on ne sort jamais plus qu'on ne détient ---
+  let insortables = 0;
   let tropRetenus = 0;
-  for (let net = 1; net <= MONTANT_MAX; net++) {
-    const w = creditableFrom(net);
-    if (w + fraisOut(w) > net) nonSortables++;
-    if (w + 1 <= net && w + 1 + fraisOut(w + 1) <= net) tropRetenus++;
+  for (let solde = 1; solde <= MONTANT_MAX; solde++) {
+    const r = maxReceivableFrom(solde);
+    if (r + fraisOut(r) > solde) insortables++;
+    if (r + 1 <= solde && r + 1 + fraisOut(r + 1) <= solde) tropRetenus++;
   }
-  if (nonSortables > 0) {
+  if (insortables > 0) {
     echec(
-      'Un solde crédité ne peut pas être retiré en entier',
-      `${nonSortables} cas — la plateforme avancerait le frais de décaissement.`
+      'Un retrait sortirait plus que le solde',
+      `${insortables} cas — le portefeuille passerait sous zéro, ou la plateforme comblerait la différence.`
     );
   }
   if (tropRetenus > 0) {
     echec(
       "On retient plus que nécessaire à l'école",
-      `${tropRetenus} cas où un franc de plus aurait pu lui être crédité.`
+      `${tropRetenus} cas où un franc de plus aurait pu sortir.`
     );
   }
 
-  // --- 6. Retraits GROUPÉS : le cas courant, et le plus facile à oublier ---
-  // L'école accumule plusieurs paiements et retire d'un coup. Le frais réel
-  // porte alors sur la SOMME, alors que la provision a été constituée paiement
-  // par paiement. Il faut que la somme des provisions couvre.
+  // --- 6. 🔴 LE CAS QUI MANQUAIT : modes MÉLANGÉS puis retraits FRACTIONNÉS ---
+  //
+  // C'est le scénario exact posé par Cheikh, et celui qui mettait l'ancien
+  // modèle en défaut. On simule une école qui encaisse des paiements dans les
+  // DEUX modes, puis retire son solde en PLUSIEURS fois. À chaque instant, la
+  // réserve (le compte marchand) doit couvrir le portefeuille.
+  //
+  //   payin Parent : réserve += C − fraisIn(C)   ·  wallet += T
+  //   payin School : réserve += T − fraisIn(T)   ·  wallet += T − fraisIn(T)
+  //   payout R     : réserve −= R + fraisOut(R)  ·  wallet −= R + fraisOut(R)
+  //
+  const cibles = [500, 1000, 2500, 5000, 7500, 10000, 15000, 25000, 40000, 63000];
   let decouverts = 0;
-  const tailles = [500, 1000, 2500, 5000, 7500, 10000, 15000, 25000, 40000, 63000];
-  for (let essai = 0; essai < 20000; essai++) {
-    const n = 2 + (essai % 11);
-    const parts = [];
-    for (let i = 0; i < n; i++) parts.push(tailles[(essai * 7 + i * 3) % tailles.length]);
-    const provision = parts.reduce((acc, p) => acc + fraisOut(p), 0);
-    const reel = fraisOut(parts.reduce((a, b) => a + b, 0));
-    if (provision < reel) decouverts++;
+  let pireEcart = 0;
+  for (let essai = 0; essai < 3000; essai++) {
+    let reserve = 0;
+    let wallet = 0;
+    const nbPayins = 2 + (essai % 11);
+    for (let i = 0; i < nbPayins; i++) {
+      const t = cibles[(essai * 7 + i * 3) % cibles.length];
+      if ((essai + i) % 2 === 0) {
+        const c = chargeFor(t);
+        reserve += c - fraisIn(c);
+        wallet += t;
+      } else {
+        reserve += t - fraisIn(t);
+        wallet += t - fraisIn(t);
+      }
+      if (reserve - wallet < pireEcart) pireEcart = reserve - wallet;
+      if (reserve < wallet) decouverts++;
+    }
+    // Retraits FRACTIONNÉS : on vide le portefeuille en plusieurs fois.
+    const parts = 2 + (essai % 5);
+    for (let k = 0; k < parts && wallet > 0; k++) {
+      const visee = k === parts - 1 ? wallet : Math.floor(wallet / (parts - k));
+      const r = maxReceivableFrom(Math.min(visee, wallet));
+      if (r <= 0) break;
+      const debit = r + fraisOut(r);
+      wallet -= debit;
+      reserve -= debit;
+      if (reserve < wallet) decouverts++;
+      if (reserve - wallet < pireEcart) pireEcart = reserve - wallet;
+    }
+    if (reserve < 0) decouverts++;
   }
   if (decouverts > 0) {
     echec(
-      "Un retrait GROUPÉ n'est pas couvert",
-      `${decouverts} cas où la somme des provisions est inférieure au frais réel. L'arrondi au franc SUPÉRIEUR garantit ceil(a) + ceil(b) >= ceil(a+b) : il a dû être affaibli.`
+      'Retraits FRACTIONNÉS : la réserve ne couvre plus les portefeuilles',
+      `${decouverts} instants en découvert, pire écart ${pireEcart} F. C'est précisément la fuite de l'ancien modèle : une provision constituée UNE fois ne couvre pas N arrondis au franc supérieur.`
     );
   }
 }
@@ -304,8 +379,9 @@ if (taux && echecs.length === 0) {
 console.log('');
 if (echecs.length === 0) {
   console.log(
-    `Règle intacte · les DEUX modes neutres au franc de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA ` +
-      '· retraits groupés couverts · 6 contrôles, 0 en échec.'
+    `Règle intacte · encaissement neutre au franc de ${MONTANT_MIN} à ${MONTANT_MAX} FCFA ` +
+      '· aucun retrait ne sort plus que son solde · retraits FRACTIONNÉS couverts ' +
+      '· 6 contrôles, 0 en échec.'
   );
   if (taux) {
     console.log(
@@ -321,6 +397,6 @@ for (const e of echecs) {
   console.log(`          ${e.detail}`);
 }
 console.log('');
-console.log('Un frais mal provisionné ne lève aucune erreur : il se paie, en');
-console.log('silence, sur la trésorerie de la plateforme (§255, §256, §257).');
+console.log('Un frais mal porté ne lève aucune erreur : il se paie, en silence,');
+console.log('sur la trésorerie de la plateforme (§255, §256, §257).');
 process.exit(1);

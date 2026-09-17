@@ -155,18 +155,73 @@ namespace Idara.API.Services
                 case WithdrawalStatus.Initiated:
                 case WithdrawalStatus.UnderVerification:
                 {
-                    // Clôture normale : la réservation (Available -= X faite à
-                    // l'init) devient définitive. On vide le Pending. PAS de
-                    // WalletTransaction (Available ne bouge pas — la Reservation
-                    // -X portait déjà le débit, cf. gotcha §55).
+                    // Clôture normale : la réservation (Available -= débit,
+                    // faite à l'init) devient définitive. On vide le Pending.
+                    //
+                    // 🔑 C'EST LE FRAIS RÉEL DE WAVE QUI FAIT FOI, jamais notre
+                    // estimation. À la réservation on a posé `ceil(reçu × taux)`
+                    // pour pouvoir afficher un chiffre et bloquer les fonds ;
+                    // Wave renvoie le frais effectif au règlement. L'écart — des
+                    // francs d'arrondi — se solde par une écriture
+                    // d'AJUSTEMENT, jamais par une réécriture de la réservation
+                    // (§55 : une correction est une nouvelle écriture).
                     withdrawal.Status = WithdrawalStatus.Completed;
                     withdrawal.CompletedAt = completedAt;
-                    withdrawal.FeesFcfa = feesFcfa;
+                    // ⚠️ `feesFcfa = 0` veut dire « la source n'a rien dit », pas
+                    // « c'est gratuit » : un décaissement Wave coûte 1 %, jamais
+                    // zéro. On garde alors l'estimation plutôt que de restituer
+                    // à l'école un frais qu'elle a bel et bien payé.
+                    if (feesFcfa > 0) withdrawal.FeesFcfa = feesFcfa;
                     withdrawal.NetReceivedFcfa = netReceivedFcfa;
                     withdrawal.LastCheckedAt = DateTime.UtcNow;
 
-                    wallet.PendingBalance -= withdrawal.AmountFcfa;
+                    var reserved = ReservedDebit(withdrawal);
+                    var actualDebit = withdrawal.AmountFcfa + withdrawal.FeesFcfa;
+
+                    wallet.PendingBalance -= reserved;
+                    // « Total retiré » compte ce qui est ARRIVÉ au bénéficiaire :
+                    // c'est le chiffre qu'un directeur rapproche de ses reçus.
                     wallet.TotalWithdrawnLifetime += withdrawal.AmountFcfa;
+
+                    var delta = reserved - actualDebit;
+                    if (delta != 0)
+                    {
+                        if (wallet.AvailableBalance + delta < 0)
+                        {
+                            // Frais réels au-dessus de l'estimation ET solde à
+                            // sec. On ne creuse pas sous zéro (contrainte
+                            // CK_SchoolWallets_NonNegative, qui casserait la
+                            // transaction et laisserait le retrait en suspens) :
+                            // l'écart, quelques francs, reste à la charge de la
+                            // plateforme et se lit dans le journal.
+                            _logger.LogWarning(
+                                "[payout-settle] Withdrawal {Id} : complément de frais de {Delta} FCFA "
+                                + "NON prélevé, solde insuffisant ({Available} FCFA) — écart à la charge de la plateforme",
+                                withdrawal.Id, -delta, wallet.AvailableBalance);
+                        }
+                        else
+                        {
+                            wallet.AvailableBalance += delta;
+                            withdrawal.WalletDebitedFcfa = actualDebit;
+                            // ⚠️ La poche « Don » garde la part réservée : la
+                            // rectifier de quelques francs n'a pas d'effet sur
+                            // l'Available, seul montant qui engage l'argent.
+                            _context.WalletTransactions.Add(new WalletTransaction
+                            {
+                                SchoolId = withdrawal.SchoolId!.Value,
+                                Type = WalletTransactionType.Adjustment,
+                                Source = WalletSource.Adjustment,
+                                AmountFcfa = delta,
+                                BalanceAfter = wallet.AvailableBalance,
+                                RelatedEntity = WalletRelatedEntity.Withdrawal,
+                                RelatedId = withdrawal.Id,
+                                Note = delta > 0
+                                    ? $"Ajustement retrait #{withdrawal.Id} : frais réels {withdrawal.FeesFcfa} FCFA, {delta} FCFA restitués"
+                                    : $"Ajustement retrait #{withdrawal.Id} : frais réels {withdrawal.FeesFcfa} FCFA, {-delta} FCFA complémentaires",
+                                OccurredAt = DateTime.UtcNow
+                            });
+                        }
+                    }
                     wallet.UpdatedAt = DateTime.UtcNow;
 
                     await _context.SaveChangesAsync(ct);
@@ -197,7 +252,12 @@ namespace Idara.API.Services
                     // re-débiter, pour ne pas heurter la contrainte CHECK
                     // (CK_SchoolWallets_NonNegative) et corrompre la tx. Le
                     // verrou garantit que le solde ne bouge pas sous nos pieds.
-                    if (wallet.AvailableBalance < withdrawal.AmountFcfa)
+                    // 🔑 Le re-débit porte sur le DÉBIT (reçu + frais), pas sur
+                    // le seul montant reçu : c'est bien cette somme-là qui est
+                    // sortie de la réserve.
+                    if (feesFcfa > 0) withdrawal.FeesFcfa = feesFcfa;
+                    var redebit = withdrawal.AmountFcfa + withdrawal.FeesFcfa;
+                    if (wallet.AvailableBalance < redebit)
                     {
                         await tx.RollbackAsync(ct);
                         await RaiseAlertAsync(
@@ -205,9 +265,9 @@ namespace Idara.API.Services
                             withdrawal.SchoolId, withdrawal.Id,
                             $"Décaissement #{withdrawal.Id} confirmé `completed` après restitution, " +
                             $"mais solde Available ({wallet.AvailableBalance}) insuffisant pour re-débiter " +
-                            $"{withdrawal.AmountFcfa} FCFA. Perte/dette à régulariser manuellement.",
+                            $"{redebit} FCFA. Perte/dette à régulariser manuellement.",
                             new { withdrawal.SchoolId, withdrawal.Id, withdrawal.AmountFcfa,
-                                  wallet.AvailableBalance, disbursementId, source },
+                                  redebit, wallet.AvailableBalance, disbursementId, source },
                             ct);
                         return PayoutSettlementOutcome.CorrectionImpossible;
                     }
@@ -217,13 +277,13 @@ namespace Idara.API.Services
                     withdrawal.CompletedAt = completedAt;
                     withdrawal.FailedAt = null;
                     withdrawal.FailureReason = null;
-                    withdrawal.FeesFcfa = feesFcfa;
                     withdrawal.NetReceivedFcfa = netReceivedFcfa;
+                    withdrawal.WalletDebitedFcfa = redebit;
                     withdrawal.LastCheckedAt = DateTime.UtcNow;
 
                     // Re-débit définitif de l'Available + transaction Adjustment
                     // signée négative (préserve Σ tx == Available).
-                    wallet.AvailableBalance -= withdrawal.AmountFcfa;
+                    wallet.AvailableBalance -= redebit;
                     wallet.TotalWithdrawnLifetime += withdrawal.AmountFcfa;
                     // Re-applique la déduction de la poche « Don » qu'avait annulée
                     // la restitution. Clamp à 0 par prudence : entre la restitution
@@ -239,7 +299,7 @@ namespace Idara.API.Services
                         SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Adjustment,
                         Source = WalletSource.Adjustment,
-                        AmountFcfa = -withdrawal.AmountFcfa,
+                        AmountFcfa = -redebit,
                         BalanceAfter = wallet.AvailableBalance,
                         RelatedEntity = WalletRelatedEntity.Withdrawal,
                         RelatedId = withdrawal.Id,
@@ -252,7 +312,7 @@ namespace Idara.API.Services
                         PayoutAlertType.DoubleSpendCorrected,
                         withdrawal.SchoolId, withdrawal.Id,
                         $"Restitution du décaissement #{withdrawal.Id} ANNULÉE : `completed` authentique " +
-                        $"reçu après un Failed. Re-débit de {withdrawal.AmountFcfa} FCFA. Double dépense évitée.",
+                        $"reçu après un Failed. Re-débit de {redebit} FCFA. Double dépense évitée.",
                         new { withdrawal.SchoolId, withdrawal.Id, withdrawal.AmountFcfa, disbursementId, source });
 
                     await _context.SaveChangesAsync(ct);
@@ -307,8 +367,12 @@ namespace Idara.API.Services
                     withdrawal.FailureReason = Truncate(reason, 480);
                     withdrawal.LastCheckedAt = DateTime.UtcNow;
 
-                    wallet.PendingBalance -= withdrawal.AmountFcfa;
-                    wallet.AvailableBalance += withdrawal.AmountFcfa;
+                    // On restitue ce qui a été RÉSERVÉ — frais estimés
+                    // compris. Aucun franc n'est sorti : l'école doit retrouver
+                    // son solde au centime près.
+                    var released = ReservedDebit(withdrawal);
+                    wallet.PendingBalance -= released;
+                    wallet.AvailableBalance += released;
                     // Restitution symétrique de la poche « Don » : on remet
                     // exactement la part qui avait été prélevée dessus à la réservation.
                     wallet.DonationBalanceFcfa += withdrawal.DonationAmountFcfa;
@@ -319,7 +383,7 @@ namespace Idara.API.Services
                         SchoolId = withdrawal.SchoolId!.Value,
                         Type = WalletTransactionType.Release,
                         Source = WalletSource.Withdrawal,
-                        AmountFcfa = withdrawal.AmountFcfa, // release = signé positif
+                        AmountFcfa = released, // release = signé positif, frais compris
                         BalanceAfter = wallet.AvailableBalance,
                         RelatedEntity = WalletRelatedEntity.Withdrawal,
                         RelatedId = withdrawal.Id,
@@ -410,6 +474,21 @@ namespace Idara.API.Services
         // réduit P de lui-même ; le passage à Failed le restaure. On ne fait donc
         // que des transitions de statut, sérialisées par le verrou plateforme.
         // ====================================================================
+
+        /// <summary>
+        /// Ce qui a été RÉSERVÉ sur le portefeuille à l'initiation du retrait :
+        /// le montant reçu par le bénéficiaire <b>plus</b> les frais estimés.
+        /// </summary>
+        /// <remarks>
+        /// Le repli sur <see cref="Withdrawal.AmountFcfa"/> est une ceinture :
+        /// la migration a reposé <c>WalletDebitedFcfa = AmountFcfa</c> sur tous
+        /// les retraits antérieurs au 2026-09-17, où le débit valait bien le
+        /// montant reçu (la sortie était provisionnée dès l'encaissement). Aucun
+        /// retrait ne devrait donc porter zéro ici — mais restituer zéro à une
+        /// école serait une perte sèche, alors qu'un repli ne coûte rien.
+        /// </remarks>
+        private static long ReservedDebit(Withdrawal w) =>
+            w.WalletDebitedFcfa > 0 ? w.WalletDebitedFcfa : w.AmountFcfa;
 
         private async Task<PayoutSettlementOutcome> SettlePlatformCompletedAsync(
             IDbContextTransaction tx, Withdrawal withdrawal, string? disbursementId,

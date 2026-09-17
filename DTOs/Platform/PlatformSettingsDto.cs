@@ -60,11 +60,17 @@ namespace Idara.API.DTOs.Platform
         /// <summary>Frais retenus à l'encaissement sur ce montant débité.</summary>
         public long PayinFeesFcfa { get; set; }
 
-        /// <summary>Frais du décaissement de la cible, prélevés en plus.</summary>
+        /// <summary>
+        /// Ce que coûtera le retrait de cette somme — à la charge de l'ÉCOLE,
+        /// au moment où elle retire, et prélevé en plus du montant envoyé.
+        /// Il n'entre pas dans <see cref="PlatformBalanceFcfa"/> : depuis le
+        /// 2026-09-17, l'encaissement ne provisionne plus la sortie.
+        /// </summary>
         public long PayoutFeesFcfa { get; set; }
 
         /// <summary>
-        /// Ce qui reste à la plateforme une fois tout payé. <b>Doit valoir 0.</b>
+        /// Ce qui reste à la plateforme une fois l'école servie. <b>Doit valoir
+        /// 0 ou quelques francs</b> — le résidu d'arrondi de l'encaissement.
         /// Un négatif signifie qu'elle avance de l'argent.
         /// </summary>
         public long PlatformBalanceFcfa { get; set; }

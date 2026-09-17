@@ -384,8 +384,15 @@ namespace Idara.API.Controllers
                         ChargedFcfa = charged,
                         PayinFeesFcfa = payin,
                         PayoutFeesFcfa = payout,
-                        // Ce qui reste une fois l'école servie ET le retrait payé.
-                        PlatformBalanceFcfa = charged - payin - target - payout,
+                        // Ce qui reste une fois l'école servie — le résidu
+                        // d'arrondi de l'encaissement, rien de plus.
+                        //
+                        // 🔑 Le frais de RETRAIT n'entre plus dans ce solde
+                        // (2026-09-17) : il est porté par l'école au moment où
+                        // elle retire, pas provisionné à l'encaissement. Le
+                        // soustraire ici afficherait une perte imaginaire sur
+                        // chaque paiement.
+                        PlatformBalanceFcfa = charged - payin - target,
                         MarkupPercent = Math.Round((charged - target) * 100.0 / target, 3),
                     });
                 }

@@ -28,7 +28,11 @@ namespace Idara.API.DTOs.Admin
         public string SchoolName { get; set; } = string.Empty;
         public bool IsPlatform { get; set; }
 
+        /// <summary>Ce que TOUCHE le bénéficiaire.</summary>
         public long AmountFcfa { get; set; }
+        /// <summary>Ce qui SORT du portefeuille = montant reçu + frais (§118 :
+        /// une transaction se lit pareil sur tous les écrans).</summary>
+        public long WalletDebitedFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetReceivedFcfa { get; set; }
 
