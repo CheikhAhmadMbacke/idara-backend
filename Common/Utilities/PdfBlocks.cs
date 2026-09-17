@@ -1,4 +1,4 @@
-using QuestPDF.Fluent;
+﻿using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 
@@ -37,7 +37,7 @@ namespace Idara.API.Common.Utilities
 
                 Line(col, "Idara", reference);
                 if (!string.IsNullOrWhiteSpace(providerReference))
-                    Line(col, "SenePay", providerReference!);
+                    Line(col, "Wave", providerReference!);
             });
 
             void Line(ColumnDescriptor col, string label, string value)

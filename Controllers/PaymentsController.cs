@@ -380,7 +380,7 @@ namespace Idara.API.Controllers
             }
             if (!outcome.Ok && outcome.HttpStatus == 502)
             {
-                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(outcome.ErrorMessage ?? "SenePay indisponible."));
+                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(outcome.ErrorMessage ?? "Le paiement est temporairement indisponible."));
             }
 
             return Ok(ApiResponse<InitiatePaymentResponseDto>.Ok(new InitiatePaymentResponseDto

@@ -232,7 +232,7 @@ namespace Idara.API.Services
                         PayoutAlertType.StuckUnderVerification,
                         current.SchoolId, withdrawalId,
                         $"Décaissement #{withdrawalId} coincé en vérification depuis plus de 48h " +
-                        $"({nextAttempts} tentatives). Réconciliation manuelle SenePay/AfribaPay requise.",
+                        $"({nextAttempts} tentatives). Réconciliation manuelle à faire dans le portail Wave.",
                         new { withdrawalId, startedAt, attempts = nextAttempts },
                         ct);
                 }

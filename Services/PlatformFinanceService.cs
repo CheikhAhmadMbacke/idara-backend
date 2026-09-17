@@ -190,7 +190,7 @@ namespace Idara.API.Services
             if (!reserveLive)
             {
                 dto.HealthColor = "red";
-                dto.Analysis = "Solde SenePay injoignable — impossible de vérifier la solvabilité pour l'instant. "
+                dto.Analysis = "Solde Wave injoignable — impossible de vérifier la solvabilité pour l'instant. "
                     + $"Dette écoles : {Fmt(owedToSchools)} FCFA. Réessaie dans un instant.";
                 return dto;
             }
@@ -839,9 +839,9 @@ namespace Idara.API.Services
             string msg;
             if (d.HealthColor == "red")
             {
-                msg = $"CRITIQUE : la réserve SenePay ({Fmt(d.ReserveSenePayFcfa)} FCFA) est INFÉRIEURE à ce qu'on "
+                msg = $"CRITIQUE : la réserve Wave ({Fmt(d.ReserveSenePayFcfa)} FCFA) est INFÉRIEURE à ce qu'on "
                     + $"doit aux écoles ({Fmt(d.OwedToSchoolsFcfa)} FCFA). Ajoute au moins "
-                    + $"{Fmt(d.AmountToCoverDebtFcfa)} FCFA sur ton compte marchand SenePay pour couvrir la dette "
+                    + $"{Fmt(d.AmountToCoverDebtFcfa)} FCFA sur ton compte marchand Wave pour couvrir la dette "
                     + $"(idéalement {Fmt(d.AmountToReachSafeFcfa)} FCFA pour la marge de sécurité).";
             }
             else if (d.HealthColor == "yellow")
@@ -861,7 +861,7 @@ namespace Idara.API.Services
             if (d.DiscrepancyFcfa < -EpsilonFcfa)
             {
                 msg += $" Écart de {Fmt(-d.DiscrepancyFcfa)} FCFA entre la réserve et (dette + gains) : "
-                    + "probable retrait manuel non enregistré depuis le dashboard SenePay — consigne-le pour "
+                    + "probable retrait manuel non enregistré depuis l'application Wave Business — consigne-le pour "
                     + "garder la réconciliation exacte.";
             }
             else if (d.DiscrepancyFcfa > EpsilonFcfa)

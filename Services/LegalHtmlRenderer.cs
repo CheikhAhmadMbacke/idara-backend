@@ -29,6 +29,52 @@ namespace Idara.API.Services
         private static string H(string? s) => WebUtility.HtmlEncode(s ?? string.Empty);
 
         /// <summary>Le nom de l'éditeur, ou un repli neutre et exact.</summary>
+        /// <summary>
+        /// Nom du prestataire de paiement, tel qu'il doit apparaître dans les
+        /// textes qui engagent : les familles et les établissements ont le
+        /// droit de savoir QUI détient l'argent entre le moment où elles
+        /// paient et celui où l'école le retire.
+        /// </summary>
+        private const string PaymentProviderName = "Wave";
+
+        /// <summary>
+        /// Taux effectif d'un encaissement, lu dans les réglages — jamais
+        /// écrit dans le texte.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 Une page juridique qui annonce un chiffre figé devient un
+        /// ENGAGEMENT FAUX le jour où la grille change, et personne ne pense à
+        /// rouvrir les CGU en modifiant un réglage. C'est le même piège que le
+        /// commentaire portant un taux périmé (§256), avec une portée
+        /// contractuelle en plus. Le texte lit donc la source, comme le
+        /// calcul de la majoration.
+        /// </remarks>
+        private static string PayinRate(PlatformSettings p) =>
+            FormatRate(
+                (p.PayinProviderFeePercent ?? -1) < 0 ? (double?)null
+                : (p.PayinProviderFeePercent ?? 0)
+                  + (p.PayinOperatorFeePercentHt ?? 0) * (1 + (p.FeeVatPercent ?? 0) / 100.0));
+
+        private static string PayoutRate(PlatformSettings p) =>
+            FormatRate(
+                (p.PayoutOperatorFeePercentHt ?? -1) < 0 ? (double?)null
+                : (p.PayoutOperatorFeePercentHt ?? 0) * (1 + (p.FeeVatPercent ?? 0) / 100.0));
+
+        /// <summary>
+        /// Un taux en toutes lettres. Non renseigné → on ne promet rien : le
+        /// texte renvoie au montant affiché avant l'opération, qui lui est
+        /// toujours juste.
+        /// </summary>
+        private static string FormatRate(double? rate)
+        {
+            if (rate is not double r || r <= 0) return "le taux indiqué avant l'opération";
+            var arrondi = Math.Round(r, 2);
+            var texte = arrondi == Math.Floor(arrondi)
+                ? ((long)arrondi).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : arrondi.ToString("0.##", new System.Globalization.CultureInfo("fr-FR"));
+            return texte + "\u00a0%";
+        }
+
         private static string Editor(PlatformSettings p) =>
             string.IsNullOrWhiteSpace(p.LegalCompanyName) ? "Pyranil Solution" : p.LegalCompanyName!;
 
@@ -61,6 +107,7 @@ namespace Idara.API.Services
   .brand { font-weight:800; color:var(--green); font-size:15px; letter-spacing:.02em; }
   h1 { color:var(--green); margin:8px 0 6px; font-size:28px; line-height:1.2; }
   .updated { color:var(--muted); font-size:13.5px; }
+  .muted { color:var(--muted); font-size:13px; }
   nav.toc { background:var(--soft); border:1px solid var(--border); border-radius:12px;
             padding:16px 20px; margin:24px 0 8px; }
   nav.toc div { font-weight:700; font-size:13px; text-transform:uppercase;
@@ -186,6 +233,9 @@ namespace Idara.API.Services
             var editor = H(Editor(p));
             var contact = H(Contact(p));
             var identity = IdentityBlock(p);
+            var provider = PaymentProviderName;
+            var payinRate = PayinRate(p);
+            var payoutRate = PayoutRate(p);
 
             var body = $$"""
 <nav class="toc">
@@ -199,7 +249,8 @@ namespace Idara.API.Services
     <li><a href="#etablissement">Obligations de l'établissement</a></li>
     <li><a href="#utilisateurs">Obligations des utilisateurs</a></li>
     <li><a href="#contenus">Contenus publiés</a></li>
-    <li><a href="#paiement">Encaissement des paiements</a></li>
+    <li><a href="#paiement">Encaissement des paiements</a>
+        &middot; <a href="#frais">frais de transaction</a></li>
     <li><a href="#dons">Collectes de dons</a></li>
     <li><a href="#portefeuille">Portefeuille et retraits</a></li>
     <li><a href="#abonnement">Abonnement et facturation</a></li>
@@ -244,8 +295,14 @@ plateforme et peut demander la suppression de son compte.</p>
   <li><strong>Utilisateur</strong> : toute personne disposant d'un accès, à quelque titre que ce soit.</li>
   <li><strong>Responsable</strong> : le parent ou tuteur rattaché à un ou plusieurs élèves.</li>
   <li><strong>Donateur</strong> : toute personne effectuant un don via un lien de collecte.</li>
-  <li><strong>Prestataire de paiement</strong> : l'établissement agréé qui exécute les
-      opérations d'encaissement et de décaissement.</li>
+  <li><strong>Prestataire de paiement</strong> : <strong>{{provider}}</strong>,
+      l'établissement agréé au Sénégal avec lequel {{editor}} a contracté, et qui
+      exécute matériellement les opérations d'encaissement et de décaissement.
+      Il peut être remplacé ; le nom en vigueur est toujours celui indiqué ici et
+      rappelé sur chaque écran de paiement.</li>
+  <li><strong>Frais de transaction</strong> : la commission prélevée par le
+      prestataire sur chaque opération. Distincte de l'abonnement, elle
+      rémunère l'exécution du paiement, pas l'usage du logiciel.</li>
   <li><strong>Portefeuille</strong> : le solde de l'établissement au sein de la plateforme,
       constitué des sommes encaissées pour son compte et non encore retirées.</li>
 </ul>
@@ -270,9 +327,9 @@ de l'établissement, selon la formule souscrite :</p>
 <div class="box">
   <p><strong>Idara n'est ni un établissement de paiement, ni un établissement de
   monnaie électronique, ni un intermédiaire financier.</strong> Les opérations
-  d'encaissement et de décaissement sont exécutées par un prestataire agréé.
-  {{editor}} fournit un logiciel qui déclenche ces opérations et en tient le
-  registre pour le compte de l'établissement.</p>
+  d'encaissement et de décaissement sont exécutées par <strong>{{provider}}</strong>,
+  prestataire agréé au Sénégal. {{editor}} fournit un logiciel qui déclenche ces
+  opérations et en tient le registre pour le compte de l'établissement.</p>
 </div>
 
 <h2 id="comptes">5. Comptes, rôles et accès</h2>
@@ -347,19 +404,101 @@ collecte, nom public de l'établissement.</p>
 </div>
 
 <h2 id="paiement">9. Encaissement des paiements</h2>
-<p>Les paiements en ligne sont exécutés par un prestataire de paiement agréé. Le
-payeur est redirigé vers l'interface de ce prestataire ; {{editor}} ne collecte
-et ne conserve <strong>aucun code secret, aucun identifiant bancaire et aucune
-donnée de carte</strong>.</p>
+<p>Les paiements en ligne sont exécutés par <strong>{{provider}}</strong>,
+prestataire de paiement agréé au Sénégal. Le payeur est redirigé vers
+l'interface de {{provider}} pour y confirmer l'opération ; {{editor}} ne collecte
+et ne conserve <strong>aucun code secret, aucun identifiant de compte de paiement
+et aucune donnée de carte</strong>.</p>
+
+<h3>9.1 Déroulement d'une opération</h3>
 <ul>
-  <li>Le paiement est réputé effectué lorsque le prestataire le confirme.</li>
-  <li>Une opération refusée, annulée ou expirée ne donne lieu à aucun mouvement.</li>
-  <li>Les frais du prestataire sont supportés selon le réglage choisi par
-      l'établissement, porté à la connaissance du payeur lorsque celui-ci les supporte.</li>
-  <li>Un encaissement en espèces est saisi par l'établissement, sous sa responsabilité,
-      et ne transite pas par la plateforme.</li>
+  <li>Le montant réclamé est affiché <strong>avant</strong> toute redirection, et
+      il est le seul qui puisse être débité.</li>
+  <li>Le paiement est réputé effectué <strong>lorsque {{provider}} le confirme</strong>,
+      et à ce moment seulement. Un écran de confirmation ne vaut pas paiement tant
+      que cette confirmation n'est pas parvenue.</li>
+  <li>Une opération refusée, annulée ou expirée ne donne lieu à aucun mouvement et
+      n'est jamais facturée.</li>
+  <li>Une opération dont l'issue reste indéterminée n'est close ni dans un sens ni
+      dans l'autre : elle est vérifiée auprès de {{provider}} jusqu'à ce qu'il la
+      tranche. Aucun crédit n'est porté sur une incertitude.</li>
+  <li>Le payeur n'a pas besoin d'être titulaire du compte de l'élève : un tiers peut
+      régler pour une famille. Le reçu est alors émis au nom de l'élève concerné.</li>
+  <li>Un encaissement <strong>en espèces</strong> est saisi par l'établissement, sous
+      sa seule responsabilité. Il ne transite pas par la plateforme, ne supporte
+      aucun frais de transaction, et n'alimente pas le portefeuille.</li>
+</ul>
+
+<h3 id="frais">9.2 Frais de transaction</h3>
+<p>Chaque opération exécutée par {{provider}} donne lieu à une commission. Elle est
+<strong>distincte de l'abonnement</strong> : l'abonnement rémunère l'usage du
+logiciel, la commission rémunère l'exécution du paiement par le prestataire.</p>
+<table>
+  <thead>
+    <tr><th>Opération</th><th>Commission</th><th>Assise sur</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Encaissement</strong><br><span class="muted">paiement d'une famille,
+          don, recharge de portefeuille</span></td>
+      <td><strong>{{payinRate}}</strong></td>
+      <td>le montant débité au payeur</td>
+    </tr>
+    <tr>
+      <td><strong>Décaissement</strong><br><span class="muted">retrait de
+          l'établissement vers un compte de paiement mobile</span></td>
+      <td><strong>{{payoutRate}}</strong></td>
+      <td>le montant reçu par le bénéficiaire, la commission s'ajoutant à ce montant</td>
+    </tr>
+  </tbody>
+</table>
+<p class="muted">Les commissions sont arrondies au franc par le prestataire. Le
+montant exact, en francs, est affiché avant chaque opération : c'est lui qui fait
+foi, et non le pourcentage, qui n'en est que l'expression approchée.</p>
+
+<div class="box">
+  <p><strong>C'est l'établissement qui décide qui supporte ces frais</strong>, et il
+  peut en changer à tout moment depuis son espace :</p>
+  <ul>
+    <li><strong>L'établissement les supporte</strong> : la famille règle le montant
+        exact de sa dette, et le portefeuille est crédité de ce montant diminué de
+        la commission.</li>
+    <li><strong>Le payeur les supporte</strong> : le montant réclamé est majoré de
+        ce qu'il faut pour que l'établissement encaisse la somme due. La majoration
+        est alors <strong>annoncée au payeur avant qu'il ne paie</strong>, sur
+        l'écran de paiement comme sur le reçu.</li>
+  </ul>
+  <p>Dans les deux cas, la facture de l'élève est soldée du <strong>montant dû</strong>,
+  jamais d'un montant diminué des frais.</p>
+</div>
+
+<h3>9.3 Évolution des frais et changement de prestataire</h3>
+<ul>
+  <li>Ces taux sont ceux appliqués par {{provider}} à la date de la présente version.
+      Ils <strong>peuvent évoluer</strong> : le prestataire peut modifier sa
+      tarification, et {{editor}} peut changer de prestataire.</li>
+  <li>Toute évolution est <strong>annoncée à l'établissement avec un préavis
+      raisonnable</strong>, par notification dans son espace et, le cas échéant, par
+      courriel — sauf lorsqu'une modification imposée par le prestataire, une
+      autorité ou la loi prend effet dans un délai plus court, auquel cas
+      l'information est donnée sans délai.</li>
+  <li>Le taux affiché dans la présente page et sur les écrans de paiement est
+      <strong>toujours celui en vigueur</strong> : il est lu dans les réglages de la
+      plateforme, non recopié dans le texte.</li>
+  <li>L'établissement qui n'accepte pas une évolution peut cesser d'utiliser
+      l'encaissement en ligne, retirer son solde et résilier dans les conditions
+      prévues à l'article 19.</li>
+</ul>
+
+<h3>9.4 Contestations et remboursements</h3>
+<ul>
   <li>Toute contestation d'un paiement se règle entre le payeur, l'établissement et
-      le prestataire. {{editor}} fournit les éléments techniques dont il dispose.</li>
+      {{provider}}. {{editor}} fournit les éléments techniques dont il dispose :
+      horodatage, référence de l'opération, montant, statut.</li>
+  <li>Un remboursement, lorsqu'il est possible, est exécuté par {{provider}} et
+      revient sur le compte de paiement ayant servi au règlement.</li>
+  <li>Une somme déjà retirée par l'établissement ne peut être reprise par
+      {{editor}} : la restitution incombe alors à l'établissement.</li>
 </ul>
 
 <h2 id="dons">10. Collectes de dons</h2>
@@ -385,12 +524,22 @@ individualisées dans les écritures.</p>
 <ul>
   <li>L'établissement demande un retrait vers un numéro de paiement mobile qu'il désigne
       et dont il garantit l'exactitude.</li>
-  <li>Un montant minimum de retrait s'applique.</li>
-  <li>Les délais dépendent du prestataire et des opérateurs ; ils ne sont pas garantis.</li>
+  <li>Un montant minimum de retrait s'applique ; il est affiché dans l'espace de
+      l'établissement.</li>
+  <li><strong>Le bénéficiaire reçoit le montant exact demandé.</strong> La commission
+      de décaissement ({{payoutRate}}) s'ajoute à ce montant et est prélevée en sus :
+      un retrait de 10 000 FCFA fait donc sortir 10 000 FCFA vers le bénéficiaire, et
+      la commission par-dessus.</li>
+  <li>Les frais de décaissement sont indiqués <strong>avant validation</strong>, en
+      francs.</li>
+  <li>Les délais dépendent de {{provider}} et des opérateurs de paiement mobile ; ils
+      ne sont pas garantis par {{editor}}.</li>
   <li>Un retrait dont le sort reste indéterminé est maintenu en vérification, les fonds
-      restant réservés, jusqu'à confirmation du prestataire. Aucune restitution n'est
-      opérée sur un état incertain.</li>
-  <li>Les frais de décaissement sont indiqués avant validation.</li>
+      restant réservés, jusqu'à confirmation de {{provider}}. <strong>Aucune
+      restitution n'est opérée sur un état incertain</strong> : ce délai protège
+      l'établissement d'un solde crédité deux fois pour un argent sorti une fois.</li>
+  <li>Un retrait annulé par le prestataire après exécution est reporté au portefeuille,
+      et l'établissement en est informé.</li>
 </ul>
 
 <h2 id="abonnement">12. Abonnement et facturation</h2>
@@ -602,6 +751,7 @@ informations nécessaires pour vérifier le respect de la présente annexe.</p>
             var editor = H(Editor(p));
             var contact = H(Contact(p));
             var identity = IdentityBlock(p);
+            var provider = PaymentProviderName;
             var cdp = string.IsNullOrWhiteSpace(p.LegalCdpNumber)
                 ? ""
                 : $"<p>Ce traitement a fait l'objet d'une déclaration auprès de la Commission de protection des données personnelles sous la référence <strong>{H(p.LegalCdpNumber)}</strong>.</p>";
@@ -703,7 +853,8 @@ sur sa demande.</p>
   <li>Factures, reçus, écritures de caisse, retraits et bénéficiaires.</li>
   <li><strong>Aucun code secret, aucun identifiant bancaire, aucune donnée de carte
       n'est collecté ni conservé par Idara</strong> : le paiement est exécuté sur
-      l'interface du prestataire agréé.</li>
+      l'interface de <strong>{{provider}}</strong>, prestataire agréé au Sénégal.
+      Nous n'en recevons que le résultat : montant, date, statut et référence.</li>
 </ul>
 <h3>4.4 Dons</h3>
 <ul>
@@ -765,7 +916,7 @@ régulière.</p>
 <div class="scroll"><table>
   <tr><th>Prestataire</th><th>Fonction</th><th>Pays</th></tr>
   <tr><td>Hetzner Online GmbH</td><td>Hébergement des serveurs et de la base de données</td><td>Allemagne</td></tr>
-  <tr><td>Prestataire de paiement agréé</td><td>Encaissements et décaissements mobiles</td><td>Sénégal</td></tr>
+  <tr><td><strong>{{provider}}</strong></td><td>Encaissements et décaissements par paiement mobile — exécution des opérations, détention des fonds jusqu'à leur retrait</td><td>Sénégal</td></tr>
   <tr><td>Sonatel / Orange</td><td>Acheminement des SMS</td><td>Sénégal</td></tr>
   <tr><td>Google (Firebase)</td><td>Notifications mobiles</td><td>États-Unis</td></tr>
   <tr><td>Google (courriel)</td><td>Envoi des courriels de service</td><td>États-Unis</td></tr>

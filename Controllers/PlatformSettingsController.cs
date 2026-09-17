@@ -323,7 +323,7 @@ namespace Idara.API.Controllers
             // par SenePay → l'école croirait pouvoir facturer moins).
             if (dto.MinPayinFcfa < 200)
                 return BadRequest(ApiResponse<PlatformSettingsDto>.Fail(
-                    "Le montant minimum de paiement ne peut pas être inférieur à 200 FCFA (contrainte SenePay)."));
+                    "Le montant minimum de paiement ne peut pas être inférieur à 200 FCFA."));
 
             var s = await _context.GetPlatformSettingsAsync(ct);
 

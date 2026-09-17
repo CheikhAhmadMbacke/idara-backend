@@ -1043,11 +1043,11 @@ namespace Idara.API.Data
             modelBuilder.Entity<Payment>()
                 .HasIndex(p => p.ProviderTransactionId)
                 .IsUnique()
-                .HasFilter("\"SenePayTransactionId\" IS NOT NULL");
+                .HasFilter("\"ProviderTransactionId\" IS NOT NULL");
 
             modelBuilder.Entity<Payment>()
                 .HasIndex(p => p.ProviderInternalId)
-                .HasFilter("\"SenePayInternalId\" IS NOT NULL");
+                .HasFilter("\"ProviderInternalId\" IS NOT NULL");
 
             // Lookup public depuis la page HTML de résultat post-paiement
             // (auth = match du token, pas de JWT). Filtré NOT NULL parce que
@@ -1233,7 +1233,7 @@ namespace Idara.API.Data
             modelBuilder.Entity<Withdrawal>()
                 .HasIndex(w => w.ProviderDisbursementId)
                 .IsUnique()
-                .HasFilter("\"SenePayDisbursementId\" IS NOT NULL");
+                .HasFilter("\"ProviderDisbursementId\" IS NOT NULL");
 
             // FK optionnelle vers le bénéficiaire du carnet. Restrict : on
             // n'efface jamais un bénéficiaire référencé par un transfert passé
@@ -1297,7 +1297,7 @@ namespace Idara.API.Data
             modelBuilder.Entity<PlatformOutflow>()
                 .HasIndex(o => o.ProviderReference)
                 .IsUnique()
-                .HasFilter("\"SenePayReference\" IS NOT NULL");
+                .HasFilter("\"ProviderReference\" IS NOT NULL");
 
             // ===== Livre de caisse (gestion financière daara, F1/F2) =====
             modelBuilder.Entity<CashLedgerEntry>()

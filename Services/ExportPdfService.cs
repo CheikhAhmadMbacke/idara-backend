@@ -1,4 +1,4 @@
-using Idara.API.Common.Utilities;
+﻿using Idara.API.Common.Utilities;
 using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
 using QuestPDF.Fluent;
@@ -443,7 +443,7 @@ namespace Idara.API.Services
                 {
                     c.Item().Row(r =>
                     {
-                        r.RelativeItem().Text("Wallet SenePay disponible").FontColor(TextSecondary);
+                        r.RelativeItem().Text("Solde Wave disponible").FontColor(TextSecondary);
                         r.ConstantItem(120).AlignRight().Text($"{walletAvailableFcfa:N0} FCFA").SemiBold();
                     });
                     c.Item().PaddingTop(4).Row(r =>
