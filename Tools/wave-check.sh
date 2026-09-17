@@ -30,6 +30,15 @@ echo
 gras "═══ Vérification de l'accès à Wave ═══"
 echo
 
+# Distinguer « la cle n'est pas la » de « je n'ai pas pu lire le fichier ».
+# Confondre les deux, c'est envoyer chercher un probleme qui n'existe pas --
+# la meme faute que la verification qui ne signait pas ses requetes.
+if ! sudo -n true 2>/dev/null; then
+  if ! sudo -v; then
+    rouge "Lecture de $ENV_FILE impossible : sudo refuse."
+    exit 1
+  fi
+fi
 CLE=$(sudo grep -m1 '^Wave__ApiKey=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
 SIGNING=$(sudo grep -m1 '^Wave__SigningSecret=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
 
