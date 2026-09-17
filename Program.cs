@@ -295,15 +295,20 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionBillin
 builder.Services.AddHttpClient<IWaveClient, WaveClient>((sp, client) =>
 {
     var wave = sp.GetRequiredService<IOptions<WaveSettings>>().Value;
-    if (string.IsNullOrWhiteSpace(wave.BaseUrl))
-        throw new InvalidOperationException("Wave:BaseUrl manquant dans la config.");
-    if (string.IsNullOrWhiteSpace(wave.ApiKey))
-        throw new InvalidOperationException("Wave:ApiKey manquant (à poser dans /etc/idara/idara.env en prod).");
 
-    client.BaseAddress = new Uri(wave.BaseUrl.TrimEnd('/') + "/");
+    // 🔑 On ne JETTE PAS quand la clé manque. Une exception ici casserait la
+    // construction du client, donc tout ce qui l'injecte — y compris des
+    // travaux de fond qui tournent toutes les minutes, et qui noieraient le
+    // journal. L'absence de clé est traitée pour ce qu'elle est : une
+    // indisponibilité du prestataire, dite proprement à l'appel (WaveClient).
+    client.BaseAddress = new Uri(
+        (string.IsNullOrWhiteSpace(wave.BaseUrl) ? "https://api.wave.com" : wave.BaseUrl).TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(30);
-    client.DefaultRequestHeaders.Authorization =
-        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", wave.ApiKey);
+    if (!string.IsNullOrWhiteSpace(wave.ApiKey))
+    {
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", wave.ApiKey);
+    }
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 

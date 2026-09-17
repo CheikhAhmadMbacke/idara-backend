@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -227,6 +227,16 @@ namespace Idara.API.Services
             Dictionary<string, string>? headers, CancellationToken ct,
             bool nullOn404 = false)
         {
+            // Clé absente = prestataire injoignable, dit comme tel. Un appelant
+            // qui manipule de l'argent doit voir une indisponibilité, pas une
+            // panne de configuration qui remonterait en erreur 500.
+            if (string.IsNullOrWhiteSpace(_settings.ApiKey))
+            {
+                throw new WaveApiException(
+                    "Wave n'est pas configuré (Wave:ApiKey absent de /etc/idara/idara.env).",
+                    503, "wave-not-configured");
+            }
+
             // 🔴 Le corps signé DOIT être exactement celui envoyé : on sérialise
             // une seule fois et on réutilise la chaîne pour la signature ET pour
             // le contenu. Re-sérialiser change les espaces et casse le HMAC.
