@@ -176,9 +176,23 @@ vert "Service actif."
 # Le seul test qui prouve quelque chose. Il lit le solde, ne déplace rien.
 echo
 gras "── Vérification auprès de Wave (lecture du solde, aucun mouvement)"
+# 🔴 La requête doit être SIGNÉE : une clé créée avec « signature des requêtes »
+# répond 401 missing-signature à tout appel nu, et l'on croit alors à une
+# mauvaise configuration alors que tout est en place. Faux négatif rencontré
+# le 2026-09-17 — la vérification accusait le secret qu'elle venait d'écrire.
 CLE=$(sudo grep -m1 '^Wave__ApiKey=' "$ENV_FILE" | cut -d= -f2-)
+SIGNING=$(sudo grep -m1 '^Wave__SigningSecret=' "$ENV_FILE" | cut -d= -f2-)
+
+EN_TETES=(-H "Authorization: Bearer $CLE")
+if [ -n "${SIGNING:-}" ]; then
+  # GET sans corps : la charge signée est l'horodatage SEUL.
+  TS=$(date +%s)
+  SIG=$(printf '%s' "$TS" | openssl dgst -sha256 -hmac "$SIGNING" | sed 's/^.* //')
+  EN_TETES+=(-H "Wave-Signature: t=${TS},v1=${SIG}")
+fi
+
 REPONSE=$(curl -s -m 20 -o /tmp/wave_check.$$ -w '%{http_code}' \
-  -H "Authorization: Bearer $CLE" https://api.wave.com/v1/balance 2>/dev/null)
+  "${EN_TETES[@]}" https://api.wave.com/v1/balance 2>/dev/null)
 CORPS=$(cat /tmp/wave_check.$$ 2>/dev/null); rm -f /tmp/wave_check.$$
 
 case "$REPONSE" in
@@ -204,9 +218,19 @@ case "$REPONSE" in
     rouge "   ✗ 401 — clé refusée."
     echo "   $CORPS"
     echo
-    jaune "   Si le message parle de signature, c'est que la clé a été créée"
-    jaune "   AVEC « signature des requêtes » : le secret de signature est"
-    jaune "   alors obligatoire. Relance ce script pour le renseigner."
+    case "$CORPS" in
+      *missing-signature*)
+        jaune "   La clé exige une signature : renseigne Wave__SigningSecret." ;;
+      *invalid-signature-timestamp*|*expired-signature*)
+        jaune "   Horodatage refusé — l'horloge du serveur a dérivé (timedatectl)." ;;
+      *invalid-signature*)
+        jaune "   Le secret de signature ne correspond pas à cette clé : ils vont"
+        jaune "   par PAIRE, affichés ensemble à la création de la clé." ;;
+      *no-matching-api-key*|*api-key-revoked*)
+        jaune "   Cette clé n'existe pas côté Wave, ou a été révoquée." ;;
+      *) jaune "   Voir le code d'erreur ci-dessus." ;;
+    esac
+    jaune "   Pour re-tester sans tout ressaisir : bash ~/wave-check.sh"
     ;;
   000|"")
     rouge "   ✗ Aucune réponse : réseau ou délai dépassé. La clé n'est pas en cause."
