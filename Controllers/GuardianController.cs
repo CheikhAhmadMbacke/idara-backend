@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -30,18 +30,18 @@ namespace Idara.API.Controllers
         private readonly IExportPdfService _exportPdf;
 
         private readonly IGuardianPaymentService _guardianPayments;
-        private readonly Idara.API.Options.SenePaySettings _senepaySettings;
+        private readonly Idara.API.Options.WaveSettings _waveSettings;
 
         public GuardianController(
             AppDbContext context,
             IExportPdfService exportPdf,
             IGuardianPaymentService guardianPayments,
-            Microsoft.Extensions.Options.IOptions<Idara.API.Options.SenePaySettings> senepaySettings)
+            Microsoft.Extensions.Options.IOptions<Idara.API.Options.WaveSettings> waveSettings)
         {
             _context = context;
             _exportPdf = exportPdf;
             _guardianPayments = guardianPayments;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
         }
 
         [HttpGet("my-children")]
@@ -537,7 +537,7 @@ namespace Idara.API.Controllers
                 Operator = p.Operator,
                 FeesPayer = p.FeesPayer,
                 Status = p.Status,
-                SenePayTransactionId = p.SenePayTransactionId,
+                SenePayTransactionId = p.ProviderTransactionId,
                 FailureReason = p.FailureReason,
                 InitiatedAt = p.InitiatedAt,
                 PaidAt = p.PaidAt,
@@ -571,8 +571,8 @@ namespace Idara.API.Controllers
                 query = query.Where(p =>
                     (p.Student != null && (EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)
                                         || EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)))
-                    || (p.SenePayTransactionId != null
-                        && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))
+                    || (p.ProviderTransactionId != null
+                        && EF.Functions.ILike(AppDbContext.Unaccent(p.ProviderTransactionId), pattern))
                     || _context.Schools.Any(sc => sc.Id == p.SchoolId
                         && EF.Functions.ILike(AppDbContext.Unaccent(sc.Name!), pattern)));
             }
@@ -677,7 +677,7 @@ namespace Idara.API.Controllers
                     Title = FinanceLabels.PaymentPurpose(p.Purpose),
                     Subtitle = string.IsNullOrWhiteSpace(subtitle) ? null : subtitle,
                     Method = FinanceLabels.Operator(p.Operator),
-                    Reference = p.SenePayTransactionId,
+                    Reference = p.ProviderTransactionId,
                     Status = FinanceLabels.PaymentStatus(p.Status),
                     // Côté parent : ce qui a été RÉELLEMENT débité (frais inclus).
                     AmountFcfa = p.AmountFcfa
@@ -767,7 +767,7 @@ namespace Idara.API.Controllers
             var outstanding = await _guardianPayments.GetOutstandingAsync(userId.Value, schoolId, ct);
             var school = await _context.Schools.Where(s => s.Id == schoolId).Select(s => new { s.Name, s.NameAr }).FirstAsync(ct);
             var schoolName = !string.IsNullOrWhiteSpace(school.Name) ? school.Name! : (school.NameAr ?? "l'école");
-            var url = $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/link/{link.Token}";
+            var url = $"{_waveSettings.PublicBaseUrl.TrimEnd('/')}/pay/link/{link.Token}";
             var lines = (outstanding?.Lines ?? new List<OutstandingLine>())
                 .Select(l => new PaymentLinkDueLineDto
                 {
@@ -849,9 +849,7 @@ namespace Idara.API.Controllers
                     // Non configuré → on annonce la cible sans majoration plutôt
                     // que de refuser l'écran entier : c'est une LECTURE. Le refus
                     // tombe à l'initiation du paiement, là où l'argent bouge.
-                    var amountToCharge = feesPayer == FeesPayer.Parent && platform.Fees.IsConfigured
-                        ? platform.Fees.ChargeFor(totalDue)
-                        : totalDue;
+                    var amountToCharge = PayerMarkup.ChargeFor(platform.Fees, feesPayer, totalDue);
                     var children = schoolGroup
                         .GroupBy(i => i.StudentId)
                         .Select(childGroup =>

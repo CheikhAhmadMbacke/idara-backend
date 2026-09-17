@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -149,7 +149,7 @@ namespace Idara.API.Controllers
                 Operator = p.Operator,
                 FeesPayer = p.FeesPayer,
                 Status = p.Status,
-                SenePayTransactionId = p.SenePayTransactionId,
+                SenePayTransactionId = p.ProviderTransactionId,
                 FailureReason = p.FailureReason,
                 InitiatedAt = p.InitiatedAt,
                 PaidAt = p.PaidAt,
@@ -278,15 +278,11 @@ namespace Idara.API.Controllers
             // Si FeesPayer=School, on charge la cible telle quelle : l'école
             // absorbe les frais d'entrée, et la plateforme le frais de sortie
             // (§145, chantier distinct).
-            if (settings.FeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
-            {
-                return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Le paiement en ligne est momentanément indisponible : les commissions "
-                    + "du prestataire ne sont pas renseignées. Contactez l'administrateur."));
-            }
-            long amountToCharge = settings.FeesPayer == FeesPayer.Parent
-                ? platform.Fees.ChargeFor(targetAmount)
-                : targetAmount;
+            // 🔴 Plus AUCUNE majoration au payeur : article 8.2 du contrat Wave,
+            // résiliation sans préavis (voir PayerMarkup). La famille règle le
+            // montant exact de sa dette ; l'école supporte la commission, ce que
+            // la clause autorise — elle reçoit, elle ne paie pas.
+            long amountToCharge = PayerMarkup.ChargeFor(platform.Fees, settings.FeesPayer, targetAmount);
 
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
@@ -377,7 +373,7 @@ namespace Idara.API.Controllers
         private async Task<ActionResult<ApiResponse<InitiatePaymentResponseDto>>> FinalizeSenePayInitiateAsync(
             Payment payment, CancellationToken ct)
         {
-            var outcome = await _guardianPayments.InitiateWithSenePayAsync(payment, GuardianName(), ct);
+            var outcome = await _guardianPayments.InitiatePaymentAsync(payment, GuardianName(), ct);
             if (!outcome.Ok && outcome.HttpStatus == 400)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(outcome.ErrorMessage ?? "Paiement impossible."));

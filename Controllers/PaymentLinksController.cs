@@ -29,20 +29,20 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly IGuardianPaymentService _guardianPayments;
         private readonly IPaymentLinkService _paymentLinks;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly ILogger<PaymentLinksController> _logger;
 
         public PaymentLinksController(
             AppDbContext context,
             IGuardianPaymentService guardianPayments,
             IPaymentLinkService paymentLinks,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             ILogger<PaymentLinksController> logger)
         {
             _context = context;
             _guardianPayments = guardianPayments;
             _paymentLinks = paymentLinks;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _logger = logger;
         }
 

@@ -24,7 +24,7 @@ namespace Idara.API.Services
         private readonly ICashPaymentService _cash;
         private readonly IPaymentLinkService _paymentLinks;
         private readonly IGuardianPaymentService _guardianPayments;
-        private readonly SenePaySettings _senepay;
+        private readonly WaveSettings _waveSettings;
 
         public StudentService(
             AppDbContext context,
@@ -37,7 +37,7 @@ namespace Idara.API.Services
             ICashPaymentService cash,
             IPaymentLinkService paymentLinks,
             IGuardianPaymentService guardianPayments,
-            IOptions<SenePaySettings> senepay)
+            IOptions<WaveSettings> waveSettings)
         {
             _context = context;
             _env = env;
@@ -49,7 +49,7 @@ namespace Idara.API.Services
             _cash = cash;
             _paymentLinks = paymentLinks;
             _guardianPayments = guardianPayments;
-            _senepay = senepay.Value;
+            _waveSettings = waveSettings.Value;
         }
 
         public async Task<StudentListResponseDto> GetStudentsAsync(
@@ -466,7 +466,7 @@ namespace Idara.API.Services
                 var recu = cashPayment == null
                     ? null
                     : PublicLinks.Receipt(
-                        _senepay.PublicBaseUrl, cashPayment.Id, cashPayment.PublicResultToken);
+                        _waveSettings.PublicBaseUrl, cashPayment.Id, cashPayment.PublicResultToken);
 
                 foreach (var t in targets)
                 {

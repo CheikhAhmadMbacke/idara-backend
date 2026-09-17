@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Models
 {
@@ -114,8 +114,23 @@ namespace Idara.API.Models
 
         public WithdrawalStatus Status { get; set; } = WithdrawalStatus.Initiated;
 
-        /// <summary>Identifiant SenePay du décaissement (rempli après l'appel /payouts).</summary>
-        public string? SenePayDisbursementId { get; set; }
+        /// <summary>
+        /// Prestataire qui a traité ce mouvement : <c>"Wave"</c> depuis la
+        /// migration du 2026-09-17, <c>"SenePay"</c> pour tout l'historique.
+        /// <para>🔑 Ce n'est pas une décoration : les deux prestataires n'ont ni
+        /// les mêmes identifiants, ni les mêmes états, ni la même façon d'être
+        /// interrogés. Sans ce discriminant, le travail de vérification
+        /// demanderait à Wave des nouvelles d'un paiement qu'il n'a jamais vu.</para>
+        /// </summary>
+        public string Provider { get; set; } = "Wave";
+
+        /// <summary>
+        /// Identifiant du décaissement chez le prestataire (<c>pt-…</c> chez
+        /// Wave), rempli après l'appel. 🔴 Chez Wave, AUCUN webhook n'annonce
+        /// l'issue d'un décaissement : cet identifiant est le seul moyen d'en
+        /// obtenir des nouvelles.
+        /// </summary>
+        public string? ProviderDisbursementId { get; set; }
 
         /// <summary>SchoolAdmin qui a initié le retrait (audit).</summary>
         public int InitiatedById { get; set; }

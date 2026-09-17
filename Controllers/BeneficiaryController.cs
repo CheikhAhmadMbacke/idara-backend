@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -204,7 +204,7 @@ namespace Idara.API.Controllers
             Id = w.Id,
             SchoolName = w.School?.Name ?? string.Empty,
             Reference = IdaraReference.Withdrawal(w.Id),
-            SenePayReference = w.SenePayDisbursementId,
+            SenePayReference = w.ProviderDisbursementId,
             SchoolNameAr = w.School?.NameAr,
             AmountFcfa = w.AmountFcfa,
             Operator = w.Operator,

@@ -36,7 +36,7 @@ namespace Idara.API.Controllers
         private readonly IGuardianPaymentService _guardianPayments;
         private readonly PayinVerificationJob _payinVerification;
         private readonly IMemoryCache _cache;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<PaymentLinkPublicController> _logger;
 
@@ -52,7 +52,7 @@ namespace Idara.API.Controllers
             IGuardianPaymentService guardianPayments,
             PayinVerificationJob payinVerification,
             IMemoryCache cache,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             IWebHostEnvironment env,
             ILogger<PaymentLinkPublicController> logger)
         {
@@ -60,7 +60,7 @@ namespace Idara.API.Controllers
             _guardianPayments = guardianPayments;
             _payinVerification = payinVerification;
             _cache = cache;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _env = env;
             _logger = logger;
         }
@@ -202,7 +202,7 @@ namespace Idara.API.Controllers
                 return BadRequest(new { status = "error", message = ex.Message });
             }
 
-            var outcome = await _guardianPayments.InitiateWithSenePayAsync(payment, link.Guardian.FullName, ct);
+            var outcome = await _guardianPayments.InitiatePaymentAsync(payment, link.Guardian.FullName, ct);
             if (!outcome.Ok)
             {
                 _logger.LogWarning("[pay/link] Initiation refusée Payment {Id} : {Msg}", payment.Id, outcome.ErrorMessage);
@@ -274,7 +274,7 @@ namespace Idara.API.Controllers
                 // panne SenePay serait absurde → non bloquant passé 2 min (le
                 // webhook pourrait encore le compléter par OrderId, §108, mais
                 // sans redirection personne n'a pu payer).
-                if (string.IsNullOrWhiteSpace(p.SenePayTransactionId)
+                if (string.IsNullOrWhiteSpace(p.ProviderTransactionId)
                     && p.InitiatedAt < DateTime.UtcNow.AddMinutes(-2))
                     continue;
                 stillPending = p;
@@ -300,7 +300,7 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(ct);
 
             var outstanding = await _guardianPayments.GetOutstandingAsync(link.GuardianId, link.SchoolId, ct);
-            var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
+            var publicBase = _waveSettings.PublicBaseUrl.TrimEnd('/');
 
             var lines = (outstanding?.Lines ?? new List<OutstandingLine>())
                 .Select(l => new
@@ -345,6 +345,6 @@ namespace Idara.API.Controllers
         }
 
         private string ResultUrl(Payment p) =>
-            $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/{p.Id}/{p.PublicResultToken}";
+            $"{_waveSettings.PublicBaseUrl.TrimEnd('/')}/pay/{p.Id}/{p.PublicResultToken}";
     }
 }

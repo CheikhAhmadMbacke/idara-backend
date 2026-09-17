@@ -1,5 +1,6 @@
+﻿using Idara.API.Constants;
 using Idara.API.Data;
-using Idara.API.DTOs.Senepay;
+using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -107,19 +108,19 @@ namespace Idara.API.Services
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var senepay = scope.ServiceProvider.GetRequiredService<ISenePayClient>();
+            var wave = scope.ServiceProvider.GetRequiredService<IWaveClient>();
             var settlement = scope.ServiceProvider.GetRequiredService<IPayinSettlementService>();
 
             var p = await db.Payments
                 .Where(x => x.Id == paymentId)
-                .Select(x => new { x.Status, x.SenePayTransactionId, x.InitiatedAt })
+                .Select(x => new { x.Status, x.ProviderTransactionId, x.InitiatedAt })
                 .FirstOrDefaultAsync(ct);
             if (p == null) return null;
             if (p.Status != PaymentStatus.Pending) return p.Status;
 
             try
             {
-                await VerifyOneAsync(senepay, settlement, paymentId, p.SenePayTransactionId, p.InitiatedAt, DateTime.UtcNow, ct);
+                await VerifyOneAsync(wave, settlement, paymentId, p.ProviderTransactionId, p.InitiatedAt, DateTime.UtcNow, ct);
             }
             catch (Exception ex)
             {
@@ -133,17 +134,22 @@ namespace Idara.API.Services
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var senepay = scope.ServiceProvider.GetRequiredService<ISenePayClient>();
+            var wave = scope.ServiceProvider.GetRequiredService<IWaveClient>();
             var settlement = scope.ServiceProvider.GetRequiredService<IPayinSettlementService>();
 
             var now = DateTime.UtcNow;
             var cutoff = now - MinAge;
 
             var due = await db.Payments
-                .Where(p => p.Status == PaymentStatus.Pending && p.InitiatedAt <= cutoff)
+                // 🔑 Uniquement les paiements ouverts CHEZ WAVE. Les paiements
+                // hérités du prestataire précédent ne sont pas interrogeables
+                // ici : lui demander des nouvelles d'une opération qu'il n'a
+                // jamais vue ne renverrait qu'un « inconnu » trompeur.
+                .Where(p => p.Status == PaymentStatus.Pending && p.InitiatedAt <= cutoff
+                            && p.Provider == PaymentProviders.Wave)
                 .OrderBy(p => p.InitiatedAt)
                 .Take(BatchSize)
-                .Select(p => new { p.Id, p.SenePayTransactionId, p.InitiatedAt })
+                .Select(p => new { p.Id, p.ProviderTransactionId, p.InitiatedAt })
                 .ToListAsync(ct);
 
             if (due.Count == 0) return 0;
@@ -155,7 +161,7 @@ namespace Idara.API.Services
             {
                 try
                 {
-                    await VerifyOneAsync(senepay, settlement, item.Id, item.SenePayTransactionId, item.InitiatedAt, now, ct);
+                    await VerifyOneAsync(wave, settlement, item.Id, item.ProviderTransactionId, item.InitiatedAt, now, ct);
                     processed++;
                 }
                 catch (Exception ex)
@@ -168,8 +174,8 @@ namespace Idara.API.Services
         }
 
         private async Task VerifyOneAsync(
-            ISenePayClient senepay, IPayinSettlementService settlement,
-            int paymentId, string? token, DateTime initiatedAt, DateTime now, CancellationToken ct)
+            IWaveClient wave, IPayinSettlementService settlement,
+            int paymentId, string? sessionId, DateTime initiatedAt, DateTime now, CancellationToken ct)
         {
             // ⚠️ RÈGLE DE SÛRETÉ ABSOLUE : on ne marque JAMAIS un Payment terminal
             // sur une horloge, un 404, un timeout ou une absence de token. UNIQUEMENT
@@ -184,64 +190,95 @@ namespace Idara.API.Services
             // (payin.failed), confirmé en prod. Ce poll est un filet de sécurité qui
             // ne s'activera que lorsque l'endpoint statut renverra un état exploitable.
 
-            // Pas de token = l'initiate a levé avant de stocker le token. On NE peut
-            // PAS conclure : SenePay a pu créer le paiement malgré le timeout (le
-            // webhook le complèterait via OrderId=Payment.Id). On laisse Pending.
-            if (string.IsNullOrWhiteSpace(token))
-                return;
-
-            SenePayPayinStatusResponse? status;
+            // Pas d'identifiant de session : l'ouverture a échoué avant de
+            // l'enregistrer. On NE peut PAS conclure — Wave a pu créer la
+            // session malgré le délai. On la retrouve par NOTRE référence,
+            // c'est précisément à cela que sert `client_reference`.
+            WaveCheckoutSession? session;
             try
             {
-                status = await senepay.GetPayinStatusAsync(token, ct);
+                session = string.IsNullOrWhiteSpace(sessionId)
+                    ? await wave.FindCheckoutByClientReferenceAsync(paymentId.ToString(), ct)
+                    : await wave.GetCheckoutSessionAsync(sessionId, ct);
             }
-            catch (SenePayApiException ex)
+            catch (WaveApiException ex)
             {
-                // Timeout / 5xx / réseau : indéterminé → on NE TOUCHE À RIEN.
+                // Délai / 5xx / réseau : indéterminé → on NE TOUCHE À RIEN.
                 _logger.LogWarning(ex,
-                    "[payin-verify] GET status indéterminé pour Payment {Id} — on réessaiera", paymentId);
+                    "[payin-verify] Lecture de session indéterminée pour Payment {Id} — on réessaiera", paymentId);
                 return;
             }
 
-            // 404 : NON concluant (l'endpoint 404 même pour des paiements réussis).
-            // On laisse Pending — surtout PAS de transition terminale.
-            if (status == null)
+            // Introuvable : non concluant. Laissé en attente, surtout pas de
+            // transition terminale (§78).
+            if (session is null)
             {
                 _logger.LogDebug(
-                    "[payin-verify] Payment {Id} : statut SenePay 404 (non concluant) — laissé Pending", paymentId);
+                    "[payin-verify] Payment {Id} : session inconnue de Wave — laissé en attente", paymentId);
                 return;
             }
 
-            var s = status.Status?.ToLowerInvariant();
-            switch (s)
+            // Si la session n'avait pas été enregistrée (ouverture en échec puis
+            // retrouvée par référence), on la rattache maintenant.
+            if (string.IsNullOrWhiteSpace(sessionId) && !string.IsNullOrWhiteSpace(session.Id))
             {
-                case "completed":
-                    var net = (long)Math.Round(status.CreditedAmount, MidpointRounding.AwayFromZero);
-                    var fees = (long)Math.Round(status.TotalFee, MidpointRounding.AwayFromZero);
-                    var result = await settlement.SettleAsync(
-                        paymentId, PaymentStatus.Completed, fees, net, token, now, null, "poll", ct);
-                    // Récupération d'un webhook manqué → déclenche reçu/notifs.
-                    if (result.Outcome == PayinSettlementOutcome.Transitioned)
-                    {
-                        await settlement.RunPostCompletionEffectsAsync(paymentId, "poll", ct);
-                    }
-                    break;
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await db.Payments.Where(x => x.Id == paymentId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(x => x.ProviderTransactionId, session.Id), ct);
+                _logger.LogInformation(
+                    "[payin-verify] Payment {Id} rattaché à la session {SessionId} retrouvée par référence",
+                    paymentId, session.Id);
+            }
 
-                case "failed":
-                    await settlement.SettleAsync(
-                        paymentId, PaymentStatus.Failed, 0, 0, token, now,
-                        status.FailedReason ?? status.ErrorCode ?? "failed", "poll", ct);
+            var reference = session.Id;
+            switch (session.PaymentStatus?.ToLowerInvariant())
+            {
+                case "succeeded":
+                {
+                    var charged = WaveClient.ParseAmount(session.Amount);
+
+                    // Wave ne dit pas les frais dans l'objet session : on les
+                    // dérive de la grille saisie, exactement comme le webhook,
+                    // et la réconciliation du registre les confronte au réel.
+                    long fees = 0;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                        var grid = (await db.PlatformSettings.AsNoTracking().FirstOrDefaultAsync(ct))?.Fees;
+                        if (grid is { IsConfigured: true } && charged > 0)
+                            fees = grid.Value.PayinFeesFor(charged);
+                    }
+
+                    var net = Math.Max(0, charged - fees);
+                    var result = await settlement.SettleAsync(
+                        paymentId, PaymentStatus.Completed, fees, net, reference,
+                        session.WhenCompleted ?? now, null, "poll", ct);
+
+                    // Rattrapage d'un webhook manqué : reçu et notifications.
+                    if (result.Outcome == PayinSettlementOutcome.Transitioned)
+                        await settlement.RunPostCompletionEffectsAsync(paymentId, "poll", ct);
                     break;
+                }
 
                 case "cancelled":
                     await settlement.SettleAsync(
-                        paymentId, PaymentStatus.Cancelled, 0, 0, token, now,
-                        status.FailedReason ?? status.ErrorCode ?? "cancelled", "poll", ct);
+                        paymentId, PaymentStatus.Cancelled, 0, 0, reference, now,
+                        session.LastPaymentError?.Code ?? session.LastPaymentError?.Message ?? "cancelled",
+                        "poll", ct);
                     break;
 
                 default:
-                    // Pending (ou statut inconnu) : on NE conclut PAS. Laissé Pending,
-                    // revérifié au prochain tick. Pas d'expiration sur l'horloge.
+                    // `processing`, ou une session simplement expirée sans
+                    // paiement : on ne conclut PAS sur l'horloge. Une session
+                    // expirée reste en attente jusqu'à ce que Wave le dise —
+                    // c'est la règle qui a évité les faux échecs (§78).
+                    if (string.Equals(session.CheckoutStatus, "expired", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await settlement.SettleAsync(
+                            paymentId, PaymentStatus.Expired, 0, 0, reference,
+                            session.WhenCompleted ?? now, "expired", "poll", ct);
+                    }
                     break;
             }
         }

@@ -1,4 +1,6 @@
+﻿using Idara.API.Constants;
 using Idara.API.Data;
+using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -73,14 +75,16 @@ namespace Idara.API.Services
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var senepay = scope.ServiceProvider.GetRequiredService<ISenePayClient>();
+            var wave = scope.ServiceProvider.GetRequiredService<IWaveClient>();
             var settlement = scope.ServiceProvider.GetRequiredService<IPayoutSettlementService>();
 
             var now = DateTime.UtcNow;
 
             var due = await db.Withdrawals
                 .Where(w => w.Status == WithdrawalStatus.UnderVerification
-                            && (w.NextVerificationAt == null || w.NextVerificationAt <= now))
+                            && (w.NextVerificationAt == null || w.NextVerificationAt <= now)
+                            // Uniquement les décaissements partis chez Wave.
+                            && w.Provider == PaymentProviders.Wave)
                 .OrderBy(w => w.NextVerificationAt)
                 .Take(BatchSize)
                 .Select(w => new { w.Id, w.SchoolId, w.VerificationStartedAt })
@@ -95,7 +99,7 @@ namespace Idara.API.Services
             {
                 try
                 {
-                    await VerifyOneAsync(db, senepay, settlement, item.Id, item.SchoolId, item.VerificationStartedAt, ct);
+                    await VerifyOneAsync(db, wave, settlement, item.Id, item.SchoolId, item.VerificationStartedAt, ct);
                     processed++;
                 }
                 catch (Exception ex)
@@ -108,58 +112,80 @@ namespace Idara.API.Services
         }
 
         private async Task VerifyOneAsync(
-            AppDbContext db, ISenePayClient senepay, IPayoutSettlementService settlement,
+            AppDbContext db, IWaveClient wave, IPayoutSettlementService settlement,
             int withdrawalId, int? schoolId, DateTime? startedAt, CancellationToken ct)
         {
-            // external_id = Withdrawal.Id (cf. SchoolWalletController.Withdraw).
-            DTOs.Senepay.SenePayPayoutStatusResponse? status;
+            // 🔴 Chez Wave, AUCUN webhook n'annonce l'issue d'un décaissement.
+            // Ce qui suit n'est donc plus un filet de sécurité : c'est le seul
+            // chemin par lequel un retrait se referme.
+            //
+            // On interroge par l'identifiant Wave quand on l'a. Sinon — l'appel
+            // a expiré avant de nous le rendre — on cherche par NOTRE référence :
+            // c'est le seul moyen de savoir si l'argent est parti quand même.
+            var stored = await db.Withdrawals
+                .Where(w => w.Id == withdrawalId)
+                .Select(w => w.ProviderDisbursementId)
+                .FirstOrDefaultAsync(ct);
+
+            WavePayout? payout;
             try
             {
-                status = await senepay.GetPayoutStatusAsync(withdrawalId.ToString(), ct);
+                payout = string.IsNullOrWhiteSpace(stored)
+                    ? await wave.FindPayoutByClientReferenceAsync(withdrawalId.ToString(), ct)
+                    : await wave.GetPayoutAsync(stored, ct);
             }
-            catch (SenePayApiException ex)
+            catch (WaveApiException ex)
             {
-                // Timeout / 5xx : indéterminé. On reste en vérification, back-off.
+                // Délai / 5xx : indéterminé. On reste en vérification, back-off.
                 _logger.LogWarning(ex,
-                    "[payout-verify] GET status indéterminé pour Withdrawal {Id} — back-off", withdrawalId);
+                    "[payout-verify] Lecture indéterminée pour Withdrawal {Id} — back-off", withdrawalId);
                 await BumpBackoffAsync(db, withdrawalId, startedAt, settlement, ct);
                 return;
             }
 
-            // 404 : SenePay n'a aucun décaissement pour cet external_id → jamais
-            // créé (l'external_id est idempotent : s'il existait, le GET le
-            // trouverait). Aucun fonds sorti → restitution sûre.
-            if (status == null)
+            // Introuvable des DEUX façons : ni par identifiant, ni par notre
+            // référence. Wave n'a donc jamais rien créé — aucun franc n'est
+            // sorti, la restitution est sûre.
+            if (payout is null)
             {
                 _logger.LogInformation(
-                    "[payout-verify] Withdrawal {Id} : 404 SenePay (jamais créé) → restitution", withdrawalId);
+                    "[payout-verify] Withdrawal {Id} : inconnu de Wave (jamais créé) → restitution", withdrawalId);
                 await settlement.SettleFailedAsync(
-                    withdrawalId, "Décaissement introuvable chez SenePay (jamais créé)", null, null, "poll", ct);
+                    withdrawalId, "Décaissement introuvable chez Wave (jamais créé)", null, null, "poll", ct);
                 return;
             }
 
-            var s = status.Status?.ToLowerInvariant();
-            switch (s)
+            switch (payout.Status?.ToLowerInvariant())
             {
-                case "completed":
+                case "succeeded":
                     await settlement.SettleCompletedAsync(
-                        withdrawalId, status.DisbursementId,
-                        (long)Math.Round(status.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero),
-                        (long)Math.Round(status.NetAmount, MidpointRounding.AwayFromZero),
-                        status.CompletedAt, "poll", ct);
+                        withdrawalId, payout.Id,
+                        WaveClient.ParseAmount(payout.Fee),
+                        WaveClient.ParseAmount(payout.ReceiveAmount),
+                        payout.Timestamp, "poll", ct);
                     break;
 
                 case "failed":
-                case "cancelled":
                     await settlement.SettleFailedAsync(
                         withdrawalId,
-                        status.ErrorMessage ?? status.ErrorCode ?? s,
-                        status.DisbursementId, status.CompletedAt, "poll", ct);
+                        payout.PayoutError?.Code ?? payout.PayoutError?.Message ?? "failed",
+                        payout.Id, payout.Timestamp, "poll", ct);
+                    break;
+
+                case "reversed":
+                    // L'argent est parti puis revenu (réversion sous 3 jours).
+                    // Du point de vue de l'école, le retrait n'a pas eu lieu :
+                    // on restitue, en le DISANT — un solde qui remonte sans
+                    // explication est plus inquiétant qu'un échec annoncé.
+                    _logger.LogWarning(
+                        "[payout-verify] Withdrawal {Id} RÉVERSÉ par Wave ({PayoutId})", withdrawalId, payout.Id);
+                    await settlement.SettleFailedAsync(
+                        withdrawalId, "Décaissement annulé (réversion Wave)",
+                        payout.Id, payout.Timestamp, "poll", ct);
                     break;
 
                 default:
-                    // pending / processing / submitted / pending_verification /
-                    // pending_approval : toujours indéterminé → back-off.
+                    // `processing` : toujours indéterminé → back-off.
                     await BumpBackoffAsync(db, withdrawalId, startedAt, settlement, ct);
                     break;
             }

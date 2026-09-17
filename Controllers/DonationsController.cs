@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -39,8 +39,7 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly IJwtService _jwtService;
         private readonly IRefreshTokenService _refreshTokens;
-        private readonly ISenePayClient _senepay;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly IWavePayinService _wavePayin;
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
@@ -50,8 +49,7 @@ namespace Idara.API.Controllers
             AppDbContext context,
             IJwtService jwtService,
             IRefreshTokenService refreshTokens,
-            ISenePayClient senepay,
-            IOptions<SenePaySettings> senepaySettings,
+            IWavePayinService wavePayin,
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
             IWebHostEnvironment env,
@@ -60,8 +58,7 @@ namespace Idara.API.Controllers
             _context = context;
             _jwtService = jwtService;
             _refreshTokens = refreshTokens;
-            _senepay = senepay;
-            _senepaySettings = senepaySettings.Value;
+            _wavePayin = wavePayin;
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
             _env = env;
@@ -180,14 +177,14 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(ct) ?? FeesPayer.School;
 
             var targetAmount = dto.Amount;
-            if (donationFeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
+            if (PayerMarkup.Effective(donationFeesPayer) == FeesPayer.Parent && !platform.Fees.IsConfigured)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
                     "Les dons en ligne sont momentanément indisponibles : les commissions "
                     + "du prestataire ne sont pas renseignées."));
             }
-            var amountToCharge = donationFeesPayer == FeesPayer.Parent
-                ? platform.Fees.ChargeFor(targetAmount)  // donateur paie les frais
+            var amountToCharge = PayerMarkup.Effective(donationFeesPayer) == FeesPayer.Parent
+                ? PayerMarkup.ChargeFor(platform.Fees, FeesPayer.Parent, targetAmount)
                 : targetAmount;                          // daara paie (montant exact)
             var operatorEnum = PaymentOperator.Wave; // Wave uniquement (2026-07-07)
 
@@ -212,41 +209,25 @@ namespace Idara.API.Controllers
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
 
-            SenePayInitiatePaymentResponse resp;
-            try
+            var outcome = await _wavePayin.StartAsync(
+                payment, User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value, ct);
+            if (!outcome.Ok)
             {
-                resp = await _senepay.InitiatePaymentAsync(BuildSenePayRequest(payment, donorPhone), ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex, "[donation/initiate] SenePay error pour Payment {PaymentId}", payment.Id);
-                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "SenePay temporairement indisponible. Réessayez dans quelques secondes."));
-            }
-
-            payment.SenePayInternalId = resp.InternalId;
-            payment.SenePayTransactionId = resp.Token;
-            await _context.SaveChangesAsync(ct);
-
-            if (string.Equals(resp.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                    ? PaymentStatus.Cancelled : PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = resp.FailedReason ?? resp.ErrorCode;
-                await _context.SaveChangesAsync(ct);
+                _logger.LogError("[donation/initiate] Session refusée pour Payment {PaymentId} : {Err}",
+                    payment.Id, outcome.ErrorMessage);
+                return StatusCode(outcome.HttpStatus, ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    outcome.ErrorMessage ?? "Le paiement est temporairement indisponible."));
             }
 
             return Ok(ApiResponse<InitiatePaymentResponseDto>.Ok(new InitiatePaymentResponseDto
             {
                 PaymentId = payment.Id,
-                Status = resp.Status ?? "Pending",
-                NextAction = resp.NextAction ?? "NONE",
-                RedirectUrl = resp.RedirectUrl,
-                OtpRequired = resp.OtpRequired,
-                ErrorCode = resp.ErrorCode,
-                FailureReason = resp.FailedReason,
+                Status = "Pending",
+                NextAction = "REDIRECT_TO_PROVIDER_LINK",
+                RedirectUrl = outcome.RedirectUrl,
+                OtpRequired = false,
+                ErrorCode = null,
+                FailureReason = null,
                 AmountChargedFcfa = payment.AmountFcfa
             }));
         }
@@ -325,7 +306,7 @@ namespace Idara.API.Controllers
                     p.AmountFcfa,
                     p.Operator,
                     p.Status,
-                    p.SenePayTransactionId,
+                    p.ProviderTransactionId,
                     p.InitiatedAt,
                     p.PaidAt
                 })
@@ -337,7 +318,7 @@ namespace Idara.API.Controllers
                 Title = "Don",
                 Subtitle = d.SchoolName,
                 Method = FinanceLabels.Operator(d.Operator),
-                Reference = d.SenePayTransactionId,
+                Reference = d.ProviderTransactionId,
                 Status = FinanceLabels.PaymentStatus(d.Status),
                 // Le DON = ce que le daara reçoit (montant cible) ; les frais que le
                 // donateur a payés en plus figurent dans le total débité, en tête.
@@ -418,8 +399,8 @@ namespace Idara.API.Controllers
             if (TransactionSearch.Pattern(search) is string pattern)
             {
                 query = query.Where(p =>
-                    (p.SenePayTransactionId != null
-                        && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))
+                    (p.ProviderTransactionId != null
+                        && EF.Functions.ILike(AppDbContext.Unaccent(p.ProviderTransactionId), pattern))
                     || _context.Schools.Any(sc => sc.Id == p.SchoolId
                         && EF.Functions.ILike(AppDbContext.Unaccent(sc.Name!), pattern)));
             }
@@ -470,25 +451,5 @@ namespace Idara.API.Controllers
         // ===== Helpers =====
         // ====================================================================
 
-        private SenePayInitiatePaymentRequest BuildSenePayRequest(Payment payment, string payerPhone)
-        {
-            var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
-            var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
-
-            return new SenePayInitiatePaymentRequest
-            {
-                Amount = payment.AmountFcfa,
-                Currency = "XOF",
-                CountryCode = "SN",
-                Operator = "wave", // Wave uniquement (2026-07-07)
-                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                OtpCode = null,
-                OrderId = payment.Id.ToString(),
-                CustomerName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value,
-                WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                ReturnUrl = $"{resultBase}?status=success",
-                CancelUrl = $"{resultBase}?status=cancel"
-            };
-        }
     }
 }

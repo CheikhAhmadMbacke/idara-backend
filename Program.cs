@@ -64,6 +64,7 @@ builder.Services.Configure<SuperAdminSettings>(builder.Configuration.GetSection(
 builder.Services.Configure<OtpSettings>(builder.Configuration.GetSection(OtpSettings.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
 builder.Services.Configure<SenePaySettings>(builder.Configuration.GetSection(SenePaySettings.SectionName));
+builder.Services.Configure<WaveSettings>(builder.Configuration.GetSection(WaveSettings.SectionName));
 builder.Services.Configure<OrangeSmsSettings>(builder.Configuration.GetSection(OrangeSmsSettings.SectionName));
 builder.Services.Configure<FcmSettings>(builder.Configuration.GetSection(FcmSettings.SectionName));
 builder.Services.Configure<AppDistributionSettings>(builder.Configuration.GetSection(AppDistributionSettings.SectionName));
@@ -235,6 +236,8 @@ builder.Services.AddScoped<IPayoutSettlementService, PayoutSettlementService>();
 builder.Services.AddScoped<IPayinSettlementService, PayinSettlementService>();
 // Calcul de la dette d'un responsable + création/initiation du paiement consolidé :
 // SOURCE UNIQUE de « Tout payer » (app) et de la page du lien de paiement (WhatsApp).
+builder.Services.AddScoped<IPaymentAvailabilityService, PaymentAvailabilityService>();
+builder.Services.AddScoped<IWavePayinService, WavePayinService>();
 builder.Services.AddScoped<IGuardianPaymentService, GuardianPaymentService>();
 // Réconciliation financière plateforme (SuperAdmin) : R = D + P recalculé depuis
 // les tables sources, sans hook ni ledger de revenu (aucune dérive).
@@ -284,18 +287,23 @@ builder.Services.AddSingleton<SubscriptionBillingJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionBillingJob>());
 
 // ---------- SenePay (HttpClient typé) ----------
-builder.Services.AddHttpClient<ISenePayClient, SenePayClient>((sp, client) =>
+// ---------- Wave Business (HttpClient typé) ----------
+// Prestataire de paiement depuis le 2026-09-17. La clé est portée en Bearer et
+// n'apparaît JAMAIS dans une URL (§190 : le journal ne doit pas pouvoir la
+// recopier). La signature des requêtes est posée par appel dans WaveClient, car
+// elle dépend du corps exact envoyé.
+builder.Services.AddHttpClient<IWaveClient, WaveClient>((sp, client) =>
 {
-    var senepay = sp.GetRequiredService<IOptions<SenePaySettings>>().Value;
-    if (string.IsNullOrWhiteSpace(senepay.BaseUrl))
-        throw new InvalidOperationException("SenePay:BaseUrl manquant dans la config.");
-    if (string.IsNullOrWhiteSpace(senepay.ApiKey) || string.IsNullOrWhiteSpace(senepay.ApiSecret))
-        throw new InvalidOperationException("SenePay:ApiKey / SenePay:ApiSecret manquants (configurer via /etc/idara/idara.env en prod).");
+    var wave = sp.GetRequiredService<IOptions<WaveSettings>>().Value;
+    if (string.IsNullOrWhiteSpace(wave.BaseUrl))
+        throw new InvalidOperationException("Wave:BaseUrl manquant dans la config.");
+    if (string.IsNullOrWhiteSpace(wave.ApiKey))
+        throw new InvalidOperationException("Wave:ApiKey manquant (à poser dans /etc/idara/idara.env en prod).");
 
-    client.BaseAddress = new Uri(senepay.BaseUrl.TrimEnd('/') + "/");
+    client.BaseAddress = new Uri(wave.BaseUrl.TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(30);
-    client.DefaultRequestHeaders.Add("X-Api-Key", senepay.ApiKey);
-    client.DefaultRequestHeaders.Add("X-Api-Secret", senepay.ApiSecret);
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", wave.ApiKey);
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 

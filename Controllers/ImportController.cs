@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Idara.API.Common.Utilities;
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
@@ -30,8 +30,7 @@ namespace Idara.API.Controllers
         private readonly Services.Vision.IOcrBudgetGuard _ocrGuard;
         private readonly Services.Vision.IDocumentVisionService _vision;
         private readonly Services.Vision.IOcrPricingService _pricing;
-        private readonly ISenePayClient _senepay;
-        private readonly Options.SenePaySettings _senepaySettings;
+        private readonly IWavePayinService _wavePayin;
         private readonly ILogger<ImportController> _logger;
         private readonly AppDbContext _context;
 
@@ -42,8 +41,7 @@ namespace Idara.API.Controllers
             Services.Vision.IOcrBudgetGuard ocrGuard,
             Services.Vision.IDocumentVisionService vision,
             Services.Vision.IOcrPricingService pricing,
-            ISenePayClient senepay,
-            Microsoft.Extensions.Options.IOptions<Options.SenePaySettings> senepaySettings,
+            IWavePayinService wavePayin,
             ILogger<ImportController> logger,
             AppDbContext context)
         {
@@ -53,8 +51,7 @@ namespace Idara.API.Controllers
             _ocrGuard = ocrGuard;
             _vision = vision;
             _pricing = pricing;
-            _senepay = senepay;
-            _senepaySettings = senepaySettings.Value;
+            _wavePayin = wavePayin;
             _logger = logger;
             _context = context;
         }
@@ -488,55 +485,23 @@ namespace Idara.API.Controllers
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
 
-            DTOs.Senepay.SenePayInitiatePaymentResponse resp;
-            try
+            var outcome = await _wavePayin.StartAsync(payment, User.GetEmail(), ct);
+            if (!outcome.Ok)
             {
-                var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
-                var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
-                resp = await _senepay.InitiatePaymentAsync(new DTOs.Senepay.SenePayInitiatePaymentRequest
-                {
-                    Amount = payment.AmountFcfa,
-                    Currency = "XOF",
-                    CountryCode = "SN",
-                    Operator = "wave",
-                    CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                    OtpCode = null,
-                    OrderId = payment.Id.ToString(),
-                    CustomerName = User.GetEmail(),
-                    WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                    ReturnUrl = $"{resultBase}?status=success",
-                    CancelUrl = $"{resultBase}?status=cancel",
-                }, ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex, "[ocr/purchase] SenePay indisponible pour Payment {PaymentId}", payment.Id);
-                return StatusCode(502, ApiResponse<bool>.Fail(
-                    "Le paiement est temporairement indisponible. Réessayez dans quelques secondes."));
-            }
-
-            payment.SenePayInternalId = resp.InternalId;
-            payment.SenePayTransactionId = resp.Token;
-            await _context.SaveChangesAsync(ct);
-
-            if (string.Equals(resp.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                    ? PaymentStatus.Cancelled : PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = resp.FailedReason ?? resp.ErrorCode;
-                await _context.SaveChangesAsync(ct);
+                _logger.LogError("[ocr/purchase] Session refusée pour Payment {PaymentId} : {Err}",
+                    payment.Id, outcome.ErrorMessage);
+                return StatusCode(outcome.HttpStatus, ApiResponse<bool>.Fail(
+                    outcome.ErrorMessage ?? "Le paiement est temporairement indisponible."));
             }
 
             return Ok(ApiResponse<object>.Ok(new
             {
                 paymentId = payment.Id,
-                status = resp.Status ?? "Pending",
-                nextAction = resp.NextAction ?? "NONE",
-                redirectUrl = resp.RedirectUrl,
-                errorCode = resp.ErrorCode,
-                failureReason = resp.FailedReason,
+                status = "Pending",
+                nextAction = "REDIRECT_TO_PROVIDER_LINK",
+                redirectUrl = outcome.RedirectUrl,
+                errorCode = (string?)null,
+                failureReason = (string?)null,
                 pages = dto.Pages,
                 pricePerPageFcfa = q.PricePerPageFcfa,
                 amountFcfa = amount,

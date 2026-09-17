@@ -462,7 +462,7 @@ namespace Idara.API.Services
             PdfBlocks.References(
                 container,
                 IdaraReference.Payment(payment.Id),
-                payment.SenePayTransactionId,
+                payment.ProviderTransactionId,
                 TextSecondary,
                 Border);
 

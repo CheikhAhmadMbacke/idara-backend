@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Models
 {
@@ -35,7 +35,7 @@ namespace Idara.API.Models
         /// (on ne réenregistre jamais deux fois le même décaissement). NULL pour un
         /// ajustement manuel saisi à la main.
         /// </summary>
-        public string? SenePayReference { get; set; }
+        public string? ProviderReference { get; set; }
 
         /// <summary>
         /// Date de la sortie réelle. Pour un retrait manuel dashboard, peut être

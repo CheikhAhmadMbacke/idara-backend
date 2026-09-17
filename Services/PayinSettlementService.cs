@@ -17,7 +17,7 @@ namespace Idara.API.Services
         private readonly IReceiptPdfService _receiptPdf;
         private readonly INotificationService _notif;
         private readonly IServiceScopeFactory _scopeFactory;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly ILogger<PayinSettlementService> _logger;
 
         public PayinSettlementService(
@@ -25,14 +25,14 @@ namespace Idara.API.Services
             IReceiptPdfService receiptPdf,
             INotificationService notif,
             IServiceScopeFactory scopeFactory,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             ILogger<PayinSettlementService> logger)
         {
             _context = context;
             _receiptPdf = receiptPdf;
             _notif = notif;
             _scopeFactory = scopeFactory;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _logger = logger;
         }
 
@@ -53,7 +53,7 @@ namespace Idara.API.Services
         private string? PublicReceiptUrl(Payment payment) =>
             string.IsNullOrEmpty(payment.PublicResultToken)
                 ? null
-                : $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/{payment.Id}/{payment.PublicResultToken}";
+                : $"{_waveSettings.PublicBaseUrl.TrimEnd('/')}/pay/{payment.Id}/{payment.PublicResultToken}";
 
         public async Task<PayinSettlementResult> SettleAsync(
             int paymentId,
@@ -102,7 +102,7 @@ namespace Idara.API.Services
             payment.FeesFcfa = feesFcfa;
             payment.NetCreditedFcfa = netCreditedFcfa;
             if (!string.IsNullOrWhiteSpace(senePayTransactionId))
-                payment.SenePayTransactionId = senePayTransactionId;
+                payment.ProviderTransactionId = senePayTransactionId;
             payment.Status = terminalStatus;
 
             switch (terminalStatus)
@@ -249,9 +249,9 @@ namespace Idara.API.Services
             // se distingue d'un paiement parent). Aucun impact financier.
             var (source, note) = payment.Purpose switch
             {
-                PaymentPurpose.Donation => (WalletSource.Donation, $"Don {payment.SenePayTransactionId}"),
-                PaymentPurpose.WalletTopup => (WalletSource.Topup, $"Recharge {payment.SenePayTransactionId}"),
-                _ => (WalletSource.Payment, $"Payment {payment.SenePayTransactionId}")
+                PaymentPurpose.Donation => (WalletSource.Donation, $"Don {payment.ProviderTransactionId}"),
+                PaymentPurpose.WalletTopup => (WalletSource.Topup, $"Recharge {payment.ProviderTransactionId}"),
+                _ => (WalletSource.Payment, $"Payment {payment.ProviderTransactionId}")
             };
 
             _context.WalletTransactions.Add(new WalletTransaction

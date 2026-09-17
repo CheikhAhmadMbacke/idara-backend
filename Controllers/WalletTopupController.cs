@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -33,19 +33,16 @@ namespace Idara.API.Controllers
     public class WalletTopupController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly ISenePayClient _senepay;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly IWavePayinService _wavePayin;
         private readonly ILogger<WalletTopupController> _logger;
 
         public WalletTopupController(
             AppDbContext context,
-            ISenePayClient senepay,
-            IOptions<SenePaySettings> senepaySettings,
+            IWavePayinService wavePayin,
             ILogger<WalletTopupController> logger)
         {
             _context = context;
-            _senepay = senepay;
-            _senepaySettings = senepaySettings.Value;
+            _wavePayin = wavePayin;
             _logger = logger;
         }
 
@@ -99,8 +96,15 @@ namespace Idara.API.Controllers
                     "Recharge indisponible : les commissions du prestataire ne sont pas "
                     + "renseignées. SuperAdmin → Réglages plateforme → Frais."));
             }
+            // 🔴 AUCUNE majoration : l'article 8.2 du contrat Wave interdit de
+            // facturer des frais à un Détenteur pour payer via Wave, sous peine
+            // de résiliation SANS PRÉAVIS. La recharge est l'un des rares
+            // parcours où c'est bien un Détenteur qui paie. On débite donc le
+            // montant exact, et le wallet est crédité du NET (mode School) —
+            // c'est l'école qui supporte la commission, ce qui est conforme :
+            // elle reçoit, elle ne paie pas au sens de la clause.
             var targetAmount = dto.Amount;
-            var amountToCharge = platform.Fees.ChargeFor(targetAmount);
+            var amountToCharge = targetAmount;
             var payment = new Payment
             {
                 SchoolId = schoolId.Value,
@@ -113,7 +117,7 @@ namespace Idara.API.Controllers
                 FeesFcfa = 0,
                 NetCreditedFcfa = 0,
                 Operator = operatorEnum,
-                FeesPayer = FeesPayer.Parent,
+                FeesPayer = FeesPayer.School,
                 Status = PaymentStatus.Pending,
                 InitiatedAt = DateTime.UtcNow,
                 PublicResultToken = Guid.NewGuid().ToString("N")
@@ -121,41 +125,28 @@ namespace Idara.API.Controllers
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync(ct);
 
-            SenePayInitiatePaymentResponse resp;
-            try
+            var outcome = await _wavePayin.StartAsync(payment, User.GetEmail(), ct);
+            if (!outcome.Ok)
             {
-                resp = await _senepay.InitiatePaymentAsync(BuildRequest(payment, payerPhone), ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex, "[wallet/topup] SenePay error pour Payment {PaymentId}", payment.Id);
-                return StatusCode(502, ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "SenePay temporairement indisponible. Réessayez dans quelques secondes."));
-            }
-
-            payment.SenePayInternalId = resp.InternalId;
-            payment.SenePayTransactionId = resp.Token;
-            await _context.SaveChangesAsync(ct);
-
-            if (string.Equals(resp.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = string.Equals(resp.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                    ? PaymentStatus.Cancelled : PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = resp.FailedReason ?? resp.ErrorCode;
-                await _context.SaveChangesAsync(ct);
+                _logger.LogError("[wallet/topup] Ouverture de session refusée pour Payment {PaymentId} : {Err}",
+                    payment.Id, outcome.ErrorMessage);
+                return StatusCode(outcome.HttpStatus, ApiResponse<InitiatePaymentResponseDto>.Fail(
+                    outcome.ErrorMessage ?? "Le paiement est temporairement indisponible."));
             }
 
             return Ok(ApiResponse<InitiatePaymentResponseDto>.Ok(new InitiatePaymentResponseDto
             {
                 PaymentId = payment.Id,
-                Status = resp.Status ?? "Pending",
-                NextAction = resp.NextAction ?? "NONE",
-                RedirectUrl = resp.RedirectUrl,
-                OtpRequired = resp.OtpRequired,
-                ErrorCode = resp.ErrorCode,
-                FailureReason = resp.FailedReason,
+                Status = "Pending",
+                // Wave ne connaît qu'une seule suite : ouvrir sa page. Les autres
+                // valeurs de ce champ (saisie d'un code, poussée USSD) venaient
+                // du prestataire précédent et n'ont plus de sens — mais le champ
+                // reste, les applications installées le lisent (§220).
+                NextAction = "REDIRECT_TO_PROVIDER_LINK",
+                RedirectUrl = outcome.RedirectUrl,
+                OtpRequired = false,
+                ErrorCode = null,
+                FailureReason = null,
                 AmountChargedFcfa = payment.AmountFcfa
             }));
         }
@@ -187,25 +178,5 @@ namespace Idara.API.Controllers
             }));
         }
 
-        private SenePayInitiatePaymentRequest BuildRequest(Payment payment, string payerPhone)
-        {
-            var publicBase = _senepaySettings.PublicBaseUrl.TrimEnd('/');
-            var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
-
-            return new SenePayInitiatePaymentRequest
-            {
-                Amount = payment.AmountFcfa,
-                Currency = "XOF",
-                CountryCode = "SN",
-                Operator = "wave", // Wave uniquement (2026-07-07)
-                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                OtpCode = null,
-                OrderId = payment.Id.ToString(),
-                CustomerName = User.GetEmail(),
-                WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                ReturnUrl = $"{resultBase}?status=success",
-                CancelUrl = $"{resultBase}?status=cancel"
-            };
-        }
     }
 }

@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace Idara.API.DTOs.Senepay
 {
@@ -53,5 +53,22 @@ namespace Idara.API.DTOs.Senepay
 
         [JsonPropertyName("timestamp")]
         public DateTime? Timestamp { get; set; }
+    }
+
+    /// <summary>
+    /// Ventilation des frais telle que l'ancien prestataire l'envoyait.
+    /// Conservée avec le reste du webhook hérité : elle ne sert plus qu'à
+    /// lire une notification tardive sur une opération d'avant la bascule.
+    /// </summary>
+    public class SenePayPayoutFees
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("provider")]
+        public decimal Provider { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("operator")]
+        public decimal Operator { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("total")]
+        public decimal Total { get; set; }
     }
 }

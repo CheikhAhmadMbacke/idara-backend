@@ -338,6 +338,33 @@ namespace Idara.API.Models
         /// </summary>
         public int AuthCodeVerifyRateMinSamples { get; set; } = 10;
 
+        // ----- Interrupteurs du prestataire de paiement (2026-09-17) -----
+        //
+        // 🔑 Ils existent parce qu'un prestataire annonce ses interruptions PAR
+        // TÉLÉPHONE, pas par API. Sans eux, la seule façon de fermer le guichet
+        // était un déploiement — le temps qu'il passe, des familles voient un
+        // échec technique incompréhensible et rappellent l'école.
+        //
+        // ⚠️ L'école de DÉMONSTRATION n'est jamais bloquée : c'est là que se
+        // font les essais à argent réel (§107), et fermer le guichet doit
+        // justement permettre de tester pendant que tout le monde attend.
+
+        /// <summary>Les encaissements sont-ils ouverts ? Coupe TOUT ce qui fait entrer de l'argent : paiement de facture, lien de paiement, don, recharge, achat de pages.</summary>
+        public bool PayinEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Motif affiché à l'utilisateur quand les encaissements sont fermés.
+        /// Vide → message générique. Le renseigner vaut mieux : « Wave est en
+        /// maintenance jusqu'à 14 h » se supporte, « indisponible » inquiète.
+        /// </summary>
+        public string? PayinDisabledReason { get; set; }
+
+        /// <summary>Les décaissements sont-ils ouverts ? Coupe les retraits école ET le retrait des gains de la plateforme.</summary>
+        public bool PayoutEnabled { get; set; } = true;
+
+        /// <summary>Motif affiché quand les décaissements sont fermés.</summary>
+        public string? PayoutDisabledReason { get; set; }
+
         // ----- Coupe-circuit global (deux paliers, décision 2026-09-01) -----
 
         /// <summary>

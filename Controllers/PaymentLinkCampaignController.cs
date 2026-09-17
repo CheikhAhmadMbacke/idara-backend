@@ -58,20 +58,20 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly INotificationService _notifications;
         private readonly IPaymentLinkService _paymentLinks;
-        private readonly SenePaySettings _senepay;
+        private readonly WaveSettings _waveSettings;
         private readonly ILogger<PaymentLinkCampaignController> _logger;
 
         public PaymentLinkCampaignController(
             AppDbContext context,
             INotificationService notifications,
             IPaymentLinkService paymentLinks,
-            IOptions<SenePaySettings> senepay,
+            IOptions<WaveSettings> waveSettings,
             ILogger<PaymentLinkCampaignController> logger)
         {
             _context = context;
             _notifications = notifications;
             _paymentLinks = paymentLinks;
-            _senepay = senepay.Value;
+            _waveSettings = waveSettings.Value;
             _logger = logger;
         }
 

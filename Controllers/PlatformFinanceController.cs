@@ -1,3 +1,5 @@
+﻿using Idara.API.Common.Utilities;
+using Idara.API.DTOs.Wave;
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -30,11 +32,12 @@ namespace Idara.API.Controllers
     {
         private readonly IPlatformFinanceService _finance;
         private readonly AppDbContext _context;
-        private readonly ISenePayClient _senepay;
+        private readonly IWaveClient _wave;
+        private readonly IPaymentAvailabilityService _availability;
         private readonly IPayoutSettlementService _settlement;
         private readonly INotificationService _notif;
         private readonly IInvestorReportPdfService _investorPdf;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly IMemoryCache _cache;
         private readonly ILogger<PlatformFinanceController> _logger;
 
@@ -43,18 +46,20 @@ namespace Idara.API.Controllers
 
         public PlatformFinanceController(
             IPlatformFinanceService finance, AppDbContext context,
-            ISenePayClient senepay, IPayoutSettlementService settlement,
+            IWaveClient wave, IPaymentAvailabilityService availability,
+            IPayoutSettlementService settlement,
             INotificationService notif, IInvestorReportPdfService investorPdf,
-            IOptions<SenePaySettings> senepaySettings, IMemoryCache cache,
+            IOptions<WaveSettings> waveSettings, IMemoryCache cache,
             ILogger<PlatformFinanceController> logger)
         {
             _finance = finance;
             _context = context;
-            _senepay = senepay;
+            _wave = wave;
+            _availability = availability;
             _settlement = settlement;
             _notif = notif;
             _investorPdf = investorPdf;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _cache = cache;
             _logger = logger;
         }
@@ -392,6 +397,12 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (userId == null) return Unauthorized();
 
+            // Le guichet fermé vaut aussi pour la plateforme : si le prestataire
+            // est en panne, le retrait des gains échouerait exactement pareil.
+            var blocked = await _availability.PayoutBlockedReasonAsync(null, ct);
+            if (blocked is not null)
+                return StatusCode(503, ApiResponse<WithdrawalDto>.Fail(blocked));
+
             var admin = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
             if (admin == null) return Unauthorized();
 
@@ -424,23 +435,24 @@ namespace Idara.API.Controllers
                 ? platform.Fees.PayoutFeesFor(dto.Amount)
                 : 0L;
 
-            // Réserve SenePay (live) AVANT le verrou (valeur externe, indépendante de nos writes).
+            // Solde du compte marchand (live) AVANT le verrou : valeur externe,
+            // indépendante de nos écritures.
             long reserve;
             try
             {
-                var bal = await _senepay.GetMerchantBalanceAsync(ct);
-                reserve = bal.ReserveBalanceFcfa;
+                reserve = await _wave.GetBalanceFcfaAsync(ct);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[platform-withdraw] solde SenePay injoignable");
+                _logger.LogError(ex, "[platform-withdraw] solde Wave injoignable");
                 return StatusCode(503, ApiResponse<WithdrawalDto>.Fail(
-                    "Solde SenePay injoignable, réessaie plus tard."));
+                    "Solde du compte marchand injoignable, réessaie plus tard."));
             }
 
             var withdrawal = new Withdrawal
             {
                 IsPlatform = true,
+                Provider = PaymentProviders.Wave,
                 SchoolId = null,
                 AmountFcfa = dto.Amount,
                 SepayAmountFcfa = dto.Amount,
@@ -475,34 +487,29 @@ namespace Idara.API.Controllers
                 await tx.CommitAsync(ct);
             }
 
-            // --- Appel SenePay + issues (mêmes règles que le retrait école, §78/§111) ---
-            SenePayPayoutResponse resp;
+            // --- Décaissement Wave + issues (mêmes règles que le retrait école, §78/§111) ---
+            WavePayout resp;
             try
             {
-                resp = await _senepay.InitiatePayoutAsync(new SenePayPayoutRequest
+                resp = await _wave.CreatePayoutAsync(new WaveCreatePayoutRequest
                 {
-                    ExternalId = withdrawal.Id.ToString(),
-                    Amount = dto.Amount,
-                    Phone = "221" + recipientPhone,
-                    RecipientName = recipientName,
-                    Country = "SN",
-                    Operator = operatorEnum == PaymentOperator.Wave ? "wave" : "orange",
-                    Type = "seller_payment",
-                    Description = "Idara-gains-plateforme",
-                    FeeMode = "on_top",
-                    CallbackUrl = _senepaySettings.WebhookPayoutUrl
-                }, ct);
+                    Currency = "XOF",
+                    Mobile = "+221" + recipientPhone,
+                    ReceiveAmount = WaveClient.FormatAmount(dto.Amount),
+                    Name = recipientName,
+                    ClientReference = withdrawal.Id.ToString(),
+                    PaymentReason = "Idara gains plateforme"
+                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
             }
-            catch (SenePayApiException ex)
+            catch (WaveApiException ex)
             {
-                var isDuplicate = (ex.ResponseBody ?? string.Empty)
-                    .Contains("DUPLICATE_EXTERNAL_ID", StringComparison.OrdinalIgnoreCase);
-                if (ex.StatusCode is >= 400 and < 500 && !isDuplicate)
+                if (ex.IsDefinitiveRejection)
                 {
                     await _settlement.SettleFailedAsync(
-                        withdrawal.Id, ex.ResponseBody ?? ex.Message, null, null, "sync-init", ct);
+                        withdrawal.Id, ex.Code ?? ex.Message, null, null, "sync-init", ct);
                     _logger.LogWarning(ex,
-                        "[platform-withdraw] SenePay {Status} (rejet) Withdrawal {Id}", ex.StatusCode, withdrawal.Id);
+                        "[platform-withdraw] Wave {Status}/{Code} (rejet) Withdrawal {Id}",
+                        ex.StatusCode, ex.Code, withdrawal.Id);
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(PayoutUnavailableMsg));
                 }
                 await _settlement.MarkUnderVerificationAsync(withdrawal.Id, null, ex.Message, "sync-init", ct);
@@ -514,20 +521,21 @@ namespace Idara.API.Controllers
             }
 
             var statusLower = resp.Status?.ToLowerInvariant();
-            if (statusLower is "failed" or "cancelled")
+            if (statusLower is "failed")
             {
                 await _settlement.SettleFailedAsync(
-                    withdrawal.Id, resp.ErrorCode ?? resp.Message ?? statusLower,
-                    resp.DisbursementId, null, "sync-init", ct);
+                    withdrawal.Id,
+                    resp.PayoutError?.Code ?? resp.PayoutError?.Message ?? statusLower,
+                    resp.Id, null, "sync-init", ct);
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
                     "Le retrait a été refusé par l'opérateur."));
             }
-            if (statusLower == "completed")
+            if (statusLower == "succeeded")
             {
-                var fees = (long)Math.Round(resp.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero);
-                var net = (long)Math.Round(resp.NetAmount, MidpointRounding.AwayFromZero);
+                var fees = WaveClient.ParseAmount(resp.Fee);
+                var net = WaveClient.ParseAmount(resp.ReceiveAmount);
                 await _settlement.SettleCompletedAsync(
-                    withdrawal.Id, resp.DisbursementId, fees, net, null, "sync-init", ct);
+                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", ct);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogInformation(
                     "[platform-withdraw] Withdrawal {Id} complété SYNCHRONE ({Amount} FCFA)",
@@ -536,11 +544,11 @@ namespace Idara.API.Controllers
             }
 
             await _settlement.MarkUnderVerificationAsync(
-                withdrawal.Id, resp.DisbursementId, $"status={resp.Status} success={resp.Success}", "sync-init", ct);
+                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", ct);
             await _context.Entry(withdrawal).ReloadAsync(ct);
             _logger.LogInformation(
-                "[platform-withdraw] Withdrawal {Id} en vérification ({Amount} FCFA, disbId={DisbId}, status={Status})",
-                withdrawal.Id, dto.Amount, resp.DisbursementId, resp.Status);
+                "[platform-withdraw] Withdrawal {Id} en vérification ({Amount} FCFA, payout={PayoutId}, status={Status})",
+                withdrawal.Id, dto.Amount, resp.Id, resp.Status);
             return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
                 "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
         }

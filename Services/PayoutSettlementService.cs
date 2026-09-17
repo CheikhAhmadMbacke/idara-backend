@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
@@ -144,7 +144,7 @@ namespace Idara.API.Services
             await _context.Entry(withdrawal).ReloadAsync(ct);
 
             var completedAt = completedAtUtc?.ToUtcSafe() ?? DateTime.UtcNow;
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
 
             switch (withdrawal.Status)
             {
@@ -294,7 +294,7 @@ namespace Idara.API.Services
 
             // SOUS le verrou : recharger le statut (cf. SettleCompletedAsync).
             await _context.Entry(withdrawal).ReloadAsync(ct);
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
 
             switch (withdrawal.Status)
             {
@@ -390,7 +390,7 @@ namespace Idara.API.Services
             }
 
             withdrawal.Status = WithdrawalStatus.UnderVerification;
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
             withdrawal.VerificationStartedAt = DateTime.UtcNow;
             withdrawal.NextVerificationAt = DateTime.UtcNow.AddSeconds(30);
             withdrawal.VerificationAttempts = 0;
@@ -419,7 +419,7 @@ namespace Idara.API.Services
             await _context.Entry(withdrawal).ReloadAsync(ct);
 
             var completedAt = completedAtUtc?.ToUtcSafe() ?? DateTime.UtcNow;
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
 
             switch (withdrawal.Status)
             {
@@ -482,7 +482,7 @@ namespace Idara.API.Services
         {
             await _context.LockPlatformAsync(ct);
             await _context.Entry(withdrawal).ReloadAsync(ct);
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
 
             switch (withdrawal.Status)
             {
@@ -530,7 +530,7 @@ namespace Idara.API.Services
             }
 
             withdrawal.Status = WithdrawalStatus.UnderVerification;
-            withdrawal.SenePayDisbursementId ??= disbursementId;
+            withdrawal.ProviderDisbursementId ??= disbursementId;
             withdrawal.VerificationStartedAt = DateTime.UtcNow;
             withdrawal.NextVerificationAt = DateTime.UtcNow.AddSeconds(30);
             withdrawal.VerificationAttempts = 0;

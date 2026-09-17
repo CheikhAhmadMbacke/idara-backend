@@ -1,9 +1,10 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Admin;
-using Idara.API.DTOs.Senepay;
+using Idara.API.DTOs.Payment;
+using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Microsoft.EntityFrameworkCore;
@@ -20,21 +21,21 @@ namespace Idara.API.Services
     public class PlatformFinanceService : IPlatformFinanceService
     {
         private readonly AppDbContext _db;
-        private readonly ISenePayClient _senepay;
+        private readonly IWaveClient _wave;
         private readonly ILogger<PlatformFinanceService> _logger;
 
         /// <summary>Marge de sécurité au-dessus de la dette (décision produit : 5%).</summary>
         /// <inheritdoc/>
         public double SafetyMarginPercent => 5.0;
 
-        /// <summary>Tolérance sur l'écart de réconciliation (arrondis SenePay).</summary>
+        /// <summary>Tolérance sur l'écart de réconciliation (arrondis du prestataire).</summary>
         private const long EpsilonFcfa = 50;
 
         public PlatformFinanceService(
-            AppDbContext db, ISenePayClient senepay, ILogger<PlatformFinanceService> logger)
+            AppDbContext db, IWaveClient wave, ILogger<PlatformFinanceService> logger)
         {
             _db = db;
-            _senepay = senepay;
+            _wave = wave;
             _logger = logger;
         }
 
@@ -159,18 +160,17 @@ namespace Idara.API.Services
             var (owedToSchools, platform) = await ComputeDebtAndPlatformAsync(ct);
             var platformTotal = platform.TotalFcfa;
 
-            // --- R : réserve marchand SenePay (live) ---
+            // --- R : solde du compte marchand Wave (live) ---
             long reserve = 0;
             var reserveLive = false;
             try
             {
-                var balance = await _senepay.GetMerchantBalanceAsync(ct);
-                reserve = balance.ReserveBalanceFcfa;
+                reserve = await _wave.GetBalanceFcfaAsync(ct);
                 reserveLive = true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[finance] Solde SenePay injoignable pour la réconciliation");
+                _logger.LogError(ex, "[finance] Solde du compte marchand injoignable pour la réconciliation");
             }
 
             var dto = new ReconciliationDto
@@ -626,7 +626,7 @@ namespace Idara.API.Services
         {
             var result = new UntrackedPayoutsResultDto();
 
-            List<SenePayPayoutListItem> payouts;
+            List<ProviderPayoutRow> payouts;
             try
             {
                 payouts = await FetchAllCompletedPayoutsAsync(ct);
@@ -634,90 +634,79 @@ namespace Idara.API.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[finance] Scan des payouts SenePay injoignable");
+                _logger.LogError(ex, "[finance] Registre du compte marchand injoignable");
                 result.SenePayReachable = false;
                 return result;
             }
 
             result.ScannedCount = payouts.Count;
 
-            // Lookups Idara (tous les retraits, pour matcher external_id / disbursement_id).
+            // Rapprochement : notre référence d'abord (client_reference =
+            // Withdrawal.Id), l'identifiant du prestataire ensuite.
             var withdrawals = await _db.Withdrawals
-                .Select(w => new { w.Id, w.Status, w.SenePayDisbursementId })
+                .Select(w => new { w.Id, w.Status, w.ProviderDisbursementId })
                 .ToListAsync(ct);
-            var byExternalId = withdrawals.ToDictionary(w => w.Id.ToString(), w => w);
-            var byDisbId = withdrawals
-                .Where(w => !string.IsNullOrEmpty(w.SenePayDisbursementId))
-                .GroupBy(w => w.SenePayDisbursementId!)
+            var byClientRef = withdrawals.ToDictionary(w => w.Id.ToString(), w => w);
+            var byProviderRef = withdrawals
+                .Where(w => !string.IsNullOrEmpty(w.ProviderDisbursementId))
+                .GroupBy(w => w.ProviderDisbursementId!)
                 .ToDictionary(g => g.Key, g => g.First());
 
             var recordedRefs = (await _db.PlatformOutflows
-                .Where(o => o.SenePayReference != null)
-                .Select(o => o.SenePayReference!)
+                .Where(o => o.ProviderReference != null)
+                .Select(o => o.ProviderReference!)
                 .ToListAsync(ct)).ToHashSet();
 
             foreach (var p in payouts)
             {
-                var amount = (long)Math.Round(p.Amount, MidpointRounding.AwayFromZero);
-                var net = (long)Math.Round(p.NetAmount, MidpointRounding.AwayFromZero);
-                // Impact RÉEL sur la réserve (frais inclus) = montant à imputer en
-                // réconciliation. amount_debited si fourni par SenePay, sinon amount+fees.
-                var reserveDebit = (long)Math.Round(p.ReserveDebit, MidpointRounding.AwayFromZero);
-
-                // Différenciation de la source (cf. SenePayPayoutListItem.IsDashboard) :
-                // champ explicite `source` en priorité, repli sur le préfixe du
-                // disbursement_id (`SENEPAY_PAYOUT_` = dashboard / `DISB_` = API).
-                // ⚠️ Aujourd'hui `GET /api/v1/payouts` ne renvoie QUE les payouts API ;
-                // prêt pour le jour où SenePay exposera les dashboard.
-                var isDashboard = p.IsDashboard;
-
-                if (!isDashboard)
+                if (!p.IsManual)
                 {
-                    // Payout API → DOIT correspondre à un Withdrawal Idara.
+                    // Sortie partie d'Idara → elle DOIT correspondre à un retrait.
                     var matched =
-                        (p.ExternalId != null && byExternalId.TryGetValue(p.ExternalId, out var w1)) ? w1
-                        : (p.DisbursementId != null && byDisbId.TryGetValue(p.DisbursementId, out var w2)) ? w2
+                        (p.ClientReference != null && byClientRef.TryGetValue(p.ClientReference, out var w1)) ? w1
+                        : (p.Reference != null && byProviderRef.TryGetValue(p.Reference, out var w2)) ? w2
                         : null;
 
                     if (matched != null)
                     {
-                        // Tracé. Anomalie UNIQUEMENT si Idara le voit terminal-échoué
-                        // (Failed/Cancelled) alors que SenePay dit completed → argent sorti
-                        // mais Idara croit à un échec. Initiated/UnderVerification =
-                        // transitoire (le poll/webhook tranchera), on n'alerte pas.
+                        // Anomalie UNIQUEMENT si Idara la croit échouée alors que
+                        // l'argent est bien sorti — une réservation restituée pour
+                        // rien, donc un solde école faux. Initiated et
+                        // UnderVerification sont transitoires : la vérification
+                        // tranchera, on n'alerte pas.
                         if (matched.Status is WithdrawalStatus.Failed or WithdrawalStatus.Cancelled)
                         {
                             result.Anomalies.Add(new PayoutAnomalyDto
                             {
-                                DisbursementId = p.DisbursementId,
+                                DisbursementId = p.Reference,
                                 WithdrawalId = matched.Id,
                                 IdaraStatus = matched.Status.ToString(),
-                                AmountFcfa = amount,
+                                AmountFcfa = p.AmountFcfa,
                                 CompletedAt = p.CompletedAt
                             });
                         }
                         continue;
                     }
-                    // Payout API SANS retrait Idara correspondant : anormal (source tierce ?)
-                    // → traité comme orphelin par prudence (à consigner).
+                    // Sortie portant une référence inconnue de nous : anormale,
+                    // traitée comme orpheline par prudence.
                 }
 
-                // Orphelin = retrait dashboard OU payout API sans match Idara.
-                // Montant imputé = impact réserve (frais inclus).
-                var already = p.DisbursementId != null && recordedRefs.Contains(p.DisbursementId);
+                // Orpheline = faite à la main, ou sans retrait correspondant.
+                // On impute l'impact RÉEL sur le solde, frais compris.
+                var already = p.Reference != null && recordedRefs.Contains(p.Reference);
                 result.Untracked.Add(new UntrackedPayoutDto
                 {
-                    DisbursementId = p.DisbursementId,
-                    ExternalId = p.ExternalId,
-                    AmountFcfa = reserveDebit,
-                    NetAmountFcfa = net,
+                    DisbursementId = p.Reference,
+                    ExternalId = p.ClientReference,
+                    AmountFcfa = p.ReserveDebitFcfa,
+                    NetAmountFcfa = p.AmountFcfa,
                     RecipientPhone = p.RecipientPhone,
-                    Operator = p.Operator,
+                    Operator = "wave",
                     CompletedAt = p.CompletedAt,
                     AlreadyRecorded = already
                 });
-                if (already) result.TotalAlreadyRecordedFcfa += reserveDebit;
-                else result.TotalToRecordFcfa += reserveDebit;
+                if (already) result.TotalAlreadyRecordedFcfa += p.ReserveDebitFcfa;
+                else result.TotalToRecordFcfa += p.ReserveDebitFcfa;
             }
 
             _logger.LogInformation(
@@ -731,7 +720,7 @@ namespace Idara.API.Services
         {
             var scan = await ScanUntrackedPayoutsAsync(ct);
             if (!scan.SenePayReachable)
-                throw new InvalidOperationException("SenePay injoignable — réessaie dans un instant.");
+                throw new InvalidOperationException("Registre du compte marchand injoignable — réessaie dans un instant.");
 
             var toRecord = scan.Untracked
                 .Where(u => !u.AlreadyRecorded && !string.IsNullOrEmpty(u.DisbursementId))
@@ -745,8 +734,8 @@ namespace Idara.API.Services
                 {
                     Type = PlatformOutflowType.ManualAdjustment,
                     AmountFcfa = u.AmountFcfa,
-                    Note = $"Retrait hors Idara détecté (dashboard SenePay) — {u.Operator} {u.RecipientPhone}".Trim(),
-                    SenePayReference = u.DisbursementId,
+                    Note = $"Retrait hors Idara détecté (application Wave Business) — {u.RecipientPhone}".Trim(),
+                    ProviderReference = u.DisbursementId,
                     OccurredAt = (u.CompletedAt ?? DateTime.UtcNow).ToUtcSafe(),
                     CreatedById = userId,
                     CreatedAt = DateTime.UtcNow
@@ -773,18 +762,73 @@ namespace Idara.API.Services
 
         // --- Helpers ---
 
-        /// <summary>Pagine TOUS les payouts `completed` chez SenePay (garde-fou 100 pages).</summary>
-        private async Task<List<SenePayPayoutListItem>> FetchAllCompletedPayoutsAsync(CancellationToken ct)
+        /// <summary>
+        /// Sorties d'argent du compte marchand sur les <see cref="ScanDays"/>
+        /// derniers jours, lues dans le registre Wave.
+        /// </summary>
+        /// <remarks>
+        /// <para>🔑 Wave n'offre pas de « liste des décaissements » : il offre
+        /// le REGISTRE du compte, jour par jour. C'est en réalité mieux — on y
+        /// voit aussi les retraits faits à la main depuis l'application Business,
+        /// qui sont précisément ceux qu'on cherche — mais cela impose de borner
+        /// la période : une journée = au moins un appel.</para>
+        ///
+        /// <para>⚠️ <b>Ce qu'on ne sait pas encore</b> : les valeurs exactes de
+        /// <c>transaction_type</c> chez Wave ne sont pas documentées. On
+        /// reconnaît donc une sortie à son <b>montant négatif</b>, et on journalise
+        /// les types rencontrés pour les apprendre au premier vrai mouvement.
+        /// Ne pas remplacer cette heuristique par une liste de types devinés.</para>
+        /// </remarks>
+        private const int ScanDays = 30;
+
+        private async Task<List<ProviderPayoutRow>> FetchAllCompletedPayoutsAsync(CancellationToken ct)
         {
-            var all = new List<SenePayPayoutListItem>();
-            const int pageSize = 100;
-            for (var page = 1; page <= 100; page++)
+            var all = new List<ProviderPayoutRow>();
+            var seenTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            for (var back = 0; back < ScanDays; back++)
             {
-                var resp = await _senepay.GetPayoutsAsync("completed", null, null, page, pageSize, ct);
-                if (resp.Data.Count > 0) all.AddRange(resp.Data);
-                var totalPages = resp.Pagination?.TotalPages ?? 1;
-                if (page >= totalPages || resp.Data.Count == 0) break;
+                var day = today.AddDays(-back);
+                string? cursor = null;
+
+                for (var page = 0; page < 20; page++)   // garde-fou
+                {
+                    var res = await _wave.GetTransactionsAsync(day, cursor, 200, ct);
+                    foreach (var t in res.Items)
+                    {
+                        if (!string.IsNullOrWhiteSpace(t.TransactionType))
+                            seenTypes.Add(t.TransactionType!);
+
+                        var signed = WaveClient.ParseAmount(t.Amount);
+                        if (signed >= 0) continue;      // entrée d'argent : pas une sortie
+
+                        var amount = Math.Abs(signed);
+                        var fee = Math.Abs(WaveClient.ParseAmount(t.Fee));
+                        all.Add(new ProviderPayoutRow(
+                            Reference: t.TransactionId,
+                            ClientReference: t.ClientReference,
+                            AmountFcfa: amount,
+                            FeeFcfa: fee,
+                            ReserveDebitFcfa: amount + fee,
+                            RecipientPhone: t.CounterpartyMobile,
+                            RecipientName: t.CounterpartyName,
+                            CompletedAt: t.Timestamp,
+                            // Une sortie sans NOTRE référence n'est passée par aucun
+                            // écran d'Idara : elle a été faite à la main.
+                            IsManual: string.IsNullOrWhiteSpace(t.ClientReference)));
+                    }
+
+                    if (res.PageInfo?.HasNextPage != true) break;
+                    cursor = res.PageInfo.EndCursor;
+                    if (string.IsNullOrWhiteSpace(cursor)) break;
+                }
             }
+
+            _logger.LogInformation(
+                "[finance] Registre Wave : {Count} sortie(s) sur {Days} jours — types rencontrés : {Types}",
+                all.Count, ScanDays, string.Join(", ", seenTypes));
+
             return all;
         }
 

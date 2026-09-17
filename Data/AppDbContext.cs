@@ -1041,12 +1041,12 @@ namespace Idara.API.Data
             // Lookup par référence SenePay (webhook → Payment correspondant).
             // Filtré IS NOT NULL car le Payment est créé AVANT l'appel SenePay.
             modelBuilder.Entity<Payment>()
-                .HasIndex(p => p.SenePayTransactionId)
+                .HasIndex(p => p.ProviderTransactionId)
                 .IsUnique()
                 .HasFilter("\"SenePayTransactionId\" IS NOT NULL");
 
             modelBuilder.Entity<Payment>()
-                .HasIndex(p => p.SenePayInternalId)
+                .HasIndex(p => p.ProviderInternalId)
                 .HasFilter("\"SenePayInternalId\" IS NOT NULL");
 
             // Lookup public depuis la page HTML de résultat post-paiement
@@ -1231,7 +1231,7 @@ namespace Idara.API.Data
             // l'appel SenePay (le Withdrawal est créé AVANT), d'où le filtre
             // NOT NULL sur l'unique.
             modelBuilder.Entity<Withdrawal>()
-                .HasIndex(w => w.SenePayDisbursementId)
+                .HasIndex(w => w.ProviderDisbursementId)
                 .IsUnique()
                 .HasFilter("\"SenePayDisbursementId\" IS NOT NULL");
 
@@ -1295,7 +1295,7 @@ namespace Idara.API.Data
             // disbursement_id SenePay ne peut être consigné qu'une fois. Filtré
             // (les ajustements manuels ont SenePayReference NULL, non contraints).
             modelBuilder.Entity<PlatformOutflow>()
-                .HasIndex(o => o.SenePayReference)
+                .HasIndex(o => o.ProviderReference)
                 .IsUnique()
                 .HasFilter("\"SenePayReference\" IS NOT NULL");
 

@@ -1,4 +1,4 @@
-using Idara.API.Data;
+﻿using Idara.API.Data;
 using Idara.API.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -75,7 +75,7 @@ namespace Idara.API.Services
 
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var senepay = scope.ServiceProvider.GetRequiredService<ISenePayClient>();
+            var wave = scope.ServiceProvider.GetRequiredService<IWaveClient>();
             var settlement = scope.ServiceProvider.GetRequiredService<IPayoutSettlementService>();
 
             // Σ(Available + Pending) dû aux écoles.
@@ -85,12 +85,11 @@ namespace Idara.API.Services
             long reserve;
             try
             {
-                var balance = await senepay.GetMerchantBalanceAsync(ct);
-                reserve = balance.ReserveBalanceFcfa;
+                reserve = await wave.GetBalanceFcfaAsync(ct);
             }
-            catch (SenePayApiException ex)
+            catch (WaveApiException ex)
             {
-                _logger.LogError(ex, "[payout-reconcile] Solde marchand SenePay indisponible — invariant non vérifié ce tick");
+                _logger.LogError(ex, "[payout-reconcile] Solde du compte marchand indisponible — invariant non vérifié ce tick");
                 return;
             }
 

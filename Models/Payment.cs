@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Models
 {
@@ -128,11 +128,29 @@ namespace Idara.API.Models
 
         public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
 
-        /// <summary>Référence publique SenePay (ex: SP-XXXX) — visible côté commerçant.</summary>
-        public string? SenePayTransactionId { get; set; }
+        /// <summary>
+        /// Prestataire qui a traité ce mouvement : <c>"Wave"</c> depuis la
+        /// migration du 2026-09-17, <c>"SenePay"</c> pour tout l'historique.
+        /// <para>🔑 Ce n'est pas une décoration : les deux prestataires n'ont ni
+        /// les mêmes identifiants, ni les mêmes états, ni la même façon d'être
+        /// interrogés. Sans ce discriminant, le travail de vérification
+        /// demanderait à Wave des nouvelles d'un paiement qu'il n'a jamais vu.</para>
+        /// </summary>
+        public string Provider { get; set; } = "Wave";
 
-        /// <summary>Id interne SenePay (uuid) utilisé pour les polls/status.</summary>
-        public string? SenePayInternalId { get; set; }
+        /// <summary>
+        /// Identifiant de l'opération chez le prestataire : la session
+        /// <c>cos-…</c> chez Wave, le jeton de transaction chez le précédent.
+        /// C'est lui qu'on interroge pour connaître l'état réel.
+        /// </summary>
+        public string? ProviderTransactionId { get; set; }
+
+        /// <summary>
+        /// Second identifiant, propre au prestataire : l'identifiant de
+        /// transaction visible par le payeur chez Wave (celui qu'une famille
+        /// lira dans son application), l'identifiant interne chez le précédent.
+        /// </summary>
+        public string? ProviderInternalId { get; set; }
 
         public DateTime InitiatedAt { get; set; }
         public DateTime? PaidAt { get; set; }

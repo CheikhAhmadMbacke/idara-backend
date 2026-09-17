@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Idara.API.Data;
 using Idara.API.Enums;
@@ -104,7 +104,7 @@ namespace Idara.API.Controllers
                 amountChargedFcfa = payment.AmountFcfa,
                 targetAmountFcfa = payment.TargetAmountFcfa,
                 @operator = payment.Operator.ToString(),
-                senePayTransactionId = payment.SenePayTransactionId,
+                senePayTransactionId = payment.ProviderTransactionId,
                 paidAt = payment.PaidAt,
                 failureReason = payment.FailureReason,
                 hasReceipt = payment.Status == PaymentStatus.Completed,

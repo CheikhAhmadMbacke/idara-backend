@@ -1,11 +1,11 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Export;
 using Idara.API.DTOs.Payment;
-using Idara.API.DTOs.Senepay;
+using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
@@ -36,8 +36,8 @@ namespace Idara.API.Controllers
     public class SchoolWalletController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly ISenePayClient _senepay;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly IWaveClient _wave;
+        private readonly IPaymentAvailabilityService _availability;
         private readonly IPayoutSettlementService _settlement;
         private readonly IMemoryCache _cache;
         private readonly IExportPdfService _exportPdf;
@@ -48,16 +48,16 @@ namespace Idara.API.Controllers
 
         public SchoolWalletController(
             AppDbContext context,
-            ISenePayClient senepay,
-            IOptions<SenePaySettings> senepaySettings,
+            IWaveClient wave,
+            IPaymentAvailabilityService availability,
             IPayoutSettlementService settlement,
             IMemoryCache cache,
             IExportPdfService exportPdf,
             ILogger<SchoolWalletController> logger)
         {
             _context = context;
-            _senepay = senepay;
-            _senepaySettings = senepaySettings.Value;
+            _wave = wave;
+            _availability = availability;
             _settlement = settlement;
             _cache = cache;
             _exportPdf = exportPdf;
@@ -77,6 +77,13 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
+
+            // 🔴 Guichet de décaissement fermé ? On le demande AVANT de réserver
+            // le moindre franc : une réservation posée puis restituée se voit
+            // dans l'historique du solde et inquiète pour rien.
+            var blocked = await _availability.PayoutBlockedReasonAsync(schoolId, ct);
+            if (blocked is not null)
+                return StatusCode(503, ApiResponse<WithdrawalDto>.Fail(blocked));
 
             // --- Résolution du bénéficiaire (carnet OU saisie ponctuelle) ---
             // La validation conditionnelle (champs manuels requis si pas de
@@ -237,6 +244,7 @@ namespace Idara.API.Controllers
                 withdrawal.DonationAmountFcfa = donationDraw;
 
                 _context.Withdrawals.Add(withdrawal);
+                withdrawal.Provider = PaymentProviders.Wave;
                 await _context.SaveChangesAsync(ct); // assigne withdrawal.Id
 
                 wallet.AvailableBalance -= dto.Amount;
@@ -260,76 +268,57 @@ namespace Idara.API.Controllers
                 await tx.CommitAsync(ct);
             }
 
-            // --- Appel SenePay Payout (hors transaction) ---
-            SenePayPayoutResponse resp;
+            // --- Décaissement Wave (hors transaction) ---
+            WavePayout resp;
             try
             {
-                resp = await _senepay.InitiatePayoutAsync(new SenePayPayoutRequest
+                resp = await _wave.CreatePayoutAsync(new WaveCreatePayoutRequest
                 {
-                    ExternalId = withdrawal.Id.ToString(),
-                    Amount = sepayAmount,
-                    Phone = "221" + recipientPhone,
-                    RecipientName = recipientName,
-                    Country = "SN",
-                    Operator = operatorEnum == PaymentOperator.Wave ? "wave" : "orange",
-                    Type = "seller_payment",
-                    // SenePay/AfribaPay mappe `description` sur son `reference_id`
-                    // en aval, qui n'accepte que [A-Za-z0-9_-] : ni accents ni
-                    // espaces (sinon HTTP 400 "reference_id ... invalid or
-                    // contains unsupported characters"). On garde donc une chaîne
-                    // ASCII sans espace — découvert au 1er test payout réel.
-                    Description = $"Idara-retrait-ecole-{schoolId.Value}",
-                    // Frais "en plus" : le bénéficiaire reçoit exactement sepayAmount
-                    // (= dto.Amount), pas de repli "inclusive" (cf. SenePayPayoutRequest).
-                    FeeMode = "on_top",
-                    CallbackUrl = _senepaySettings.WebhookPayoutUrl
-                }, ct);
+                    Currency = "XOF",
+                    Mobile = "+221" + recipientPhone,
+                    // 🔑 `receive_amount` est ce que le bénéficiaire TOUCHE. Les
+                    // frais Wave s'ajoutent au débit de notre compte : le daara
+                    // reçoit exactement ce qu'il a demandé, ni plus ni moins.
+                    ReceiveAmount = WaveClient.FormatAmount(sepayAmount),
+                    Name = recipientName,
+                    ClientReference = withdrawal.Id.ToString(),
+                    // Imprimé sur le reçu du bénéficiaire, 40 caractères au plus.
+                    PaymentReason = $"Idara retrait ecole {schoolId.Value}"
+                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
             }
-            catch (SenePayApiException ex)
+            catch (WaveApiException ex)
             {
-                // DURCISSEMENT ANTI DOUBLE DÉPENSE : un timeout/5xx ne signifie PAS
-                // que le décaissement a échoué — il peut être sorti côté
-                // AfribaPay/opérateur. On ne restitue QUE sur un rejet 4xx clair
-                // (validation pré-exécution, aucun fonds sorti).
-                var isDuplicate = (ex.ResponseBody ?? string.Empty)
-                    .Contains("DUPLICATE_EXTERNAL_ID", StringComparison.OrdinalIgnoreCase);
-
-                if (ex.StatusCode is >= 400 and < 500 && !isDuplicate)
+                // DURCISSEMENT ANTI DOUBLE DÉPENSE (§78), et il compte DOUBLE ici :
+                // Wave n'émet aucun webhook de décaissement. Un timeout ne dit pas
+                // que l'argent n'est pas parti — seule une relecture le dira.
+                if (ex.IsDefinitiveRejection)
                 {
-                    // Rejet pré-exécution (numéro/opérateur invalide, solde
-                    // marchand insuffisant…) → restitution immédiate + feedback.
-                    var reason = ex.ResponseBody ?? ex.Message;
+                    // Refus AVANT exécution (numéro invalide, solde marchand
+                    // insuffisant, bénéficiaire bloqué…) : aucun franc n'est
+                    // sorti, on restitue la réservation.
+                    var reason = ex.Code ?? ex.Message;
                     await _settlement.SettleFailedAsync(
                         withdrawal.Id, reason, null, null, "sync-init", ct);
                     _logger.LogWarning(ex,
-                        "[withdraw] SenePay {Status} (rejet pré-exécution) Withdrawal {Id} — réservation restituée",
-                        ex.StatusCode, withdrawal.Id);
-                    // Ne PAS accuser les coordonnées si c'est une indisponibilité
-                    // temporaire du prestataire (float opérateur insuffisant) — le
-                    // solde école est déjà validé en amont (ligne 182).
+                        "[withdraw] Wave {Status}/{Code} (rejet pré-exécution) Withdrawal {Id} — réservation restituée",
+                        ex.StatusCode, ex.Code, withdrawal.Id);
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(
                         IsTemporaryPayoutOutage(reason)
                             ? PayoutUnavailableMsg
                             : "Le retrait a été refusé (coordonnées ou opérateur invalide). Votre solde a été restitué."));
                 }
 
-                // 5xx / timeout / réseau / duplicate = INDÉTERMINÉ → on garde les
-                // fonds réservés (UnderVerification) et le PayoutVerificationJob
-                // interrogera GET /payouts/{id} (autoritatif) jusqu'à résolution.
+                // 5xx / 429 / timeout / réseau = INDÉTERMINÉ → fonds maintenus
+                // réservés, et le travail de vérification interrogera
+                // GET /v1/payout/{id} — ou retrouvera l'opération par notre
+                // référence si l'identifiant ne nous est jamais parvenu.
                 await _settlement.MarkUnderVerificationAsync(
                     withdrawal.Id, null, ex.Message, "sync-init", ct);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogWarning(ex,
-                    "[withdraw] SenePay indéterminé (status={Status}) Withdrawal {Id} — statut={WStatus}",
+                    "[withdraw] Wave indéterminé (status={Status}) Withdrawal {Id} — statut={WStatus}",
                     ex.StatusCode, withdrawal.Id, withdrawal.Status);
 
-                // Race observée en prod : SenePay renvoie un 502 gateway ET envoie
-                // le webhook d'échec (« Insufficient balance ») quasi simultanément.
-                // Si le webhook a déjà tranché Failed + restitué AVANT le retour du
-                // POST, on renvoie un message clair plutôt qu'un « en vérification »
-                // trompeur (suivi d'un push d'échec contradictoire). Sinon (vraiment
-                // indéterminé), on garde le « en vérification » : le PayoutVerificationJob
-                // interrogera GET /payouts/{id} jusqu'à résolution.
                 if (withdrawal.Status == WithdrawalStatus.Failed)
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(PayoutUnavailableMsg));
 
@@ -341,16 +330,16 @@ namespace Idara.API.Controllers
 
             // Rejet TERMINAL explicite (failed/cancelled) : aucun fonds sorti →
             // restitution + Failed.
-            if (statusLower is "failed" or "cancelled")
+            if (statusLower is "failed")
             {
+                var err = resp.PayoutError?.Code ?? resp.PayoutError?.Message ?? statusLower;
                 await _settlement.SettleFailedAsync(
-                    withdrawal.Id, resp.ErrorCode ?? resp.Message ?? statusLower,
-                    resp.DisbursementId, null, "sync-init", ct);
+                    withdrawal.Id, err, resp.Id, null, "sync-init", ct);
                 _logger.LogWarning(
-                    "[withdraw] SenePay a rejeté le payout Withdrawal {Id} (status={Status}) — réservation restituée",
-                    withdrawal.Id, resp.Status);
+                    "[withdraw] Wave a rejeté le décaissement Withdrawal {Id} ({Err}) — réservation restituée",
+                    withdrawal.Id, err);
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
-                    IsTemporaryPayoutOutage(resp.ErrorCode ?? resp.Message)
+                    IsTemporaryPayoutOutage(err)
                         ? PayoutUnavailableMsg
                         : "Le retrait a été refusé par l'opérateur. Votre solde a été restitué."));
             }
@@ -358,12 +347,12 @@ namespace Idara.API.Controllers
             // Succès SYNCHRONE (défensif — depuis le durcissement SenePay, le POST
             // ne renvoie plus `completed` synchrone en prod, mais on le gère par
             // sécurité si SenePay n'envoyait pas de webhook séparé).
-            if (statusLower == "completed")
+            if (statusLower == "succeeded")
             {
-                var fees = (long)Math.Round(resp.Fees?.Provider ?? 0, MidpointRounding.AwayFromZero);
-                var net = (long)Math.Round(resp.NetAmount, MidpointRounding.AwayFromZero);
+                var fees = WaveClient.ParseAmount(resp.Fee);
+                var net = WaveClient.ParseAmount(resp.ReceiveAmount);
                 await _settlement.SettleCompletedAsync(
-                    withdrawal.Id, resp.DisbursementId, fees, net, null, "sync-init", ct);
+                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", ct);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogInformation(
                     "[withdraw] Withdrawal {Id} complété SYNCHRONE (School {SchoolId}, {Amount} FCFA)",
@@ -376,13 +365,12 @@ namespace Idara.API.Controllers
             // INDÉTERMINÉ. On garde les fonds réservés et on poll. C'est désormais
             // le chemin nominal (submitted = opérateur a accepté, confirmation à venir).
             await _settlement.MarkUnderVerificationAsync(
-                withdrawal.Id, resp.DisbursementId,
-                $"status={resp.Status} success={resp.Success}", "sync-init", ct);
+                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", ct);
             await _context.Entry(withdrawal).ReloadAsync(ct);
 
             _logger.LogInformation(
-                "[withdraw] Withdrawal {Id} en vérification (School {SchoolId}, {Amount} FCFA, sepay={Sepay}, disbId={DisbId}, status={Status})",
-                withdrawal.Id, schoolId.Value, dto.Amount, sepayAmount, resp.DisbursementId, resp.Status);
+                "[withdraw] Withdrawal {Id} en vérification (School {SchoolId}, {Amount} FCFA, envoyé={Sent}, payout={PayoutId}, status={Status})",
+                withdrawal.Id, schoolId.Value, dto.Amount, sepayAmount, resp.Id, resp.Status);
 
             return Ok(ApiResponse<WithdrawalDto>.Ok(MapToDto(withdrawal),
                 "Retrait en cours de vérification. Vous serez notifié dès confirmation."));
@@ -462,7 +450,7 @@ namespace Idara.API.Controllers
                 Phone = string.IsNullOrWhiteSpace(w.RecipientPhone) ? null : w.RecipientPhone,
                 Note = w.Motif,
                 Method = FinanceLabels.Operator(w.Operator),
-                Reference = w.SenePayDisbursementId,
+                Reference = w.ProviderDisbursementId,
                 Status = FinanceLabels.WithdrawalStatus(w.Status),
                 // Un retrait est une SORTIE du wallet → montant négatif.
                 AmountFcfa = -w.AmountFcfa
@@ -592,7 +580,7 @@ namespace Idara.API.Controllers
                     || (digits != null && EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), digits))
                     || (w.Motif != null && EF.Functions.ILike(AppDbContext.Unaccent(w.Motif), pattern))
                     || (w.CategoryLabel != null && EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel), pattern))
-                    || (w.SenePayDisbursementId != null && EF.Functions.ILike(AppDbContext.Unaccent(w.SenePayDisbursementId), pattern)));
+                    || (w.ProviderDisbursementId != null && EF.Functions.ILike(AppDbContext.Unaccent(w.ProviderDisbursementId), pattern)));
             }
 
             return query;
@@ -614,7 +602,7 @@ namespace Idara.API.Controllers
             RecipientPhone = w.RecipientPhone,
             Status = w.Status,
             Reference = IdaraReference.Withdrawal(w.Id),
-            SenePayReference = w.SenePayDisbursementId,
+            SenePayReference = w.ProviderDisbursementId,
             FailureReason = w.FailureReason,
             CreatedAt = w.CreatedAt,
             CompletedAt = w.CompletedAt,

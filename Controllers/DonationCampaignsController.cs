@@ -36,7 +36,7 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IDonationCampaignService _campaigns;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly UploadSettings _uploads;
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<DonationCampaignsController> _logger;
@@ -44,14 +44,14 @@ namespace Idara.API.Controllers
         public DonationCampaignsController(
             AppDbContext context,
             IDonationCampaignService campaigns,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             IOptions<UploadSettings> uploads,
             IWebHostEnvironment env,
             ILogger<DonationCampaignsController> logger)
         {
             _context = context;
             _campaigns = campaigns;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _uploads = uploads.Value;
             _env = env;
             _logger = logger;
@@ -415,7 +415,7 @@ namespace Idara.API.Controllers
         {
             Id = c.Id,
             Slug = c.Slug,
-            PublicUrl = $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/don/{c.Slug}",
+            PublicUrl = $"{_waveSettings.PublicBaseUrl.TrimEnd('/')}/don/{c.Slug}",
             Name = c.Name,
             Description = c.Description,
             CoverImageUrl = c.CoverImagePath,

@@ -38,12 +38,12 @@ namespace Idara.API.Services
     public class PaymentLinkService : IPaymentLinkService
     {
         private readonly AppDbContext _context;
-        private readonly SenePaySettings _senepay;
+        private readonly WaveSettings _waveSettings;
 
-        public PaymentLinkService(AppDbContext context, IOptions<SenePaySettings> senepay)
+        public PaymentLinkService(AppDbContext context, IOptions<WaveSettings> waveSettings)
         {
             _context = context;
-            _senepay = senepay.Value;
+            _waveSettings = waveSettings.Value;
         }
 
         public async Task<(PaymentLink Link, bool Created)> EnsureAsync(
@@ -90,6 +90,6 @@ namespace Idara.API.Services
         }
 
         public string BuildUrl(string token) =>
-            PublicLinks.PaymentLink(_senepay.PublicBaseUrl, token);
+            PublicLinks.PaymentLink(_waveSettings.PublicBaseUrl, token);
     }
 }

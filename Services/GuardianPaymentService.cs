@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Data;
 using Idara.API.DTOs.Senepay;
@@ -60,9 +60,7 @@ namespace Idara.API.Services
         /// le refus tombe à l'initiation, là où l'argent bouge.
         /// </remarks>
         public long ChargeFor(long target) =>
-            FeesPayer == FeesPayer.Parent && Fees.IsConfigured
-                ? Fees.ChargeFor(target)
-                : target;
+            PayerMarkup.ChargeFor(Fees, FeesPayer, target);
 
         /// <summary>Majoration effective du total dû, en % — AFFICHAGE seulement.</summary>
         public double ParentFeePercent =>
@@ -70,10 +68,6 @@ namespace Idara.API.Services
                 ? Fees.EffectiveMarkupPercent(TotalDueFcfa)
                 : 0;
     }
-
-    /// <summary>Issue de l'appel SenePay à l'initiation (succès = RedirectUrl posé).</summary>
-    public record SenePayInitiateOutcome(
-        bool Ok, string Status, string? RedirectUrl, string? ErrorMessage, int HttpStatus, string? ErrorCode);
 
     public interface IGuardianPaymentService
     {
@@ -105,10 +99,10 @@ namespace Idara.API.Services
             int? paymentLinkId, CancellationToken ct);
 
         /// <summary>
-        /// Appelle SenePay pour un Payment déjà persisté, stocke les identifiants,
-        /// applique un échec synchrone. Ne lève pas : l'issue est dans le résultat.
+        /// Ouvre la session de paiement Wave d'un Payment déjà persisté. Ne
+        /// lève pas : l'issue est dans le résultat.
         /// </summary>
-        Task<SenePayInitiateOutcome> InitiateWithSenePayAsync(
+        Task<PayinStartOutcome> InitiatePaymentAsync(
             Payment payment, string? customerName, CancellationToken ct);
     }
 
@@ -118,19 +112,16 @@ namespace Idara.API.Services
         public const long MaxFreeAmountPerChildFcfa = 2_000_000;
 
         private readonly AppDbContext _context;
-        private readonly ISenePayClient _senepay;
-        private readonly SenePaySettings _settings;
+        private readonly IWavePayinService _wave;
         private readonly ILogger<GuardianPaymentService> _logger;
 
         public GuardianPaymentService(
             AppDbContext context,
-            ISenePayClient senepay,
-            IOptions<SenePaySettings> settings,
+            IWavePayinService wave,
             ILogger<GuardianPaymentService> logger)
         {
             _context = context;
-            _senepay = senepay;
-            _settings = settings.Value;
+            _wave = wave;
             _logger = logger;
         }
 
@@ -307,92 +298,16 @@ namespace Idara.API.Services
             return payment;
         }
 
-        public async Task<SenePayInitiateOutcome> InitiateWithSenePayAsync(
+        public Task<PayinStartOutcome> InitiatePaymentAsync(
             Payment payment, string? customerName, CancellationToken ct)
         {
-            // Numéro du responsable récupéré en base (identité par téléphone).
-            // Informatif pour Wave (checkout par redirection) : un tiers peut
-            // payer depuis un autre compte Wave (confirmé 2026-08-20).
-            var payerPhone = payment.GuardianId is int gid
-                ? await _context.Users.Where(u => u.Id == gid).Select(u => u.PhoneNumber).FirstOrDefaultAsync(ct)
-                : null;
-            if (string.IsNullOrWhiteSpace(payerPhone))
-            {
-                return new SenePayInitiateOutcome(false, "Failed", null,
-                    "Aucun numéro de téléphone n'est associé à votre compte. Contactez votre école.", 400, null);
-            }
-
-            var publicBase = _settings.PublicBaseUrl.TrimEnd('/');
-            var resultBase = $"{publicBase}/pay/{payment.Id}/{payment.PublicResultToken}";
-            var request = new SenePayInitiatePaymentRequest
-            {
-                Amount = payment.AmountFcfa,
-                Currency = "XOF",
-                CountryCode = "SN",
-                Operator = "wave",
-                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                OtpCode = null,
-                OrderId = payment.Id.ToString(),
-                CustomerName = customerName,
-                WebhookUrl = _settings.WebhookPayinUrl,
-                ReturnUrl = $"{resultBase}?status=success",
-                CancelUrl = $"{resultBase}?status=cancel"
-            };
-
-            SenePayInitiatePaymentResponse response;
-            try
-            {
-                response = await _senepay.InitiatePaymentAsync(request, ct);
-            }
-            catch (SenePayApiException ex)
-            {
-                _logger.LogError(ex, "[payment/initiate] SenePay error pour Payment {PaymentId}", payment.Id);
-                // Rejet 4xx SYNCHRONE = SenePay n'a rien créé (validation avant
-                // exécution, même logique que le payout §78) : on clôt le Payment
-                // en Failed tout de suite. Sinon il resterait Pending SANS jeton,
-                // invérifiable par le poll, et bloquerait le lien de paiement.
-                // Timeout / 5xx (StatusCode null ou ≥ 500) : indéterminé → on ne
-                // touche à rien (le webhook peut encore arriver par OrderId, §108).
-                if (ex.StatusCode is >= 400 and < 500)
-                {
-                    payment.Status = PaymentStatus.Failed;
-                    payment.FailedAt = DateTime.UtcNow;
-                    payment.FailureReason = $"SenePay HTTP {ex.StatusCode}";
-                    await _context.SaveChangesAsync(ct);
-                }
-                return new SenePayInitiateOutcome(false, "Failed", null,
-                    "SenePay temporairement indisponible. Réessayez dans quelques secondes.", 502, null);
-            }
-
-            payment.SenePayInternalId = response.InternalId;
-            payment.SenePayTransactionId = response.Token;
-            await _context.SaveChangesAsync(ct);
-
-            var status = response.Status ?? "Pending";
-            if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                payment.Status = string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                    ? PaymentStatus.Cancelled
-                    : PaymentStatus.Failed;
-                payment.FailedAt = DateTime.UtcNow;
-                payment.FailureReason = response.FailedReason ?? response.ErrorCode;
-                await _context.SaveChangesAsync(ct);
-                return new SenePayInitiateOutcome(false, status, null,
-                    response.FailedReason, 200, response.ErrorCode);
-            }
-
-            // L'URL de redirection est renvoyée au navigateur qui la suit
-            // (window.location) : on n'accepte qu'un https:// absolu — jamais un
-            // schéma javascript: ou data: si la réponse du PSP était altérée.
-            var redirect = response.RedirectUrl;
-            if (!string.IsNullOrWhiteSpace(redirect)
-                && !(Uri.TryCreate(redirect, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps))
-            {
-                _logger.LogWarning("[payment/initiate] redirectUrl SenePay rejeté (schéma non https) pour Payment {Id}", payment.Id);
-                redirect = null;
-            }
-            return new SenePayInitiateOutcome(true, status, redirect, null, 200, response.ErrorCode);
+            // 🔑 Plus aucun numéro n'est transmis au prestataire. Wave ouvre une
+            // session que n'importe quel compte peut régler — c'est
+            // volontairement le même comportement qu'avant : au daara, l'oncle
+            // ou le grand frère paient couramment pour l'enfant. Le numéro du
+            // responsable reste en base pour le reçu par SMS (§229), il ne
+            // conditionne plus le paiement.
+            return _wave.StartAsync(payment, customerName, ct);
         }
 
         private static string GeneratePublicToken() => Guid.NewGuid().ToString("N");

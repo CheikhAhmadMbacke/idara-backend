@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -42,7 +42,7 @@ namespace Idara.API.Controllers
         private readonly IReceiptPdfService _receiptPdf;
         private readonly IExportPdfService _exportPdf;
         private readonly IWebHostEnvironment _env;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly ILogger<FeesController> _logger;
 
         public FeesController(
@@ -56,7 +56,7 @@ namespace Idara.API.Controllers
             IReceiptPdfService receiptPdf,
             IExportPdfService exportPdf,
             IWebHostEnvironment env,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             ILogger<FeesController> logger)
         {
             _context = context;
@@ -69,7 +69,7 @@ namespace Idara.API.Controllers
             _receiptPdf = receiptPdf;
             _exportPdf = exportPdf;
             _env = env;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _logger = logger;
         }
 
@@ -132,7 +132,7 @@ namespace Idara.API.Controllers
                 {
                     SchoolId = schoolId.Value,
                     BillingMode = BillingMode.FixedAmount,
-                    FeesPayer = FeesPayer.Parent,
+                    FeesPayer = PayerMarkup.Effective(FeesPayer.Parent),
                     DonationFeesPayer = FeesPayer.School,
                     MonthlyDueDay = 5,
                     PaymentDeadlineDay = 15,
@@ -168,8 +168,15 @@ namespace Idara.API.Controllers
             }
 
             settings.BillingMode = dto.BillingMode;
-            settings.FeesPayer = dto.FeesPayer;
-            settings.DonationFeesPayer = dto.DonationFeesPayer;
+            // 🔴 VERROUILLÉ. L'écran propose encore le choix pour les écoles
+            // qui l'ont connu, mais le serveur ne l'accepte plus : facturer des
+            // frais à un payeur pour régler via Wave, c'est l'article 8.2 du
+            // contrat, donc la résiliation SANS PRÉAVIS — déclenchable par un
+            // simple clic d'un directeur. Le réglage est donc ignoré, pas
+            // refusé : refuser bloquerait l'enregistrement de TOUS les autres
+            // paramètres de la page pour une valeur qu'on sait corriger.
+            settings.FeesPayer = PayerMarkup.Effective(dto.FeesPayer);
+            settings.DonationFeesPayer = PayerMarkup.Effective(dto.DonationFeesPayer);
             settings.MonthlyDueDay = dto.MonthlyDueDay;
             // Jour limite : appliqué UNIQUEMENT s'il est fourni. Une version de
             // l'application antérieure au 2026-08-23 ne l'envoie pas ; le
@@ -1332,7 +1339,7 @@ namespace Idara.API.Controllers
         /// </summary>
         private string? PublicReceiptUrl(Payment payment) =>
             PublicLinks.Receipt(
-                _senepaySettings.PublicBaseUrl, payment.Id, payment.PublicResultToken);
+                _waveSettings.PublicBaseUrl, payment.Id, payment.PublicResultToken);
 
         /// <summary>
         /// Information du responsable après un encaissement au guichet — jamais
@@ -1528,8 +1535,8 @@ namespace Idara.API.Controllers
                                                 || EF.Functions.ILike(p.Student!.SearchIndex ?? "", pattern)))
                             || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.SearchIndex ?? "", pattern))
                             || (p.Donor != null && EF.Functions.ILike(p.Donor!.SearchIndex ?? "", pattern))
-                            || (p.SenePayTransactionId != null
-                                && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern))))
+                            || (p.ProviderTransactionId != null
+                                && EF.Functions.ILike(AppDbContext.Unaccent(p.ProviderTransactionId), pattern))))
                     || _context.Withdrawals.Any(w => w.Id == t.RelatedId
                         && t.Source == WalletSource.Withdrawal
                         && (EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientName), pattern)
@@ -1581,7 +1588,7 @@ namespace Idara.API.Controllers
                     p.DonorOrganization,
                     p.DonorAnonymous,
                     CampaignName = p.DonationCampaign != null ? p.DonationCampaign.Name : null,
-                    p.SenePayTransactionId
+                    p.ProviderTransactionId
                 })
                 .ToDictionaryAsync(p => p.Id, ct);
 
@@ -1590,7 +1597,7 @@ namespace Idara.API.Controllers
                 .Where(t => t.RelatedId != null).Select(t => t.RelatedId!.Value).Distinct().ToList();
             var wNames = await _context.Withdrawals
                 .Where(w => wIds.Contains(w.Id))
-                .Select(w => new { w.Id, w.RecipientName, w.Status, w.SenePayDisbursementId })
+                .Select(w => new { w.Id, w.RecipientName, w.Status, w.ProviderDisbursementId })
                 .ToDictionaryAsync(w => w.Id, ct);
 
             string? ResolveLabel(WalletSource source, int? relatedId)
@@ -1659,11 +1666,11 @@ namespace Idara.API.Controllers
                     case WalletSource.Donation:
                     case WalletSource.Topup:
                         return payNames.TryGetValue(relatedId.Value, out var p)
-                            ? (IdaraReference.Payment(relatedId.Value), p.SenePayTransactionId)
+                            ? (IdaraReference.Payment(relatedId.Value), p.ProviderTransactionId)
                             : (null, null);
                     case WalletSource.Withdrawal:
                         return wNames.TryGetValue(relatedId.Value, out var w)
-                            ? (IdaraReference.Withdrawal(relatedId.Value), w.SenePayDisbursementId)
+                            ? (IdaraReference.Withdrawal(relatedId.Value), w.ProviderDisbursementId)
                             : (null, null);
                     default:
                         return (null, null);
@@ -1776,7 +1783,7 @@ namespace Idara.API.Controllers
                 Title = FinanceLabels.PaymentPurpose(p.Purpose),
                 Subtitle = PayerLabel(p),
                 Method = FinanceLabels.Operator(p.Operator),
-                Reference = p.SenePayTransactionId,
+                Reference = p.ProviderTransactionId,
                 Status = FinanceLabels.PaymentStatus(p.Status),
                 // Vu du daara, un paiement reçu est une ENTRÉE : on liste ce que la
                 // famille a réglé (le montant cible), pas le net après frais SenePay.
@@ -1884,7 +1891,7 @@ namespace Idara.API.Controllers
                 Operator = p.Operator,
                 FeesPayer = p.FeesPayer,
                 Status = p.Status,
-                SenePayTransactionId = p.SenePayTransactionId,
+                SenePayTransactionId = p.ProviderTransactionId,
                 FailureReason = p.FailureReason,
                 InitiatedAt = p.InitiatedAt,
                 PaidAt = p.PaidAt,
@@ -1926,7 +1933,7 @@ namespace Idara.API.Controllers
                         (p.Student.StudentNumber != null && EF.Functions.ILike(AppDbContext.Unaccent(p.Student!.StudentNumber!), pattern))))
                     || (p.Guardian != null && EF.Functions.ILike(p.Guardian!.SearchIndex ?? "", pattern))
                     || (p.Donor != null && EF.Functions.ILike(p.Donor!.SearchIndex ?? "", pattern))
-                    || (p.SenePayTransactionId != null && EF.Functions.ILike(AppDbContext.Unaccent(p.SenePayTransactionId), pattern)));
+                    || (p.ProviderTransactionId != null && EF.Functions.ILike(AppDbContext.Unaccent(p.ProviderTransactionId), pattern)));
             }
 
             if (status.HasValue)

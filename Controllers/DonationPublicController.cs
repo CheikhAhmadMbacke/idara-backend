@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Data;
@@ -56,7 +56,7 @@ namespace Idara.API.Controllers
         private readonly IServiceProvider _services;
 
         private readonly IMemoryCache _cache;
-        private readonly SenePaySettings _senepaySettings;
+        private readonly WaveSettings _waveSettings;
         private readonly IWebHostEnvironment _env;
         private readonly ILogger<DonationPublicController> _logger;
 
@@ -78,7 +78,7 @@ namespace Idara.API.Controllers
             IDonationCampaignService campaigns,
             IServiceProvider services,
             IMemoryCache cache,
-            IOptions<SenePaySettings> senepaySettings,
+            IOptions<WaveSettings> waveSettings,
             IWebHostEnvironment env,
             ILogger<DonationPublicController> logger)
         {
@@ -86,7 +86,7 @@ namespace Idara.API.Controllers
             _campaigns = campaigns;
             _services = services;
             _cache = cache;
-            _senepaySettings = senepaySettings.Value;
+            _waveSettings = waveSettings.Value;
             _env = env;
             _logger = logger;
         }
@@ -254,13 +254,13 @@ namespace Idara.API.Controllers
                 // montant exact, le daara reçoit le net (§106). La collecte porte
                 // le choix figé à sa création : changer le réglage global ne doit
                 // pas modifier un lien déjà partagé.
-                if (campaign.FeesPayer == FeesPayer.Parent && !platform.Fees.IsConfigured)
+                if (PayerMarkup.Effective(campaign.FeesPayer) == FeesPayer.Parent && !platform.Fees.IsConfigured)
                 {
                     return BadRequest(new { status = "error",
                         message = "Les dons en ligne sont momentanément indisponibles. Réessayez plus tard." });
                 }
-                var amountToCharge = campaign.FeesPayer == FeesPayer.Parent
-                    ? platform.Fees.ChargeFor(targetAmount)
+                var amountToCharge = PayerMarkup.Effective(campaign.FeesPayer) == FeesPayer.Parent
+                    ? PayerMarkup.ChargeFor(platform.Fees, FeesPayer.Parent, targetAmount)
                     : targetAmount;
 
                 var payment = new Payment
@@ -289,11 +289,11 @@ namespace Idara.API.Controllers
                 _context.Payments.Add(payment);
                 await _context.SaveChangesAsync(ct);
 
-                SenePayInitiatePaymentResponse resp;
+                PayinStartOutcome outcome;
                 try
                 {
-                    var senepay = _services.GetRequiredService<ISenePayClient>();
-                    resp = await senepay.InitiatePaymentAsync(BuildSenePayRequest(payment, phone, donorName), ct);
+                    var wavePayin = _services.GetRequiredService<IWavePayinService>();
+                    outcome = await wavePayin.StartAsync(payment, donorName, ct);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -302,21 +302,14 @@ namespace Idara.API.Controllers
                     _logger.LogError(ex, "[don] Prestataire de paiement non configure — don {PaymentId} impossible", payment.Id);
                     return StatusCode(503, new { status = "error", message = "Les paiements sont momentanement indisponibles. Reessayez plus tard." });
                 }
-                catch (SenePayApiException ex)
-                {
-                    _logger.LogError(ex, "[don] SenePay indisponible pour le don {PaymentId}", payment.Id);
-                    return StatusCode(502, new { status = "error", message = "Wave est momentanément injoignable. Réessayez dans un instant." });
-                }
 
-                payment.SenePayInternalId = resp.InternalId;
-                payment.SenePayTransactionId = resp.Token;
-                await _context.SaveChangesAsync(ct);
-
-                if (string.IsNullOrWhiteSpace(resp.RedirectUrl))
+                if (!outcome.Ok || string.IsNullOrWhiteSpace(outcome.RedirectUrl))
                 {
-                    // Sans URL Wave, personne n'a pu payer. Le Pending sera
-                    // tranché par le webhook ou le poll — jamais par nous (§78).
-                    _logger.LogWarning("[don] Pas d'URL Wave pour le don {PaymentId} (statut {Status})", payment.Id, resp.Status);
+                    // Sans page de paiement, personne n'a pu payer. Un Pending
+                    // resté ouvert sera tranché par le webhook ou la
+                    // vérification — jamais ici (§78).
+                    _logger.LogWarning("[don] Pas de page Wave pour le don {PaymentId} : {Err}",
+                        payment.Id, outcome.ErrorMessage);
                     return StatusCode(502, new { status = "error", message = "Wave n'a pas renvoyé de page de paiement. Réessayez." });
                 }
 
@@ -327,7 +320,7 @@ namespace Idara.API.Controllers
                 {
                     status = "redirect",
                     paymentId = payment.Id,
-                    redirectUrl = resp.RedirectUrl,
+                    redirectUrl = outcome.RedirectUrl,
                     resultUrl = ResultUrl(payment),
                     amountChargedFcfa = payment.AmountFcfa
                 });
@@ -391,7 +384,7 @@ namespace Idara.API.Controllers
                 // Pending SANS jeton SenePay = l'initiation a échoué avant toute
                 // redirection : le donateur n'a jamais vu Wave, aucun double
                 // paiement possible (même raisonnement que le lien parent).
-                if (string.IsNullOrWhiteSpace(p.SenePayTransactionId)
+                if (string.IsNullOrWhiteSpace(p.ProviderTransactionId)
                     && p.InitiatedAt < DateTime.UtcNow.AddMinutes(-2))
                     continue;
                 stillPending = p;
@@ -468,7 +461,7 @@ namespace Idara.API.Controllers
                 // paiement contredirait (§249). `chargedFcfa` n'a de sens que
                 // pour un montant IMPOSÉ ; en montant libre, il n'y a rien à
                 // annoncer tant que le donateur n'a rien saisi.
-                fees = campaign.FeesPayer == FeesPayer.Parent
+                fees = PayerMarkup.Effective(campaign.FeesPayer) == FeesPayer.Parent
                     ? new
                     {
                         payerPays = true,
@@ -476,7 +469,7 @@ namespace Idara.API.Controllers
                             campaign.AmountMode == DonationAmountMode.Fixed
                             && campaign.FixedAmountFcfa is > 0
                             && platform.Fees.IsConfigured
-                                ? platform.Fees.ChargeFor(campaign.FixedAmountFcfa.Value)
+                                ? PayerMarkup.ChargeFor(platform.Fees, FeesPayer.Parent, campaign.FixedAmountFcfa.Value)
                                 : (long?)null
                     }
                     : null,
@@ -499,27 +492,7 @@ namespace Idara.API.Controllers
         }
 
         private string ResultUrl(Payment payment) =>
-            $"{_senepaySettings.PublicBaseUrl.TrimEnd('/')}/pay/{payment.Id}/{payment.PublicResultToken}";
+            $"{_waveSettings.PublicBaseUrl.TrimEnd('/')}/pay/{payment.Id}/{payment.PublicResultToken}";
 
-        private SenePayInitiatePaymentRequest BuildSenePayRequest(Payment payment, string payerPhone, string donorName)
-        {
-            var resultBase = ResultUrl(payment);
-            return new SenePayInitiatePaymentRequest
-            {
-                Amount = payment.AmountFcfa,
-                Currency = "XOF",
-                CountryCode = "SN",
-                Operator = "wave",
-                CustomerPhone = PaymentPhone.ForSenePay(payerPhone),
-                OtpCode = null,
-                OrderId = payment.Id.ToString(),
-                CustomerName = donorName,
-                WebhookUrl = _senepaySettings.WebhookPayinUrl,
-                // ⚠️ returnUrl, PAS successUrl : l'API Direct ignore successUrl et
-                // le donateur retomberait sur une page blanche (§66).
-                ReturnUrl = $"{resultBase}?status=success",
-                CancelUrl = $"{resultBase}?status=cancel"
-            };
-        }
     }
 }

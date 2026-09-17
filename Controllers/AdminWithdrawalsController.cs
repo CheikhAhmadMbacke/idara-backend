@@ -1,4 +1,4 @@
-using Idara.API.Common.Extensions;
+﻿using Idara.API.Common.Extensions;
 using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -333,7 +333,7 @@ namespace Idara.API.Controllers
                     || EF.Functions.ILike(AppDbContext.Unaccent(w.RecipientPhone), $"%{term}%")
                     || EF.Functions.ILike(AppDbContext.Unaccent(w.Motif ?? ""), $"%{term}%")
                     || EF.Functions.ILike(AppDbContext.Unaccent(w.CategoryLabel ?? ""), $"%{term}%")
-                    || EF.Functions.ILike(AppDbContext.Unaccent(w.SenePayDisbursementId ?? ""), $"%{term}%")
+                    || EF.Functions.ILike(AppDbContext.Unaccent(w.ProviderDisbursementId ?? ""), $"%{term}%")
                     || (byRef != null && w.Id == byRef));
             }
 
@@ -380,7 +380,7 @@ namespace Idara.API.Controllers
                 RecipientPhone = SenegalPhone.ToDisplay(w.RecipientPhone, "-"),
                 Status = w.Status,
                 StatusLabel = StatusLabel(w.Status),
-                SenePayDisbursementId = w.SenePayDisbursementId,
+                SenePayDisbursementId = w.ProviderDisbursementId,
                 FailureReason = w.FailureReason,
                 FailureCause = w.Status == WithdrawalStatus.Failed
                     ? PayoutFailureClassifier.Label(

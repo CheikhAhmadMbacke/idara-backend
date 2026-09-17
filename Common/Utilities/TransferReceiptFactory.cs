@@ -1,4 +1,4 @@
-using Idara.API.DTOs.Export;
+﻿using Idara.API.DTOs.Export;
 using Idara.API.Models;
 
 namespace Idara.API.Common.Utilities
@@ -34,7 +34,7 @@ namespace Idara.API.Common.Utilities
             Date = w.CompletedAt ?? w.CreatedAt,
             Motif = w.Motif,
             Reference = IdaraReference.Withdrawal(w.Id),
-            ProviderReference = w.SenePayDisbursementId
+            ProviderReference = w.ProviderDisbursementId
         };
     }
 }
