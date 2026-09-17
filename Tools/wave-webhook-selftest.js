@@ -25,13 +25,37 @@
  */
 
 const crypto = require('crypto');
+const readline = require('readline');
 
-const [, , url, secret, ...flags] = process.argv;
-if (!url || !secret) {
-  console.error('Usage : node wave-webhook-selftest.js <url> <secret-webhook> [--only-valid]');
-  process.exit(2);
-}
+const [, , urlArg, secretArg, ...flags] = process.argv;
 const onlyValid = flags.includes('--only-valid');
+const url = urlArg || 'https://api.idara.sn/api/webhooks/wave';
+
+/**
+ * Lecture masquee du secret.
+ *
+ * Le passer en ARGUMENT l ecrirait en clair dans l historique du shell --
+ * PowerShell conserve le sien sur le disque, et il y resterait des mois.
+ * C est la fuite du token SMS (§190), sous une autre forme. On le demande
+ * donc, sans echo, et il ne touche jamais le disque.
+ */
+function demanderSecret() {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ecrire = rl._writeToOutput.bind(rl);
+    rl._writeToOutput = function (chaine) {
+      // On laisse passer l invite, on masque la frappe.
+      if (rl.query && chaine.startsWith(rl.query)) return ecrire(chaine);
+      if (chaine.trim() === '') return ecrire(chaine);
+    };
+    rl.query = 'Secret du webhook (la saisie reste invisible) : ';
+    rl.question(rl.query, (rep) => {
+      rl.close();
+      process.stdout.write(String.fromCharCode(10));
+      resolve((rep || '').trim());
+    });
+  });
+}
 
 function sign(body, secretKey, timestamp) {
   const mac = crypto.createHmac('sha256', secretKey);
@@ -61,6 +85,12 @@ async function send(label, body, header, expected) {
 }
 
 (async () => {
+  const secret = secretArg || await demanderSecret();
+  if (!secret) {
+    console.error('Aucun secret fourni — on ne peut rien signer.');
+    process.exit(2);
+  }
+
   const now = Math.floor(Date.now() / 1000);
   // `id` unique : l'endpoint est idempotent, un identifiant deja vu
   // repondrait « doublon » et ne prouverait rien.
