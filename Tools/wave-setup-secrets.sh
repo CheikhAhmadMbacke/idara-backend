@@ -2,9 +2,10 @@
 # =============================================================================
 # wave-setup-secrets.sh — poser les secrets Wave, un champ à la fois.
 #
-# À lancer SUR LE SERVEUR :
+# À lancer SUR LE SERVEUR (le déploiement ne copie pas Tools/ ; le script est
+# posé dans le dossier personnel) :
 #     ssh idara@178.105.202.80
-#     bash /var/www/idara/api/Tools/wave-setup-secrets.sh
+#     bash ~/wave-setup-secrets.sh
 #
 # Pourquoi un script plutôt qu'un `nano` : trois secrets, une casse exacte à
 # respecter (`Wave__ApiKey`, deux tirets bas), un fichier qui contient déjà
@@ -184,9 +185,12 @@ case "$REPONSE" in
   200)
     vert "   ✓ Wave répond. Solde : $CORPS"
     echo
-    gras "Tout est en place. Étape suivante : le contrôle du webhook —"
-    echo "   node /var/www/idara/api/Tools/wave-webhook-selftest.js \\"
-    echo "        https://api.idara.sn/api/webhooks/wave <secret-webhook>"
+    gras "Tout est en place. Étape suivante : le contrôle du webhook."
+    echo "   ⚠️ Node n'est pas installé ici : lance-le depuis TON poste —"
+    echo "      node Idara.API/Tools/wave-webhook-selftest.js \\"
+    echo "           https://api.idara.sn/api/webhooks/wave <secret-webhook>"
+    echo "   (c'est d'ailleurs mieux : il éprouve tout le chemin réseau,"
+    echo "    exactement comme le fera Wave.)"
     ;;
   403)
     rouge "   ✗ 403 — très probablement la LISTE BLANCHE IP."
