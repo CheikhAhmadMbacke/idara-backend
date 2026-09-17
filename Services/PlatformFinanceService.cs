@@ -773,11 +773,13 @@ namespace Idara.API.Services
         /// qui sont précisément ceux qu'on cherche — mais cela impose de borner
         /// la période : une journée = au moins un appel.</para>
         ///
-        /// <para>⚠️ <b>Ce qu'on ne sait pas encore</b> : les valeurs exactes de
-        /// <c>transaction_type</c> chez Wave ne sont pas documentées. On
-        /// reconnaît donc une sortie à son <b>montant négatif</b>, et on journalise
-        /// les types rencontrés pour les apprendre au premier vrai mouvement.
-        /// Ne pas remplacer cette heuristique par une liste de types devinés.</para>
+        /// <para>✅ <b>Types observés en production le 2026-09-17</b> :
+        /// <c>api_checkout</c> (encaissement, montant positif) et
+        /// <c>api_payout</c> (décaissement, montant négatif). La règle reste
+        /// néanmoins le <b>signe du montant</b>, pas la liste : elle couvre les
+        /// types qu'on n'a pas encore vus — remboursement, dépôt, reprise — là
+        /// où une liste fermée les manquerait en silence. Les types rencontrés
+        /// continuent d'être journalisés.</para>
         /// </remarks>
         private const int ScanDays = 30;
 
@@ -803,14 +805,21 @@ namespace Idara.API.Services
                         var signed = WaveClient.ParseAmount(t.Amount);
                         if (signed >= 0) continue;      // entrée d'argent : pas une sortie
 
-                        var amount = Math.Abs(signed);
+                        // 🔴 `amount` du registre est DÉJÀ la variation du solde,
+                        // frais compris. Mesuré le 2026-09-17 sur un vrai retrait :
+                        // 500 F reçus par le bénéficiaire, `amount` = −505,
+                        // `fee` = 5, et le solde a bien reculé de 505. Ajouter
+                        // les frais par-dessus surestimait chaque ligne de 1 % —
+                        // la réconciliation aurait cru à un écart permanent.
+                        var debitReserve = Math.Abs(signed);
                         var fee = Math.Abs(WaveClient.ParseAmount(t.Fee));
+                        var amount = Math.Max(0, debitReserve - fee);   // ce que touche le bénéficiaire
                         all.Add(new ProviderPayoutRow(
                             Reference: t.TransactionId,
                             ClientReference: t.ClientReference,
                             AmountFcfa: amount,
                             FeeFcfa: fee,
-                            ReserveDebitFcfa: amount + fee,
+                            ReserveDebitFcfa: debitReserve,
                             RecipientPhone: t.CounterpartyMobile,
                             RecipientName: t.CounterpartyName,
                             CompletedAt: t.Timestamp,

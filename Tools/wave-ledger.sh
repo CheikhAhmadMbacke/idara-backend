@@ -107,10 +107,16 @@ for t in lignes:
         except (TypeError, ValueError): return 0
     montant, frais = nb(t.get("amount")), abs(nb(t.get("fee")))
     if montant and frais:
-        base = abs(montant) + (frais if montant < 0 else 0)
-        sens = "sortie" if montant < 0 else "entree"
-        print("  Taux reel (%s de %d F) : %d F de frais = %.3f %%"
-              % (sens, abs(montant), frais, 100.0 * frais / base))
+        # `amount` est DEJA la variation du solde, frais compris. Le taux se
+        # calcule donc sur le BRUT : ce que le payeur a debourse pour une
+        # entree, ce que le beneficiaire recoit pour une sortie.
+        if montant > 0:
+            brut, sens = montant + frais, "entree"      # paye par le client
+        else:
+            brut, sens = abs(montant) - frais, "sortie"  # recu par le beneficiaire
+        if brut > 0:
+            print("  Taux reel (%s, brut %d F) : %d F de frais = %.3f %%"
+                  % (sens, brut, frais, 100.0 * frais / brut))
 
 taxe = [t for t in lignes if t.get("government_tax_amount")]
 if taxe:
