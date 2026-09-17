@@ -220,14 +220,30 @@ namespace Idara.API.Controllers
                     return null;
 
                 case "merchant.payment_received":
-                    // Encaissement REÇU HORS de nos sessions (paiement marchand
-                    // direct depuis l'application Wave, sans passer par Idara).
-                    // Rien à régler : aucune facture ne l'attend. On le trace —
-                    // la réconciliation le verra dans le registre, et c'est là
-                    // qu'il doit être traité, pas ici.
+                case "b2b.payment_received":
+                    // 🔑 De l'argent qui ENTRE sans qu'aucune écriture d'Idara ne
+                    // l'explique : paiement marchand fait directement depuis
+                    // l'application Wave, ou virement d'entreprise à entreprise.
+                    //
+                    // Rien à régler ici — aucune facture ne l'attend, et c'est la
+                    // réconciliation qui doit en décider sur le registre. Mais on
+                    // le dit ASSEZ FORT pour qu'il soit retrouvable : sans cette
+                    // ligne, la réserve enfle, `R = D + P` cesse de tomber juste
+                    // (§112), et rien n'indique d'où vient l'écart. C'est
+                    // précisément la raison pour laquelle ces événements sont
+                    // abonnés alors qu'ils ne servent à rien aujourd'hui.
+                    _logger.LogWarning(
+                        "[webhook/wave] ENTRÉE HORS IDARA ({Type}) : id={Id} montant={Amount} "
+                        + "frais={Fee} expéditeur={Sender} référence={Ref}. Aucune écriture créée "
+                        + "— à rapprocher à la réconciliation.",
+                        type, data?.Id, data?.Amount, data?.Fee,
+                        MaskPhone(data?.SenderMobile), data?.ClientReference);
+                    return null;
+
+                case "b2b.payment_failed":
                     _logger.LogInformation(
-                        "[webhook/wave] paiement marchand hors session : id={Id} montant={Amount} frais={Fee}",
-                        data?.Id, data?.Amount, data?.Fee);
+                        "[webhook/wave] virement entreprise échoué : id={Id} référence={Ref}",
+                        data?.Id, data?.ClientReference);
                     return null;
 
                 case "test.test_event":
@@ -401,6 +417,15 @@ namespace Idara.API.Controllers
             try { return Convert.FromHexString(hex); }
             catch (FormatException) { return null; }
         }
+
+        /// <summary>
+        /// Un journal ne porte jamais un numéro en clair (§190) : les quatre
+        /// derniers chiffres suffisent à reconnaître un expéditeur au support.
+        /// </summary>
+        private static string MaskPhone(string? phone) =>
+            string.IsNullOrWhiteSpace(phone) || phone.Length < 4
+                ? "***"
+                : string.Concat(new string('*', phone.Length - 4), phone.AsSpan(phone.Length - 4));
 
         private static string Sha256Hex(string input) =>
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input))).ToLowerInvariant();
