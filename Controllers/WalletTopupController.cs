@@ -96,15 +96,11 @@ namespace Idara.API.Controllers
                     "Recharge indisponible : les commissions du prestataire ne sont pas "
                     + "renseignées. SuperAdmin → Réglages plateforme → Frais."));
             }
-            // 🔴 AUCUNE majoration : l'article 8.2 du contrat Wave interdit de
-            // facturer des frais à un Détenteur pour payer via Wave, sous peine
-            // de résiliation SANS PRÉAVIS. La recharge est l'un des rares
-            // parcours où c'est bien un Détenteur qui paie. On débite donc le
-            // montant exact, et le wallet est crédité du NET (mode School) —
-            // c'est l'école qui supporte la commission, ce qui est conforme :
-            // elle reçoit, elle ne paie pas au sens de la clause.
+            // Recharger son propre solde : l'école se paie à elle-même, et c'est
+            // elle qui porte les frais. Le montant débité est donc RÉSOLU pour
+            // que le solde soit crédité de la cible exacte — §105.
             var targetAmount = dto.Amount;
-            var amountToCharge = targetAmount;
+            var amountToCharge = PayerMarkup.ChargeFor(platform.Fees, FeesPayer.Parent, targetAmount);
             var payment = new Payment
             {
                 SchoolId = schoolId.Value,
@@ -117,7 +113,7 @@ namespace Idara.API.Controllers
                 FeesFcfa = 0,
                 NetCreditedFcfa = 0,
                 Operator = operatorEnum,
-                FeesPayer = FeesPayer.School,
+                FeesPayer = FeesPayer.Parent,
                 Status = PaymentStatus.Pending,
                 InitiatedAt = DateTime.UtcNow,
                 PublicResultToken = Guid.NewGuid().ToString("N")

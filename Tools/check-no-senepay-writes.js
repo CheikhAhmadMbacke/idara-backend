@@ -10,8 +10,7 @@
  *   1. une méthode d'ÉCRITURE réapparaît chez l'ancien prestataire
  *      (initier un encaissement ou un décaissement) ;
  *   2. un chemin d'argent contourne le point unique d'ouverture de session ;
- *   3. la majoration au payeur est réautorisée sans avenant (article 8.2 du
- *      contrat Wave : résiliation SANS PRÉAVIS) ;
+ *   3. la politique de majoration cesse de passer par son point unique ;
  *   4. un taux de commission Wave se retrouve écrit en dur.
  *
  * Il ne sert à rien le jour où on l'écrit : il sert le jour où quelqu'un, dans
@@ -94,20 +93,39 @@ checks++;
 }
 
 // ---------------------------------------------------------------------------
-// 3) La majoration au payeur reste interdite (article 8.2)
+// 3) La politique de majoration passe par le POINT UNIQUE
 // ---------------------------------------------------------------------------
+// Ce controle ne dit PAS quelle politique appliquer : la majoration au payeur
+// est permise ou non selon la position contractuelle du moment, et cela se
+// change en une ligne dans PayerMarkup.Allowed. Ce qu'il garde, c'est que la
+// question ne se repose nulle part ailleurs -- avant PayerMarkup, six sites
+// comparaient FeesPayer == Parent chacun de leur cote, dont deux qui
+// oubliaient de verifier que les taux etaient renseignes.
 checks++;
 {
   const file = path.join(ROOT, 'Common', 'Utilities', 'PayerMarkup.cs');
   if (!fs.existsSync(file)) {
-    failures.push('Common/Utilities/PayerMarkup.cs a disparu : le verrou de l\'article 8.2 n\'existe plus.');
-  } else {
+    failures.push("Common/Utilities/PayerMarkup.cs a disparu : la politique de frais n'a plus de point unique.");
+  } else if (!/public\s+const\s+bool\s+Allowed\s*=\s*(true|false)\s*;/.test(fs.readFileSync(file, 'utf8'))) {
+    failures.push("PayerMarkup.Allowed n'est plus une constante lisible : la politique de frais devient indevinable.");
+  }
+
+  // Aucun appel direct a Fees.ChargeFor hors du point unique et de son moteur.
+  const autorises = new Set([
+    'Common/Utilities/PayerMarkup.cs',
+    'Common/Utilities/ProviderFees.cs',
+    'Services/GuardianPaymentService.cs',   // GuardianOutstanding.ChargeFor delegue a PayerMarkup
+    'Controllers/PlatformSettingsController.cs', // simulation d'affichage, ne facture rien
+  ]);
+  for (const file of files) {
+    const rel = path.relative(ROOT, file).split(path.sep).join('/');
+    if (autorises.has(rel)) continue;
     const text = fs.readFileSync(file, 'utf8');
-    if (!/public\s+const\s+bool\s+Allowed\s*=\s*false\s*;/.test(text)) {
+    if (/Fees\.ChargeFor\s*\(/.test(text)) {
       failures.push(
-        'PayerMarkup.Allowed n\'est plus a false : majorer un payeur pour qu\'il regle ' +
-        'via Wave declenche la resiliation SANS PREAVIS (article 8.2). Ne changer ' +
-        'qu\'avec un avenant ecrit au contrat.'
+        `${rel} applique la majoration directement (Fees.ChargeFor). Passer par ` +
+        `PayerMarkup.ChargeFor : sinon un changement de politique laisse ce ` +
+        `chemin-la en arriere, et une famille paie ce qu'une autre ne paie pas.`
       );
     }
   }
@@ -139,7 +157,7 @@ if (failures.length === 0) {
   console.log(`\n${checks} controles, 0 en echec.`);
   console.log('   - aucune ecriture vers l\'ancien prestataire');
   console.log('   - tous les encaissements passent par IWavePayinService');
-  console.log('   - la majoration au payeur reste interdite (article 8.2)');
+  console.log('   - la politique de majoration passe par son point unique');
   console.log('   - les cles d\'idempotence des decaissements sont stables');
   process.exit(0);
 }

@@ -168,13 +168,10 @@ namespace Idara.API.Controllers
             }
 
             settings.BillingMode = dto.BillingMode;
-            // 🔴 VERROUILLÉ. L'écran propose encore le choix pour les écoles
-            // qui l'ont connu, mais le serveur ne l'accepte plus : facturer des
-            // frais à un payeur pour régler via Wave, c'est l'article 8.2 du
-            // contrat, donc la résiliation SANS PRÉAVIS — déclenchable par un
-            // simple clic d'un directeur. Le réglage est donc ignoré, pas
-            // refusé : refuser bloquerait l'enregistrement de TOUS les autres
-            // paramètres de la page pour une valeur qu'on sait corriger.
+            // Le choix appartient à l'école : « le parent paie les frais » ou
+            // « l'établissement les absorbe ». Il passe par PayerMarkup, qui
+            // reste le point unique — si la politique devait changer, un seul
+            // fichier la porte (voir PayerMarkup.Allowed).
             settings.FeesPayer = PayerMarkup.Effective(dto.FeesPayer);
             settings.DonationFeesPayer = PayerMarkup.Effective(dto.DonationFeesPayer);
             settings.MonthlyDueDay = dto.MonthlyDueDay;
