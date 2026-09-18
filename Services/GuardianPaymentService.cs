@@ -62,10 +62,20 @@ namespace Idara.API.Services
         public long ChargeFor(long target) =>
             PayerMarkup.ChargeFor(Fees, FeesPayer, target);
 
-        /// <summary>Majoration effective du total dû, en % — AFFICHAGE seulement.</summary>
+        /// <summary>
+        /// Taux NOMINAL du prestataire, en % — AFFICHAGE seulement.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 C'était la majoration EFFECTIVE du total dû : exacte, mais elle
+        /// rendait « 1,01 % » là où le prestataire annonce « 1 % », et elle
+        /// changeait avec le montant. Depuis le 2026-09-18 on annonce le taux
+        /// rond et on montre le MONTANT des frais à côté — lui reste exact au
+        /// franc, puisqu'il se lit <c>AmountToChargeFcfa − TotalDueFcfa</c>.
+        /// </remarks>
         public double ParentFeePercent =>
-            FeesPayer == FeesPayer.Parent && Fees.IsConfigured && TotalDueFcfa > 0
-                ? Fees.EffectiveMarkupPercent(TotalDueFcfa)
+            PayerMarkup.Effective(FeesPayer) == FeesPayer.Parent
+            && Fees.PayinRatePercent is double taux
+                ? Math.Round(taux, 2)
                 : 0;
     }
 

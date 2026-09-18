@@ -174,7 +174,7 @@
       footer: 'Paiement sécurisé via Wave · Idara',
       hello_name: 'Bonjour {name}, voici votre situation.', hello: 'Voici votre situation.',
       recent: 'Paiement de <b>{amount}</b> confirmé.', receipt: 'Voir le reçu', subtotal: 'Sous-total',
-      fees_of: 'dont frais de service {pct} % ({due} + {fee})', fees_pct: 'dont frais de service {pct} %',
+      fees_of: 'dont {fee} de frais de service ({pct} %)', fees_pct: 'dont {fee} de frais de service ({pct} %)',
       load_error: 'Impossible de charger. Vérifiez votre connexion puis rechargez la page.',
       start_error: 'Le paiement n\'a pas pu être lancé. Réessayez.', net_error: 'Connexion impossible. Réessayez.',
       rate_limited: 'Trop de tentatives. Patientez une minute puis réessayez.',
@@ -196,7 +196,7 @@
       footer: 'دفع آمن عبر Wave · Idara',
       hello_name: 'مرحبًا {name}، إليك وضعك.', hello: 'إليك وضعك.',
       recent: 'تم تأكيد دفع <b>{amount}</b>.', receipt: 'عرض الإيصال', subtotal: 'المجموع الفرعي',
-      fees_of: 'منها رسوم خدمة {pct} % ({due} + {fee})', fees_pct: 'منها رسوم خدمة {pct} %',
+      fees_of: 'منها {fee} رسوم خدمة ({pct} %)', fees_pct: 'منها {fee} رسوم خدمة ({pct} %)',
       load_error: 'تعذّر التحميل. تحقق من اتصالك ثم أعد تحميل الصفحة.',
       start_error: 'تعذّر بدء الدفع. حاول مرة أخرى.', net_error: 'لا يوجد اتصال. حاول مرة أخرى.',
       rate_limited: 'محاولات كثيرة. انتظر دقيقة ثم حاول مرة أخرى.',
@@ -334,7 +334,7 @@
     $('children').innerHTML = html;
     $('total').textContent = fmt(s.amountToChargeFcfa);
     if (s.feePercent > 0 && s.amountToChargeFcfa !== s.totalDueFcfa) {
-      $('fees').textContent = t('fees_of', { pct: s.feePercent, due: fmt(s.totalDueFcfa), fee: fmt(s.amountToChargeFcfa - s.totalDueFcfa) });
+      $('fees').textContent = t('fees_of', { pct: s.feePercent, fee: fmt(s.amountToChargeFcfa - s.totalDueFcfa) });
       show('fees', true);
     } else { show('fees', false); }
     show('due-card', true);
@@ -349,12 +349,50 @@
     });
     return out;
   }
+  // Le dernier montant pour lequel un devis a ete demande, et sa reponse.
+  var quoteFor = -1, quote = null, quoteTimer = null;
+
+  // 🔴 Le total et les frais viennent du SERVEUR, jamais d'un calcul ici.
+  // Cette fonction composait ceil(somme x (1 + taux/100)) : une seconde
+  // implementation d'une regle qui ne se multiplie pas mais se RESOUT (§256).
+  // Elle pouvait annoncer quelques francs de moins que ce qui serait debite --
+  // et une page publique qui annonce un montant fait une PROMESSE (§249).
+  function askQuote(sum) {
+    if (sum === quoteFor) return;
+    quoteFor = sum;
+    if (quoteTimer) clearTimeout(quoteTimer);
+    if (sum <= 0) { quote = null; renderFreeTotal(sum); return; }
+    quoteTimer = setTimeout(function () {
+      fetch(base + '/quote?target=' + sum, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (q) {
+          // Une reponse en retard ne doit pas ecraser une saisie plus recente.
+          if (!q || q.targetFcfa !== quoteFor) return;
+          quote = q;
+          renderFreeTotal(q.targetFcfa);
+        })
+        .catch(function () { /* on garde l'affichage precedent */ });
+    }, 350);
+  }
+
+  function renderFreeTotal(sum) {
+    var q = quote && quote.targetFcfa === sum ? quote : null;
+    // Tant que le devis n'est pas revenu, on montre la somme saisie : jamais un
+    // total approche, qui serait dementi une seconde plus tard.
+    $('free-total').textContent = fmt(q ? q.chargeFcfa : sum);
+    if (q && q.feesFcfa > 0) {
+      $('free-fees').textContent = t('fees_pct', { pct: state ? state.feePercent : 0, fee: fmt(q.feesFcfa) });
+      show('free-fees', true);
+    } else {
+      show('free-fees', false);
+    }
+    $('pay-btn').disabled = sum < (state ? state.minAmountFcfa : 200);
+  }
+
   function updateFreeTotal() {
     var sum = freeAmounts().reduce(function (a, b) { return a + b.amountFcfa; }, 0);
-    var charge = state && state.feePercent > 0 ? Math.ceil(sum * (1 + state.feePercent / 100)) : sum;
-    $('free-total').textContent = fmt(charge);
-    if (state && state.feePercent > 0 && sum > 0) { $('free-fees').textContent = t('fees_pct', { pct: state.feePercent }); show('free-fees', true); } else { show('free-fees', false); }
-    $('pay-btn').disabled = sum < (state ? state.minAmountFcfa : 200);
+    renderFreeTotal(sum);
+    askQuote(sum);
   }
 
   function load() {

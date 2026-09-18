@@ -1,4 +1,6 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
+using Idara.API.Enums;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
 using Idara.API.DTOs.Payment;
@@ -23,12 +25,6 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         public PaymentConfigController(AppDbContext context) => _context = context;
 
-        /// <summary>
-        /// Mensualité type sur laquelle la majoration est évaluée pour
-        /// l'affichage. Un montant, pas un taux — voir PaymentConfigDto.
-        /// </summary>
-        private const long MarkupReferenceFcfa = 10_000;
-
         [HttpGet]
         public async Task<ActionResult<ApiResponse<PaymentConfigDto>>> Get(CancellationToken ct)
         {
@@ -36,15 +32,55 @@ namespace Idara.API.Controllers
             var fees = s.Fees;
             return Ok(ApiResponse<PaymentConfigDto>.Ok(new PaymentConfigDto
             {
-                // Évalué sur une mensualité type. C'est un MONTANT de référence,
-                // pas un taux en dur : le pourcentage qui en sort est purement
-                // indicatif, et le montant réel est calculé à l'initiation.
-                ParentFeePercent = fees.IsConfigured
-                    ? Math.Round(fees.EffectiveMarkupPercent(MarkupReferenceFcfa), 2)
+                // 🔑 Le taux NOMINAL du prestataire — « 1 % » — et non la
+                // majoration effective d'une mensualité type, qui valait
+                // « 1,01 % » et faisait buter le lecteur sur une décimale qui
+                // ne lui apprend rien. Décision de Cheikh le 2026-09-18 : on
+                // annonce le taux rond, et c'est le MONTANT des frais, exact au
+                // franc, qui porte la vérité. `PayinRatePercent` est la source
+                // unique de tout taux d'encaissement affiché (§277) : CGU, page
+                // des tarifs et écrans lisent désormais le même chiffre.
+                ParentFeePercent = fees.PayinRatePercent is double taux
+                    ? Math.Round(taux, 2)
                     : 0,
-                MarkupReferenceFcfa = MarkupReferenceFcfa,
                 FeesConfigured = fees.IsConfigured,
                 MinPayinFcfa = s.MinPayinFcfa
+            }));
+        }
+
+        /// <summary>
+        /// Ce que coûte réellement un encaissement de <paramref name="target"/>,
+        /// au franc près : montant visé, frais, montant à débiter.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Il existe pour que le client n'ait JAMAIS à calculer des frais.</b>
+        /// Les écrans à montant libre (recharge, don, paiement libre) affichaient
+        /// un pourcentage sans montant, et la page publique du lien de paiement
+        /// allait jusqu'à recomposer <c>ceil(montant × (1 + taux/100))</c> en
+        /// JavaScript — une seconde implémentation d'une règle qui ne se
+        /// multiplie pas mais se RÉSOUT (§256), donc fausse de quelques francs
+        /// et divergente le jour où la grille change.
+        ///
+        /// <para>🔑 Le devis répond pour le mode « frais au payeur ». L'appelant
+        /// ne l'affiche que lorsque l'école a choisi ce mode — et de toute façon
+        /// c'est l'initiation, côté serveur, qui fixe ce qui sera réellement
+        /// débité.</para>
+        /// </remarks>
+        [HttpGet("quote")]
+        public async Task<ActionResult<ApiResponse<PaymentQuoteDto>>> Quote(
+            [FromQuery] long target, CancellationToken ct)
+        {
+            var s = await _context.GetPlatformSettingsAsync(ct);
+            var fees = s.Fees;
+            if (target < 0) target = 0;
+
+            var charge = PayerMarkup.ChargeFor(fees, FeesPayer.Parent, target);
+            return Ok(ApiResponse<PaymentQuoteDto>.Ok(new PaymentQuoteDto
+            {
+                TargetFcfa = target,
+                ChargeFcfa = charge,
+                FeesFcfa = charge - target,
+                FeesConfigured = fees.IsConfigured,
             }));
         }
     }

@@ -80,6 +80,50 @@ namespace Idara.API.Controllers
         }
 
         /// <summary>`GET /pay/link/{token}/state` — dette du jour + éventuel paiement en cours.</summary>
+        /// <summary>
+        /// Ce que coûtera un montant LIBRE saisi sur la page : montant visé,
+        /// frais, total à régler — au franc près.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Il remplace un calcul fait en JavaScript.</b> La page composait
+        /// <c>ceil(montant × (1 + taux/100))</c> pour annoncer un total. C'est
+        /// une seconde implémentation d'une règle qui ne se multiplie pas mais
+        /// se RÉSOUT (§256) : le chiffre affiché pouvait différer de quelques
+        /// francs de ce qui serait réellement débité, et il aurait divergé pour
+        /// de bon le jour où la grille change. Une page publique qui annonce un
+        /// montant fait une PROMESSE (§249) — elle doit la tenir au franc.
+        ///
+        /// <para>Sans effet de bord, donc pas de limitation de débit propre :
+        /// la page appelle après une pause de saisie, et l'anti-martèlement du
+        /// <c>state</c> couvre déjà l'usage abusif du lien.</para>
+        /// </remarks>
+        [HttpGet("{token}/quote")]
+        public async Task<IActionResult> GetQuote(
+            string token, [FromQuery] long target, CancellationToken ct)
+        {
+            var link = await LookupAsync(token, ct);
+            if (link == null) return NotFound(new { status = "not_found" });
+            if (link.RevokedAt != null || link.Guardian.IsDeleted)
+                return Ok(new { status = "revoked" });
+
+            if (target < 0) target = 0;
+            var outstanding = await _guardianPayments.GetOutstandingAsync(
+                link.GuardianId, link.SchoolId, ct);
+
+            // Pas de reglages de paiement pour cette ecole : on n ajoute rien.
+            // C est la meme reponse que partout ailleurs (§249) -- on reclame la
+            // cible nue plutot qu un chiffre invente.
+            var charge = outstanding?.ChargeFor(target) ?? target;
+
+            return Ok(new
+            {
+                status = "ok",
+                targetFcfa = target,
+                chargeFcfa = charge,
+                feesFcfa = charge - target,
+            });
+        }
+
         [HttpGet("{token}/state")]
         public async Task<IActionResult> GetState(string token, CancellationToken ct)
         {
