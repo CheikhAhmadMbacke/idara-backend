@@ -377,7 +377,7 @@
         if (j.status === 'redirect' && j.redirectUrl) {
           // Navigation de l'onglet courant (jamais window.open) : ni popup-
           // blocker ni navigateur intégré WhatsApp ne peuvent la bloquer (§113).
-          // Le retour se fait par la page de résultat via le returnUrl SenePay.
+          // Le retour se fait par la page de résultat via le returnUrl du prestataire.
           window.location.href = j.redirectUrl;
           return;
         }
