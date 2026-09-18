@@ -32,7 +32,11 @@ namespace Idara.API.Controllers
         public async Task<ActionResult<IEnumerable<StaffMemberDto>>> GetStaff(CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            // 🔴 Un compte AUTHENTIFIÉ mais sans école (parent, donateur, SuperAdmin)
+            // n'a pas une session morte : lui répondre 401 fait tenter au client une
+            // rotation de jeton, qui réussit, puis rejouer — et le second 401 purge la
+            // session. C'est un refus d'ACCÈS (403), pas d'identité (§287).
+            if (schoolId == null) return Forbid();
 
             var staff = await _context.Users
                 .Where(u => u.SchoolId == schoolId.Value
@@ -61,7 +65,11 @@ namespace Idara.API.Controllers
             CancellationToken ct)
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            // 🔴 Un compte AUTHENTIFIÉ mais sans école (parent, donateur, SuperAdmin)
+            // n'a pas une session morte : lui répondre 401 fait tenter au client une
+            // rotation de jeton, qui réussit, puis rejouer — et le second 401 purge la
+            // session. C'est un refus d'ACCÈS (403), pas d'identité (§287).
+            if (schoolId == null) return Forbid();
 
             var query = _context.StaffAttendances
                 .Include(a => a.Staff)

@@ -22,7 +22,11 @@ namespace Idara.API.Controllers
         public async Task<IActionResult> GetAll()
         {
             var schoolId = User.GetSchoolId();
-            if (schoolId == null) return Unauthorized();
+            // 🔴 Un compte AUTHENTIFIÉ mais sans école (parent, donateur, SuperAdmin)
+            // n'a pas une session morte : lui répondre 401 fait tenter au client une
+            // rotation de jeton, qui réussit, puis rejouer — et le second 401 purge la
+            // session. C'est un refus d'ACCÈS (403), pas d'identité (§287).
+            if (schoolId == null) return Forbid();
 
             var items = await _context.Subjects
                 .Where(s => s.SchoolId == schoolId.Value && !s.IsDeleted)
