@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Idara.API.Common.Extensions;
 using Idara.API.Constants;
 using Idara.API.Data;
@@ -92,6 +93,160 @@ namespace Idara.API.Controllers
             return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Plan assigné."));
         }
 
+
+        // ================================================================
+        //  🆘 LE SURSIS — l'issue de secours du SuperAdmin
+        // ================================================================
+
+        public class ReprieveDto
+        {
+            /// <summary>Jusqu'à quand. Obligatoire — un sursis sans fin s'oublie.</summary>
+            [Required]
+            public DateTime Until { get; set; }
+
+            /// <summary>Motif, relu dans six mois. Obligatoire.</summary>
+            [Required, StringLength(300, MinimumLength = 3)]
+            public string Reason { get; set; } = string.Empty;
+        }
+
+        /// <summary>Durée maximale d'un sursis. Au-delà, ce n'est plus un secours, c'est un oubli.</summary>
+        private const int MaxReprieveDays = 30;
+
+        /// <summary>
+        /// `POST /api/subscriptions/{schoolId}/reprieve` — rend l'accès à une
+        /// école bloquée, temporairement.
+        /// </summary>
+        /// <remarks>
+        /// <para>🔑 <b>Le compte à rebours est GELÉ</b>, pas seulement masqué :
+        /// <see cref="Subscription.ReadOnlyEndsAt"/> est repoussé de la durée du
+        /// sursis. Une école bloquée depuis deux jours à qui l'on accorde cinq
+        /// jours retrouve donc ses cinq jours restants à l'expiration. Sans ce
+        /// décalage, le sursis ne ferait que cacher le blocage : l'école
+        /// redécouvrirait un accès coupé le jour même où il expire, sans avoir
+        /// rien gagné.</para>
+        ///
+        /// <para>Ne touche NI au statut, NI à la facture : la dette reste due.
+        /// Le sursis suspend la punition, pas le paiement.</para>
+        /// </remarks>
+        [HttpPost("{schoolId:int}/reprieve")]
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        public async Task<ActionResult<ApiResponse<SubscriptionDto>>> GrantReprieve(
+            int schoolId, [FromBody] ReprieveDto dto, CancellationToken ct)
+        {
+            var sub = await _context.Subscriptions
+                .Include(s => s.School).Include(s => s.Plan)
+                .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
+            if (sub == null) return NotFound(ApiResponse<SubscriptionDto>.Fail("Abonnement introuvable."));
+
+            var now = DateTime.UtcNow;
+            var until = DateTime.SpecifyKind(dto.Until, DateTimeKind.Utc);
+            if (until <= now)
+                return BadRequest(ApiResponse<SubscriptionDto>.Fail("La date de fin du sursis doit être dans le futur."));
+            if (until > now.AddDays(MaxReprieveDays))
+                return BadRequest(ApiResponse<SubscriptionDto>.Fail(
+                    $"Un sursis ne peut pas dépasser {MaxReprieveDays} jours. Renouvelez-le si la panne dure."));
+
+            ApplyReprieve(sub, until, dto.Reason.Trim(), now);
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogWarning(
+                "[subscription-reprieve] École {SchoolId} : sursis jusqu'au {Until:yyyy-MM-dd} par SuperAdmin {AdminId} — {Reason}",
+                schoolId, until, User.GetUserId(), dto.Reason);
+
+            return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Sursis accordé."));
+        }
+
+        /// <summary>
+        /// `POST /api/subscriptions/reprieve-blocked` — accorde le même sursis à
+        /// TOUTES les écoles actuellement bloquées.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 C'est le geste des jours d'incident : une panne du prestataire ne
+        /// frappe pas une école, elle les frappe toutes — et depuis que les
+        /// échéances tombent le même jour, elles tombent ensemble. Cliquer école
+        /// par école au pire moment, c'est en oublier une.
+        /// </remarks>
+        [HttpPost("reprieve-blocked")]
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        public async Task<ActionResult<ApiResponse<int>>> GrantReprieveToBlocked(
+            [FromBody] ReprieveDto dto, CancellationToken ct)
+        {
+            var now = DateTime.UtcNow;
+            var until = DateTime.SpecifyKind(dto.Until, DateTimeKind.Utc);
+            if (until <= now)
+                return BadRequest(ApiResponse<int>.Fail("La date de fin du sursis doit être dans le futur."));
+            if (until > now.AddDays(MaxReprieveDays))
+                return BadRequest(ApiResponse<int>.Fail(
+                    $"Un sursis ne peut pas dépasser {MaxReprieveDays} jours."));
+
+            var bloquees = await _context.Subscriptions
+                .Where(s => s.Status == SubscriptionStatus.ReadOnly
+                            || s.Status == SubscriptionStatus.Suspended
+                            || s.Status == SubscriptionStatus.PendingPayment)
+                .ToListAsync(ct);
+
+            foreach (var sub in bloquees)
+                ApplyReprieve(sub, until, dto.Reason.Trim(), now);
+
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogWarning(
+                "[subscription-reprieve] {Count} école(s) sous sursis jusqu'au {Until:yyyy-MM-dd} par SuperAdmin {AdminId} — {Reason}",
+                bloquees.Count, until, User.GetUserId(), dto.Reason);
+
+            return Ok(ApiResponse<int>.Ok(bloquees.Count,
+                bloquees.Count == 0
+                    ? "Aucune école bloquée : rien à faire."
+                    : $"{bloquees.Count} école(s) débloquée(s) jusqu'au {until:dd/MM}."));
+        }
+
+        /// <summary>`DELETE /api/subscriptions/{schoolId}/reprieve` — referme le sursis tout de suite.</summary>
+        [HttpDelete("{schoolId:int}/reprieve")]
+        [Authorize(Roles = UserRoles.SuperAdmin)]
+        public async Task<ActionResult<ApiResponse<SubscriptionDto>>> RevokeReprieve(
+            int schoolId, CancellationToken ct)
+        {
+            var sub = await _context.Subscriptions
+                .Include(s => s.School).Include(s => s.Plan)
+                .FirstOrDefaultAsync(s => s.SchoolId == schoolId, ct);
+            if (sub == null) return NotFound(ApiResponse<SubscriptionDto>.Fail("Abonnement introuvable."));
+
+            // ⚠️ On ne REPREND PAS les jours qu'on avait décalés : l'école a bien
+            // profité de son sursis jusqu'ici. Les lui reprendre reviendrait à la
+            // punir deux fois.
+            sub.ReprieveUntil = null;
+            sub.ReprieveReason = null;
+            sub.ReprieveById = null;
+            sub.ReprieveAt = null;
+            sub.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+
+            _logger.LogWarning("[subscription-reprieve] École {SchoolId} : sursis levé par SuperAdmin {AdminId}",
+                schoolId, User.GetUserId());
+            return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub), "Sursis levé."));
+        }
+
+        /// <summary>
+        /// Pose le sursis et DÉCALE le compte à rebours de sa durée, pour que les
+        /// jours accordés ne soient pas volés à l'école.
+        /// </summary>
+        private void ApplyReprieve(Subscription sub, DateTime until, string reason, DateTime now)
+        {
+            // La durée réellement offerte part de MAINTENANT, ou de la fin du
+            // sursis en cours quand on le prolonge — sinon prolonger décalerait
+            // le compteur deux fois pour les mêmes jours.
+            var depart = sub.ReprieveUntil is { } encours && encours > now ? encours : now;
+            var duree = until - depart;
+
+            if (duree > TimeSpan.Zero && sub.ReadOnlyEndsAt is { } fin)
+                sub.ReadOnlyEndsAt = fin.Add(duree);
+
+            sub.ReprieveUntil = until;
+            sub.ReprieveReason = reason;
+            sub.ReprieveById = User.GetUserId();
+            sub.ReprieveAt = now;
+            sub.UpdatedAt = now;
+        }
         /// <summary>Plans publics actifs (pour l'écran « changer de plan » côté école).</summary>
         [HttpGet("available-plans")]
         [Authorize(Roles = UserRoles.SchoolAdmin + "," + UserRoles.SchoolStaff)]
@@ -272,7 +427,10 @@ namespace Idara.API.Controllers
             GracePeriodEndsAt = s.GracePeriodEndsAt,
             ReadOnlyEndsAt = s.ReadOnlyEndsAt,
             ActivatedAt = s.ActivatedAt,
-            SuspendedAt = s.SuspendedAt
+            SuspendedAt = s.SuspendedAt,
+            ReprieveUntil = s.ReprieveUntil,
+            ReprieveReason = s.ReprieveReason,
+            ReprieveAt = s.ReprieveAt
         };
     }
 }

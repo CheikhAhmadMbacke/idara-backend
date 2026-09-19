@@ -184,6 +184,14 @@ namespace Idara.API.DTOs.Subscription
         /// désignait une porte qu'elles n'empruntent pas.
         /// </remarks>
         public string? PaymentLinkUrl { get; set; }
+
+        /// <summary>
+        /// 🆘 Sursis en cours : jusqu'à quand le blocage est suspendu, et
+        /// pourquoi. Null = pas de sursis.
+        /// </summary>
+        public DateTime? ReprieveUntil { get; set; }
+        public string? ReprieveReason { get; set; }
+        public DateTime? ReprieveAt { get; set; }
         public int? PlanId { get; set; }
         public string? PlanName { get; set; }
         public BillingCycle BillingCycle { get; set; }

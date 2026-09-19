@@ -51,6 +51,40 @@ namespace Idara.API.Models
         public DateTime? ActivatedAt { get; set; }
         public DateTime? SuspendedAt { get; set; }
 
+        // ================================================================
+        //  🆘 LE SURSIS — l'issue de secours du SuperAdmin (2026-09-19)
+        // ================================================================
+        //
+        // Pourquoi il existe : quand la panne vient de NOUS ou du prestataire,
+        // l'école se retrouve punie pour une faute qui n'est pas la sienne. Si
+        // Wave tombe dans les jours qui précèdent le 8, les parents ne peuvent
+        // plus payer, le portefeuille reste vide, le prélèvement échoue — et le
+        // lien de paiement, qui passe lui aussi par Wave, ne permet même pas de
+        // se débloquer. L'école est enfermée sans clé.
+        //
+        // 🔑 Ce n'est PAS un effacement de dette : la facture reste due, le
+        // statut reste ce qu'il est. Le sursis ne fait que suspendre l'EFFET du
+        // blocage, et il expire tout seul.
+        //
+        // ⚠️ Il existait déjà une issue de secours — l'interrupteur global
+        // `SubscriptionEnforcementEnabled` — mais elle est sans date. Personne ne
+        // remarque jamais qu'on a oublié de la refermer, puisque tout fonctionne.
+        // D'où une date OBLIGATOIRE ici.
+
+        /// <summary>
+        /// Jusqu'à quand le blocage est suspendu. <c>null</c> = aucun sursis.
+        /// </summary>
+        public DateTime? ReprieveUntil { get; set; }
+
+        /// <summary>Motif du sursis — obligatoire, il sera relu dans six mois.</summary>
+        public string? ReprieveReason { get; set; }
+
+        /// <summary>Le SuperAdmin qui l'a accordé.</summary>
+        public int? ReprieveById { get; set; }
+
+        /// <summary>Quand il a été accordé.</summary>
+        public DateTime? ReprieveAt { get; set; }
+
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
     }

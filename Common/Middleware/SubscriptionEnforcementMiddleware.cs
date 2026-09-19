@@ -114,6 +114,20 @@ namespace Idara.API.Common.Middleware
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId.Value, ctx.RequestAborted);
             if (sub == null) { await _next(ctx); return; }
 
+            // 🆘 SURSIS accordé par le SuperAdmin : le blocage est suspendu, sans
+            // que la dette ni le statut ne bougent. C'est l'issue de secours pour
+            // les pannes qui viennent de NOUS ou du prestataire — une école ne
+            // doit pas être punie pour une faute qui n'est pas la sienne.
+            //
+            // Vérifié AVANT tout calcul de blocage, et sur l'horloge : le sursis
+            // porte une date de fin, donc il se referme seul. Rien à ne pas
+            // oublier.
+            if (sub.ReprieveUntil is { } until && until > DateTime.UtcNow)
+            {
+                await _next(ctx);
+                return;
+            }
+
             var isWrite = HttpMethods.IsPost(ctx.Request.Method)
                 || HttpMethods.IsPut(ctx.Request.Method)
                 || HttpMethods.IsPatch(ctx.Request.Method)

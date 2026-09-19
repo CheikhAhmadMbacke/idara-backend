@@ -351,6 +351,28 @@ namespace Idara.API.Services
 
             outcome = BillingOutcome.Insufficient;
 
+            // 🆘 SOUS SURSIS : on ne fait PAS avancer l'escalade, et on n'envoie
+            // aucune relance. Le sursis existe parce que la panne vient de nous
+            // ou du prestataire — continuer à faire courir le compte à rebours
+            // reviendrait à rapprocher l'école du blocage total pendant qu'on lui
+            // rend l'accès, et lui envoyer « payez avant le 15 » serait lui
+            // réclamer ce qu'on vient de lui accorder.
+            //
+            // Le prélèvement, lui, a déjà été TENTÉ juste au-dessus : si l'école
+            // reçoit de l'argent pendant son sursis, elle est prélevée
+            // normalement et repasse Active. Le sursis ne suspend que la
+            // punition, jamais l'encaissement.
+            if (sub.ReprieveUntil is { } reprieve && reprieve > nowUtc)
+            {
+                sub.UpdatedAt = nowUtc;
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                _logger.LogInformation(
+                    "[subscription-billing] École {SchoolId} sous sursis jusqu'au {Until:yyyy-MM-dd} — escalade et relance suspendues.",
+                    sub.SchoolId, reprieve);
+                return BillingOutcome.Insufficient;
+            }
+
             // ============ LA MACHINE À ÉTATS, VERSION 2026-09-19 ============
             //
             // 🔴 ZÉRO PÉRIODE DE TOLÉRANCE (décision de Cheikh). Le jour de
