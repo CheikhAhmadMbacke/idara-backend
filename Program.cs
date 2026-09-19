@@ -413,6 +413,32 @@ using (var scope = app.Services.CreateScope())
 {
     var initializer = scope.ServiceProvider.GetRequiredService<DbInitializer>();
     await initializer.InitializeAsync();
+
+    // ---------- Témoin du canal d'alerte SMS ----------
+    // 🔴 Sans cette ligne, la seule façon de découvrir qu'un numéro
+    // d'alerte est absent ou mal saisi serait d'attendre une panne de
+    // décaissement et de constater que le téléphone n'a pas sonné — c'est-à-dire
+    // au pire moment, et sans savoir distinguer « pas d'alerte » de « pas de
+    // panne ». Un dispositif qui échoue en SILENCE n'est pas un dispositif.
+    //
+    // Le numéro est MASQUÉ : les journaux quotidiens ont déjà laissé fuiter des
+    // numéros et des codes pendant des semaines (§190), et un fichier de journal
+    // n'est pas l'endroit où écrire un numéro personnel.
+    var opsSms = scope.ServiceProvider
+        .GetRequiredService<IOptions<Idara.API.Options.OpsAlertSettings>>().Value;
+    var opsLogger = scope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>().CreateLogger("Idara.OpsAlerts");
+    var opsPhone = Idara.API.Common.Utilities.SenegalPhone.Normalize(opsSms.SmsPhone);
+    if (!opsSms.SmsEnabled)
+        opsLogger.LogWarning("[ops-alert] Canal SMS DÉSACTIVÉ (OpsAlerts:SmsEnabled=false) — alertes par e-mail seulement.");
+    else if (opsPhone == null)
+        opsLogger.LogWarning(
+            "[ops-alert] Canal SMS NON ARMÉ : OpsAlerts:SmsPhone {Etat}. Alertes par e-mail seulement.",
+            string.IsNullOrWhiteSpace(opsSms.SmsPhone) ? "n'est pas renseigné" : "n'est pas un mobile sénégalais valide");
+    else
+        opsLogger.LogInformation(
+            "[ops-alert] Canal SMS armé vers {Phone:l} — bourse {Cap}/jour, regroupement {Min} min.",
+            opsPhone[..^4] + "\u2026", opsSms.SmsMaxPerDay, opsSms.GroupingMinutes);
 }
 
 // ---------- Pipeline HTTP ----------
