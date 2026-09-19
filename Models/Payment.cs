@@ -88,6 +88,20 @@ namespace Idara.API.Models
         /// </summary>
         public long OcrPricePerPageFcfa { get; set; }
 
+        /// <summary>
+        /// Facture d'abonnement que ce paiement solde
+        /// (<see cref="Enums.PaymentPurpose.Subscription"/> uniquement).
+        /// </summary>
+        /// <remarks>
+        /// 🔑 Figée au démarrage du paiement, et pas retrouvée au règlement.
+        /// Le montant d'une facture en attente est réactualisé à chaque nouvelle
+        /// tentative du cron (les SMS refacturés sont réagrégés) : sans ce lien,
+        /// un webhook qui arrive après un passage du cron pourrait solder une
+        /// facture qui n'est plus celle que l'école a vue et payée. Une référence
+        /// doit permettre de RETROUVER l'opération (§136).
+        /// </remarks>
+        public int? SubscriptionInvoiceId { get; set; }
+
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }

@@ -1,4 +1,5 @@
 ﻿using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
@@ -114,7 +115,15 @@ namespace Idara.API.Services
                     // l'opération qui les engage, §274). Un appel à la base de
                     // moins sous le verrou, et un règlement qui ne peut plus
                     // échouer faute de grille saisie.
-                    CreditWalletAndInvoice(payment, wallet);
+                    // 🔴 Abonnement réglé par le lien public : l'argent n'entre
+                    // PAS chez l'école, il vient à la plateforme. Soldé ici, dans
+                    // la MÊME transaction que la bascule du paiement — payer et
+                    // retrouver son accès sont un seul fait, ils ne peuvent pas
+                    // diverger.
+                    if (payment.Purpose == PaymentPurpose.Subscription)
+                        await SettleSubscriptionAsync(payment, ct);
+                    else
+                        CreditWalletAndInvoice(payment, wallet);
                     break;
 
                 case PaymentStatus.Failed:
@@ -139,6 +148,90 @@ namespace Idara.API.Services
             return new PayinSettlementResult(PayinSettlementOutcome.Transitioned, terminalStatus);
         }
 
+
+        /// <summary>
+        /// 📅 Solde la facture d'abonnement réglée depuis le lien public, avance
+        /// le cycle et rend l'accès à l'école.
+        ///
+        /// <para>🔴 <b>Ne touche à AUCUN wallet</b>, et c'est tout le sujet :
+        /// l'école ne se paie pas elle-même, elle règle ce qu'elle doit à la
+        /// plateforme. Créditer son solde lui rendrait l'argent qu'elle vient de
+        /// verser et casserait l'identité R = D + P (§112). Même raisonnement que
+        /// pour l'achat de pages (§233).</para>
+        ///
+        /// <para>🔑 <b>L'échéance suivante est le prochain jour d'ancrage, pas
+        /// « un mois après le paiement ».</b> Une école qui règle le 20 octobre
+        /// est à jour pour octobre ; sa prochaine échéance reste le 8 novembre.
+        /// C'est la conséquence normale d'un calendrier commun — et le piège
+        /// qu'un <c>AddMonths(1)</c> depuis la date de paiement aurait créé :
+        /// l'école serait repartie sur son propre calendrier, celui-là même dont
+        /// on vient de la sortir.</para>
+        ///
+        /// <para>Idempotent : un webhook rejoué (jusqu'à trois fois, §50) trouve
+        /// la facture déjà payée et ne rouvre pas un cycle.</para>
+        /// </summary>
+        private async Task SettleSubscriptionAsync(Payment payment, CancellationToken ct)
+        {
+            var sub = await _context.Subscriptions
+                .FirstOrDefaultAsync(s => s.SchoolId == payment.SchoolId, ct);
+            if (sub == null)
+            {
+                _logger.LogError(
+                    "[payin-settle] Abonnement introuvable pour l'école {SchoolId} — Payment {Id} encaissé sans contrepartie",
+                    payment.SchoolId, payment.Id);
+                return;
+            }
+
+            // La facture visée a été FIGÉE au démarrage du paiement : son montant
+            // a pu bouger depuis (réagrégation des SMS refacturés), et l'école
+            // doit solder celle qu'elle a vue, pas celle du moment (§136).
+            var invoice = payment.SubscriptionInvoiceId is { } invId
+                ? await _context.SubscriptionInvoices.FirstOrDefaultAsync(i => i.Id == invId, ct)
+                : await _context.SubscriptionInvoices
+                    .Where(i => i.SchoolId == payment.SchoolId
+                                && i.Status == SubscriptionInvoiceStatus.Pending)
+                    .OrderBy(i => i.PeriodStart)
+                    .FirstOrDefaultAsync(ct);
+
+            if (invoice != null && invoice.Status == SubscriptionInvoiceStatus.Paid)
+            {
+                _logger.LogInformation(
+                    "[payin-settle] Facture d'abonnement {InvoiceId} déjà soldée — rejeu ignoré (Payment {Id})",
+                    invoice.Id, payment.Id);
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            if (invoice != null)
+            {
+                invoice.Status = SubscriptionInvoiceStatus.Paid;
+                invoice.PaidAt = now;
+                // WalletTransactionId reste NULL : rien n'a transité par le
+                // wallet. C'est ce qui distingue, dans l'historique, un
+                // prélèvement automatique d'un règlement par lien.
+            }
+
+            var settings = await _context.GetPlatformSettingsAsync(ct);
+            var day = SubscriptionSchedule.Normalize(settings.SubscriptionBillingDay);
+
+            // Le cycle repart du LENDEMAIN de la période réglée, pas de
+            // maintenant : une école qui paie en retard ne gagne pas un mois.
+            var basis = invoice != null ? invoice.PeriodEnd.AddDays(1) : now;
+            sub.NextBillingAt = SubscriptionSchedule.FirstAnchorOnOrAfter(
+                basis > now ? basis : now, day);
+
+            sub.Status = SubscriptionStatus.Active;
+            sub.ActivatedAt = now;
+            sub.NotificationUsedThisCycle = 0;
+            sub.GracePeriodEndsAt = null;
+            sub.ReadOnlyEndsAt = null;
+            sub.SuspendedAt = null;
+            sub.UpdatedAt = now;
+
+            _logger.LogInformation(
+                "[payin-settle] Abonnement de l'école {SchoolId} réglé par lien ({Amount} FCFA) → Active, prochaine échéance {Next:yyyy-MM-dd}",
+                payment.SchoolId, payment.AmountFcfa, sub.NextBillingAt);
+        }
         /// <summary>
         /// Crédit wallet école + invoice. Le <paramref name="wallet"/> est DÉJÀ
         /// verrouillé (FOR UPDATE) par l'appelant — on ne re-verrouille pas.
@@ -409,6 +502,18 @@ namespace Idara.API.Services
             if (payment.Purpose == PaymentPurpose.OcrPages)
             {
                 await NotifyOcrPagesPurchasedAsync(payment, ct);
+                return;
+            }
+
+            // ============ ABONNEMENT RÉGLÉ PAR LE LIEN ============
+            //
+            // Même sortie anticipée, et pour la même raison : annoncer à l'école
+            // « paiement reçu pour un élève, votre solde a été crédité » serait
+            // faux trois fois. Le SMS qui convient — « abonnement réglé, accès
+            // rétabli » — est envoyé par le service d'abonnement, qui sait aussi
+            // dire jusqu'à quand.
+            if (payment.Purpose == PaymentPurpose.Subscription)
+            {
                 return;
             }
 

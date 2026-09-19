@@ -46,6 +46,7 @@ namespace Idara.API.Data
             await BackfillSearchIndexAsync();
             await RetypeQuranSubjectsAsync();
             await BackfillSchoolTypesAsync();
+            await BackfillSubscriptionAnchorAsync();
             await SeedDemoSchoolAsync();
             await SeedDemoTeacherAsync();
             await TrimDemoTeacherAssignmentsAsync();
@@ -295,6 +296,92 @@ namespace Idara.API.Data
                 _logger.LogWarning(ex, "[school-type] Reprise du type des écoles impossible.");
             }
         }
+
+        /// <summary>
+        /// 📅 Recale les échéances d'abonnement DÉJÀ en base sur le jour de
+        /// prélèvement commun (le 8).
+        ///
+        /// <para><b>Pourquoi.</b> L'échéance valait « 30 jours après la
+        /// validation », donc n'importe quel jour du mois. Mesuré en production
+        /// le 2026-09-19 : <b>61 % des paiements de parents</b> tombent entre le
+        /// 1er et le 10, et <b>9 % seulement</b> entre le 11 et le 20 — or deux
+        /// écoles avaient leur échéance les 18 et 19. On les prélevait au moment
+        /// précis où leur solde est au plus bas.</para>
+        ///
+        /// <para>🔑 <b>Ne raccourcit JAMAIS</b> (décision de Cheikh) : on part de
+        /// l'échéance actuelle et on avance au premier 8 qui suit. Aucune école
+        /// n'est prélevée plus tôt qu'annoncé, aucune ne perd un jour d'essai.
+        /// Une échéance au 10/10 devient le 08/11, pas le 08/10.</para>
+        ///
+        /// <para>🔴 <b>L'école de démonstration est EXCLUE.</b> Son échéance est
+        /// posée en 2076, volontairement hors facturation : la recaler au 08/10
+        /// reviendrait à facturer le compte de démonstration — celui-là même qui
+        /// sert aux essais à argent réel (§107).</para>
+        ///
+        /// <para>Jouée UNE SEULE FOIS, marqueur en base : rejouée, elle
+        /// repousserait d'un mois l'échéance d'une école déjà alignée.</para>
+        /// </summary>
+        /// <remarks>Publique à dessein : une reprise qu'on ne peut vérifier qu'en
+        /// production ne se vérifie jamais (§133/§178).</remarks>
+        public async Task BackfillSubscriptionAnchorAsync()
+        {
+            try
+            {
+                var platform = await _context.GetPlatformSettingsAsync();
+                if (platform.SubscriptionAnchorBackfilledAt != null) return;
+
+                var day = SubscriptionSchedule.Normalize(platform.SubscriptionBillingDay);
+
+                // Horizon de sécurité : tout ce qui est échu au-delà d'un an est
+                // une date posée À LA MAIN pour sortir une école de la
+                // facturation (l'école de démonstration est au 11/06/2076). La
+                // recaler la ramènerait au mois prochain et la facturerait.
+                var horizon = DateTime.UtcNow.AddYears(1);
+
+                var subs = await _context.Subscriptions.ToListAsync();
+                var recales = 0;
+                foreach (var sub in subs)
+                {
+                    if (sub.NextBillingAt > horizon)
+                    {
+                        _logger.LogInformation(
+                            "[subscription-anchor] École {SchoolId} ignorée : échéance {Date:yyyy-MM-dd} hors facturation.",
+                            sub.SchoolId, sub.NextBillingAt);
+                        continue;
+                    }
+
+                    var cible = SubscriptionSchedule.RealignExisting(sub.NextBillingAt, day);
+                    if (cible == sub.NextBillingAt) continue;
+
+                    _logger.LogInformation(
+                        "[subscription-anchor] École {SchoolId} : échéance {Avant:yyyy-MM-dd} → {Apres:yyyy-MM-dd}.",
+                        sub.SchoolId, sub.NextBillingAt, cible);
+
+                    // L'essai suit l'échéance tant qu'il n'est pas terminé :
+                    // sinon l'école resterait « en essai » après la date de fin
+                    // affichée dans son espace, ce qui se lit comme un bug.
+                    if (sub.Status == SubscriptionStatus.Trial)
+                        sub.TrialEndsAt = cible;
+
+                    sub.NextBillingAt = cible;
+                    sub.UpdatedAt = DateTime.UtcNow;
+                    recales++;
+                }
+
+                platform.SubscriptionAnchorBackfilledAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "[subscription-anchor] Reprise jouée : {Recales} échéance(s) recalée(s) sur le {Day} du mois, {Total} abonnement(s) vus.",
+                    recales, day, subs.Count);
+            }
+            catch (Exception ex)
+            {
+                // Un défaut de reprise ne doit jamais empêcher l'API de démarrer.
+                _logger.LogWarning(ex, "[subscription-anchor] Recalage des échéances impossible.");
+            }
+        }
+
 
 
         /// <summary>

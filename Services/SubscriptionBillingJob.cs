@@ -15,7 +15,22 @@ namespace Idara.API.Services
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<SubscriptionBillingJob> _logger;
 
-        private static readonly TimeSpan RunAtUtc = new(hours: 2, minutes: 15, seconds: 0);
+        /// <summary>
+        /// 10:00 UTC = 10 h à Dakar.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Déplacé de 02:15 le 2026-09-19</b>, quand l'échéance est passée
+        /// au 8 de chaque mois. Deux raisons, et la seconde est la plus lourde :
+        /// <list type="number">
+        ///   <item>à 2 h du matin, on prélève avec l'argent de la <b>veille au
+        ///   soir</b> — or c'est justement le jour du prélèvement que la
+        ///   trésorerie des écoles est au plus haut ;</item>
+        ///   <item>surtout, le SMS « nous n'avons pas pu prélever » partait à
+        ///   2 h du matin, quand personne ne peut réagir. Une relance qui
+        ///   réveille est une relance perdue.</item>
+        /// </list>
+        /// </remarks>
+        private static readonly TimeSpan RunAtUtc = new(hours: 10, minutes: 0, seconds: 0);
 
         public SubscriptionBillingJob(IServiceScopeFactory scopeFactory, ILogger<SubscriptionBillingJob> logger)
         {

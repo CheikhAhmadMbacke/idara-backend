@@ -374,6 +374,60 @@ namespace Idara.API.Services.Notifications
             Fr: $"Abonnement de {montantFcfa} FCFA preleve de votre wallet. Votre compte est actif jusqu'au {nextBilling:dd/MM}.",
             Ar: $"تم خصم اشتراك بمبلغ {montantFcfa} FCFA من محفظتكم. حسابكم فعّال حتى {nextBilling:dd/MM}.");
 
+
+        // ================================================================
+        //  📅 ABONNEMENT — les trois SMS de la relance (2026-09-19)
+        // ================================================================
+        //
+        // 🔤 MONO-LANGUE, dans la langue de l'école : un SMS bilingue FR+AR
+        // bascule tout le corps en UCS-2 et coûte TROIS segments au lieu d'un
+        // (§88/§192). Ces messages partent donc avec Bilingual: false.
+        //
+        // ✍️ Textes SANS ACCENTS, volontairement : « preleve », « acces ». Un
+        // seul « é » ferait basculer le message en UCS-2 — 70 caractères par
+        // segment au lieu de 160 — et le lien à lui seul en occupe déjà 57 (§225).
+        //
+        // 📇 Au DIRECTEUR seul. Le rappel push part à tout le personnel ; en SMS,
+        // ce serait multiplier le coût et exposer la situation financière de
+        // l'école à ses employés.
+
+        public const string SubscriptionChargedSmsCode = "SUBSCRIPTION_CHARGED_SMS";
+        public const string SubscriptionUnpaidSmsCode = "SUBSCRIPTION_UNPAID_SMS";
+        public const string SubscriptionBlockedSmsCode = "SUBSCRIPTION_BLOCKED_SMS";
+
+        /// <summary>
+        /// Prélèvement réussi. Le seul des trois qui ne porte pas de lien : il
+        /// n'y a rien à faire, et un lien inutile invite à cliquer pour rien.
+        /// </summary>
+        public static BilingualMessage SubscriptionChargedSms(long montantFcfa, DateTime prochaine) => new(
+            Fr: $"Idara: abonnement de {montantFcfa} FCFA preleve. Acces actif jusqu'au {prochaine:dd/MM}.",
+            Ar: $"Idara: تم خصم اشتراك {montantFcfa} FCFA. الحساب فعّال حتى {prochaine:dd/MM}.");
+
+        /// <summary>
+        /// Prélèvement impossible faute de solde. Dit les TROIS choses qui
+        /// comptent : ce qui s'est passé, ce que ça change tout de suite, et
+        /// jusqu'à quand agir — plus le lien pour le faire.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ « Espace en lecture seule » est au PRÉSENT, pas au futur : depuis
+        /// le 2026-09-19, il n'y a plus de période de tolérance, le blocage des
+        /// écritures est immédiat. Annoncer un délai qui n'existe pas serait
+        /// mentir à l'école, et elle le découvrirait en ouvrant l'application.
+        /// </remarks>
+        public static BilingualMessage SubscriptionUnpaidSms(
+            long montantFcfa, DateTime blocageLe, string url) => new(
+            // 📏 MESURÉ, pas estimé : 154 unités GSM-7 avec un montant à SIX
+            // chiffres — 6 de marge sur les 160 d'un segment. La rédaction
+            // « naturelle » (« non preleve, solde insuffisant. Espace en lecture
+            // seule. ») en faisait 166, soit DEUX segments, et rien ne l'aurait
+            // signalé (§192).
+            Fr: $"Idara: abonnement {montantFcfa} FCFA impaye (solde insuffisant). Lecture seule. A payer avant le {blocageLe:dd/MM}: {url}",
+            Ar: $"Idara: تعذّر خصم {montantFcfa} FCFA. المساحة للقراءة فقط. ادفعوا قبل {blocageLe:dd/MM}: {url}");
+
+        /// <summary>Accès bloqué : l'escalade est allée à son terme.</summary>
+        public static BilingualMessage SubscriptionBlockedSms(long montantFcfa, string url) => new(
+            Fr: $"Idara: acces bloque, abonnement {montantFcfa} FCFA impaye. Payez ici pour reactiver: {url}",
+            Ar: $"Idara: تم حظر الوصول، اشتراك {montantFcfa} FCFA غير مسدد. ادفعوا هنا: {url}");
         // Don reçu côté école (push) : prévient l'admin + le personnel. Le nom du
         // donateur est fourni déjà formaté par l'appelant (identité toujours visible).
         public static BilingualMessage DonationReceivedSchool(string donateur, long montantFcfa) => new(

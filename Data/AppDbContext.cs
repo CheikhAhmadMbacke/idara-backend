@@ -53,6 +53,7 @@ namespace Idara.API.Data
         public DbSet<PaymentInvoiceAllocation> PaymentInvoiceAllocations { get; set; }
         public DbSet<PaymentStudentAllocation> PaymentStudentAllocations { get; set; }
         public DbSet<PaymentLink> PaymentLinks { get; set; }
+        public DbSet<SubscriptionPaymentLink> SubscriptionPaymentLinks { get; set; }
         public DbSet<DonationCampaign> DonationCampaigns { get; set; }
         public DbSet<SchoolWallet> SchoolWallets { get; set; }
         public DbSet<WalletTransaction> WalletTransactions { get; set; }
@@ -1114,6 +1115,38 @@ namespace Idara.API.Data
                 .WithMany()
                 .HasForeignKey(l => l.GuardianId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // --- SubscriptionPaymentLink (lien de paiement de l'abonnement) ---
+            modelBuilder.Entity<SubscriptionPaymentLink>()
+                .Property(l => l.Token)
+                .HasMaxLength(64)
+                .IsRequired();
+
+            modelBuilder.Entity<SubscriptionPaymentLink>()
+                .HasIndex(l => l.Token)
+                .IsUnique();
+
+            // UN seul lien ACTIF par école. Filtré sur RevokedAt, comme pour les
+            // familles : un lien révoqué doit pouvoir être remplacé par un neuf.
+            modelBuilder.Entity<SubscriptionPaymentLink>()
+                .HasIndex(l => l.SchoolId)
+                .IsUnique()
+                .HasFilter("\"RevokedAt\" IS NULL");
+
+            modelBuilder.Entity<SubscriptionPaymentLink>()
+                .HasOne(l => l.School)
+                .WithMany()
+                .HasForeignKey(l => l.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Payment → SubscriptionInvoice : SetNull pour la même raison
+            // qu'au-dessus — une facture qui disparaîtrait ne doit jamais
+            // emporter le paiement qui l'a soldée (append-only, §55).
+            modelBuilder.Entity<Payment>()
+                .HasOne<SubscriptionInvoice>()
+                .WithMany()
+                .HasForeignKey(p => p.SubscriptionInvoiceId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             // Payment → PaymentLink : SetNull, un lien révoqué/supprimé ne doit
             // jamais emporter un paiement (append-only financier, §55).

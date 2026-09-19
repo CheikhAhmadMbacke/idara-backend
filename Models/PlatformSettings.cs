@@ -501,6 +501,34 @@ namespace Idara.API.Models
         /// </remarks>
         public DateTime? SchoolTypesBackfilledAt { get; set; }
 
+        /// <summary>
+        /// 📅 Jour du mois où TOUTES les écoles sont prélevées de leur
+        /// abonnement. Défaut : le <b>8</b>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Mesuré, pas choisi : la trésorerie des écoles culmine le 8 du
+        /// mois (509 232 F cumulés en production) et s'effondre le 9. Le 5 n'en
+        /// donne que 223 090 F — les parents sont encore en train de payer.</para>
+        ///
+        /// <para>Éditable ici pour qu'un décalage ne demande pas un
+        /// redéploiement. La borne 1–28 vit dans
+        /// <see cref="Common.Utilities.SubscriptionSchedule.Normalize"/>, au
+        /// point de CALCUL : un contrôle de saisie ne protège pas d'une valeur
+        /// déjà en base.</para>
+        /// </remarks>
+        public int SubscriptionBillingDay { get; set; }
+            = Common.Utilities.SubscriptionSchedule.DefaultBillingDay;
+
+        /// <summary>
+        /// 📅 Quand les échéances d'abonnement ont été recalées sur le calendrier.
+        /// </summary>
+        /// <remarks>
+        /// Même discipline que <see cref="SchoolTypesBackfilledAt"/> : une reprise
+        /// se joue UNE FOIS. Rejouée, elle repousserait chaque mois l'échéance
+        /// d'une école déjà alignée.
+        /// </remarks>
+        public DateTime? SubscriptionAnchorBackfilledAt { get; set; }
+
         // ============================================================
         //  📷 Import par PHOTO (lecture d'un cahier par l'IA)
         // ============================================================

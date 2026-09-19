@@ -3,6 +3,7 @@ using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
+using NotificationTemplates = Idara.API.Services.Notifications.NotificationTemplates;
 using Microsoft.EntityFrameworkCore;
 
 namespace Idara.API.Services
@@ -42,10 +43,16 @@ namespace Idara.API.Services
     /// </summary>
     public class SubscriptionBillingService : ISubscriptionBillingService
     {
+        /// <summary>
+        /// Jours de lecture seule avant le blocage de l'accès — du 8 au 15.
+        /// </summary>
+        private const int ReadOnlyDays = 7;
+
         private readonly AppDbContext _db;
         private readonly ISubscriptionInvoicePdfService _pdf;
         private readonly IEmailService _email;
         private readonly Notifications.INotificationService _notif;
+        private readonly ISubscriptionPaymentLinkService _links;
         private readonly ILogger<SubscriptionBillingService> _logger;
 
         public SubscriptionBillingService(
@@ -53,12 +60,14 @@ namespace Idara.API.Services
             ISubscriptionInvoicePdfService pdf,
             IEmailService email,
             Notifications.INotificationService notif,
+            ISubscriptionPaymentLinkService links,
             ILogger<SubscriptionBillingService> logger)
         {
             _db = db;
             _pdf = pdf;
             _email = email;
             _notif = notif;
+            _links = links;
             _logger = logger;
         }
 
@@ -322,6 +331,7 @@ namespace Idara.API.Services
                 // (un échec PDF/SMTP ne doit jamais annuler un prélèvement encaissé).
                 await EmitInvoiceDocsAsync(invoice, sub, ct);
                 await NotifyChargedAsync(sub, amount, ct);
+                await NotifyChargedSmsAsync(sub, amount, ct);
                 if (autoUpgradedTo != null)
                     await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
                 return BillingOutcome.Paid;
@@ -341,32 +351,61 @@ namespace Idara.API.Services
 
             outcome = BillingOutcome.Insufficient;
 
+            // ============ LA MACHINE À ÉTATS, VERSION 2026-09-19 ============
+            //
+            // 🔴 ZÉRO PÉRIODE DE TOLÉRANCE (décision de Cheikh). Le jour de
+            // l'échéance, un solde insuffisant met l'école en LECTURE SEULE
+            // immédiatement, puis sept jours plus tard l'accès est bloqué. Il
+            // n'y a plus d'étape « impayé mais accès complet » : elle n'existait
+            // déjà pas dans les faits — le middleware bloquait les écritures dès
+            // le premier échec — et l'annoncer aurait été mentir à l'école.
+            //
+            // <see cref="SubscriptionStatus.PendingPayment"/> n'est donc plus
+            // jamais ÉCRIT. La valeur reste dans l'enum (elle est persistée, on
+            // ne réordonne jamais) et le cas ci-dessous rattrape les abonnements
+            // qui y sont restés — sans quoi ils n'avanceraient plus jamais.
+            var passeEnLectureSeule = false;
+            var passeEnBlocage = false;
+
             if (sub.Status == SubscriptionStatus.Trial || sub.Status == SubscriptionStatus.Active)
             {
-                // 1er échec → entre en grâce (7 j).
-                sub.Status = SubscriptionStatus.PendingPayment;
-                sub.GracePeriodEndsAt = nowUtc.AddDays(7);
-            }
-            else if (sub.Status == SubscriptionStatus.PendingPayment
-                     && sub.GracePeriodEndsAt is { } g && g <= nowUtc)
-            {
-                // Grâce expirée → ReadOnly (14 j).
                 sub.Status = SubscriptionStatus.ReadOnly;
-                sub.ReadOnlyEndsAt = nowUtc.AddDays(14);
+                sub.ReadOnlyEndsAt = nowUtc.AddDays(ReadOnlyDays);
+                sub.GracePeriodEndsAt = null;
+                passeEnLectureSeule = true;
+                outcome = BillingOutcome.Transitioned;
+            }
+            else if (sub.Status == SubscriptionStatus.PendingPayment)
+            {
+                // Héritage : on les fait entrer dans la nouvelle machine en
+                // gardant la date qu'ils portaient, pour ne pas leur offrir un
+                // délai supplémentaire au passage.
+                sub.Status = SubscriptionStatus.ReadOnly;
+                sub.ReadOnlyEndsAt = sub.GracePeriodEndsAt ?? nowUtc.AddDays(ReadOnlyDays);
+                sub.GracePeriodEndsAt = null;
+                passeEnLectureSeule = true;
                 outcome = BillingOutcome.Transitioned;
             }
             else if (sub.Status == SubscriptionStatus.ReadOnly
                      && sub.ReadOnlyEndsAt is { } r && r <= nowUtc)
             {
-                // ReadOnly expiré → Suspended.
                 sub.Status = SubscriptionStatus.Suspended;
                 sub.SuspendedAt = nowUtc;
+                passeEnBlocage = true;
                 outcome = BillingOutcome.Transitioned;
             }
 
             sub.UpdatedAt = nowUtc;
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+
+            // Best-effort POST-COMMIT (§42/§90) : un SMS qui échoue ne doit
+            // jamais annuler une transition déjà écrite.
+            if (passeEnLectureSeule)
+                await NotifyUnpaidAsync(sub, totalDue, ct);
+            else if (passeEnBlocage)
+                await NotifyBlockedAsync(sub, totalDue, ct);
+
             if (autoUpgradedTo != null)
                 await NotifyAutoUpgradeAsync(sub, autoUpgradedTo, studentCountForUpgrade, ct);
             return outcome;
@@ -377,6 +416,146 @@ namespace Idara.API.Services
         /// vient d'être prélevé avec succès (confirmation APRÈS coup, en plus de la
         /// facture PDF envoyée par email). Ne lève jamais. Appelée post-commit.
         /// </summary>
+
+        /// <summary>
+        /// 📇 Le DIRECTEUR de l'école, et lui seul — celui qui reçoit les SMS
+        /// d'abonnement.
+        /// </summary>
+        /// <remarks>
+        /// Volontairement plus étroit que les notifications push, qui vont à tout
+        /// le personnel : un SMS se paie au segment, et la situation financière
+        /// de l'école ne regarde pas ses employés. On prend le plus ancien compte
+        /// SchoolAdmin — celui qui a ouvert l'école — plutôt que le premier venu.
+        /// </remarks>
+        private async Task<(int UserId, string Lang)?> DirecteurAsync(int schoolId, CancellationToken ct)
+        {
+            var d = await _db.Users
+                .Where(u => u.SchoolId == schoolId && !u.IsDeleted
+                            && u.Role == UserRoles.SchoolAdmin
+                            && u.PhoneNumber != null)
+                .OrderBy(u => u.Id)
+                .Select(u => new { u.Id, u.PreferredLanguage })
+                .FirstOrDefaultAsync(ct);
+            return d == null ? null : (d.Id, d.PreferredLanguage ?? "fr");
+        }
+
+        /// <summary>
+        /// SMS « nous n'avons pas pu prélever » : ce qui s'est passé, ce que ça
+        /// change tout de suite, jusqu'à quand agir, et le lien pour le faire.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>Le lien est la vraie raison d'être de ce message.</b> Sur les
+        /// 7 écoles de la plateforme, 4 n'ont jamais encaissé un franc par Idara :
+        /// leur wallet est vide et le restera. Leur dire « rechargez votre
+        /// wallet » serait leur désigner une porte qu'elles n'empruntent pas.
+        ///
+        /// <para>🔤 MONO-LANGUE (<c>Bilingual: false</c>) : le bilingue FR+AR
+        /// bascule le corps en UCS-2 et coûte trois segments (§88). En français
+        /// le message tient en UN segment, mesuré à 154 unités sur 160. En arabe
+        /// il en coûte DEUX, et c'est irréductible : le lien occupe 57 des
+        /// 70 caractères qu'autorise un segment UCS-2. Deux directeurs sur vingt
+        /// sont concernés.</para>
+        /// </remarks>
+        private async Task NotifyUnpaidAsync(Subscription sub, long montantDu, CancellationToken ct)
+        {
+            try
+            {
+                var dir = await DirecteurAsync(sub.SchoolId, ct);
+                if (dir == null) return;
+
+                // Dédup par cycle : le cron repasse tous les jours sur les
+                // impayés, et l'école n'a pas à recevoir le même SMS chaque matin.
+                if (await _notif.HasAttemptedSinceAsync(
+                        NotificationTemplates.SubscriptionUnpaidSmsCode, sub.Id,
+                        sub.NextBillingAt.AddDays(-1), ct))
+                    return;
+
+                var (link, _) = await _links.EnsureAsync(sub.SchoolId, ct);
+                var url = _links.BuildUrl(link.Token);
+                var blocage = sub.ReadOnlyEndsAt ?? DateTime.UtcNow.AddDays(ReadOnlyDays);
+
+                await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
+                    UserId: dir.Value.UserId,
+                    RawPhone: null,
+                    PreferredLanguage: dir.Value.Lang,
+                    Message: NotificationTemplates.SubscriptionUnpaidSms(montantDu, blocage, url),
+                    Bilingual: false,
+                    TemplateCode: NotificationTemplates.SubscriptionUnpaidSmsCode,
+                    RelatedEntityId: sub.Id,
+                    SchoolId: sub.SchoolId,
+                    Priority: SmsPriority.Normal), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[subscription-billing] SMS d'impayé non envoyé École {SchoolId} (non bloquant)",
+                    sub.SchoolId);
+            }
+        }
+
+        /// <summary>SMS « accès bloqué » : l'escalade est allée à son terme.</summary>
+        private async Task NotifyBlockedAsync(Subscription sub, long montantDu, CancellationToken ct)
+        {
+            try
+            {
+                var dir = await DirecteurAsync(sub.SchoolId, ct);
+                if (dir == null) return;
+
+                if (await _notif.HasAttemptedSinceAsync(
+                        NotificationTemplates.SubscriptionBlockedSmsCode, sub.Id,
+                        sub.NextBillingAt.AddDays(-1), ct))
+                    return;
+
+                var (link, _) = await _links.EnsureAsync(sub.SchoolId, ct);
+                var url = _links.BuildUrl(link.Token);
+
+                await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
+                    UserId: dir.Value.UserId,
+                    RawPhone: null,
+                    PreferredLanguage: dir.Value.Lang,
+                    Message: NotificationTemplates.SubscriptionBlockedSms(montantDu, url),
+                    Bilingual: false,
+                    TemplateCode: NotificationTemplates.SubscriptionBlockedSmsCode,
+                    RelatedEntityId: sub.Id,
+                    SchoolId: sub.SchoolId,
+                    Priority: SmsPriority.Normal), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[subscription-billing] SMS de blocage non envoyé École {SchoolId} (non bloquant)",
+                    sub.SchoolId);
+            }
+        }
+
+        /// <summary>
+        /// SMS de confirmation du prélèvement. Le seul des trois sans lien : il
+        /// n'y a rien à faire, et un lien inutile invite à cliquer pour rien.
+        /// </summary>
+        private async Task NotifyChargedSmsAsync(Subscription sub, long montant, CancellationToken ct)
+        {
+            try
+            {
+                var dir = await DirecteurAsync(sub.SchoolId, ct);
+                if (dir == null) return;
+
+                await _notif.SendSmsAsync(new Notifications.NotificationSmsRequest(
+                    UserId: dir.Value.UserId,
+                    RawPhone: null,
+                    PreferredLanguage: dir.Value.Lang,
+                    Message: NotificationTemplates.SubscriptionChargedSms(montant, sub.NextBillingAt),
+                    Bilingual: false,
+                    TemplateCode: NotificationTemplates.SubscriptionChargedSmsCode,
+                    RelatedEntityId: sub.Id,
+                    SchoolId: sub.SchoolId), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[subscription-billing] SMS de prélèvement non envoyé École {SchoolId} (non bloquant)",
+                    sub.SchoolId);
+            }
+        }
         private async Task NotifyChargedAsync(Subscription sub, long amount, CancellationToken ct)
         {
             try

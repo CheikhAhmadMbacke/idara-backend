@@ -567,22 +567,41 @@ individualisées dans les écritures.</p>
 formule et de l'effectif de l'établissement. La grille est publiée et accessible
 en permanence.</p>
 <ul>
-  <li>L'abonnement est prélevé sur le portefeuille de l'établissement à chaque échéance.</li>
+  <li>Tout établissement bénéficie d'un <strong>essai gratuit d'au moins trente
+      jours</strong>. L'essai se prolonge ensuite jusqu'à la première échéance
+      mensuelle qui suit, de sorte qu'il n'est jamais raccourci.</li>
+  <li>L'abonnement est ensuite prélevé <strong>le 8 de chaque mois</strong>, pour
+      tous les établissements, sur le portefeuille de l'établissement. La date
+      d'inscription ne détermine plus l'échéance.</li>
   <li>Une facture est émise pour chaque échéance et adressée à la direction.</li>
+  <li>Un règlement effectué en retard ne décale pas les échéances suivantes :
+      celles-ci demeurent fixées au 8 de chaque mois.</li>
   <li>Si l'effectif dépasse le plafond de la formule souscrite, celle-ci est ajustée
       au palier correspondant et l'établissement en est informé.</li>
   <li>Les prix peuvent être révisés ; toute révision est notifiée avant son entrée
       en vigueur et n'affecte pas une période déjà réglée.</li>
 </ul>
 
-<h2 id="impayes">13. Impayés et lecture seule</h2>
-<p>À défaut de provision suffisante à l'échéance :</p>
+<h2 id="impayes">13. Impayés, lecture seule et blocage</h2>
+<p>Si le portefeuille de l'établissement ne permet pas le prélèvement à
+l'échéance :</p>
 <ol class="body">
-  <li>une période de tolérance s'ouvre, pendant laquelle le service reste entier ;</li>
-  <li>à son terme, l'espace de l'établissement passe en <strong>lecture seule</strong> :
+  <li>l'espace de l'établissement passe <strong>immédiatement en lecture seule</strong> :
       la consultation demeure possible, les écritures sont refusées ;</li>
-  <li>faute de régularisation, l'accès est suspendu.</li>
+  <li><strong>sept jours</strong> plus tard, faute de régularisation, l'accès est
+      <strong>bloqué</strong> : l'application n'affiche plus que le montant dû et
+      le moyen de le régler ;</li>
+  <li>le règlement rétablit l'accès immédiatement.</li>
 </ol>
+<p>L'établissement est averti <strong>par SMS</strong> à chacune de ces étapes. Le
+message comporte un lien permanent lui permettant de régler son abonnement
+<strong>sans se connecter</strong>, y compris lorsque son accès est bloqué.</p>
+<div class="box">
+  <p><strong>Ce qui fait entrer de l'argent reste toujours possible.</strong> Même
+  en lecture seule ou en accès bloqué, l'établissement conserve la faculté
+  d'alimenter son portefeuille, d'adresser des liens de paiement aux familles et
+  de gérer ses collectes de dons.</p>
+</div>
 <div class="box">
   <p><strong>Les familles ne sont jamais privées d'accès</strong> en raison d'un impayé
   de l'établissement : elles conservent la consultation du suivi de leurs enfants

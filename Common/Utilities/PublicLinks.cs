@@ -22,6 +22,18 @@ namespace Idara.API.Common.Utilities
             $"{baseUrl.TrimEnd('/')}/pay/link/{token}";
 
         /// <summary>
+        /// Le lien de paiement permanent de l'ABONNEMENT d'une école — 61
+        /// caractères, un de moins que celui des familles.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Il voyage dans un SMS de relance qui doit tenir en UN segment
+        /// (§224) : « abo » plutôt que « abonnement » n'est pas de la coquetterie,
+        /// c'est sept caractères repris sur le message.
+        /// </remarks>
+        public static string SubscriptionLink(string baseUrl, string token) =>
+            $"{baseUrl.TrimEnd('/')}/pay/abo/{token}";
+
+        /// <summary>
         /// La page publique du résultat d'un paiement, qui porte son reçu.
         /// <c>null</c> quand le paiement n'a pas de jeton — les paiements
         /// antérieurs à sa mise en place, et eux seuls.

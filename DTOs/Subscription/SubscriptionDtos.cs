@@ -172,6 +172,18 @@ namespace Idara.API.DTOs.Subscription
         public int Id { get; set; }
         public int SchoolId { get; set; }
         public string? SchoolName { get; set; }
+
+        /// <summary>
+        /// Adresse publique où l'école règle son abonnement, sans se connecter.
+        /// Renseignée uniquement sur <c>GET /subscriptions/me</c>.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 C'est ce que propose le mur de paiement. Le bouton disait
+        /// « rechargez votre wallet » — or 4 écoles sur 7 n'encaissent rien par
+        /// la plateforme et n'ont donc jamais de solde à recharger : on leur
+        /// désignait une porte qu'elles n'empruntent pas.
+        /// </remarks>
+        public string? PaymentLinkUrl { get; set; }
         public int? PlanId { get; set; }
         public string? PlanName { get; set; }
         public BillingCycle BillingCycle { get; set; }

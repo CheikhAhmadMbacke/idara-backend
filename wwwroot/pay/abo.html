@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="theme-color" content="#0B744D" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Idara — Abonnement</title>
+  <style>
+    :root {
+      --primary: #0B744D; --primary-dark: #064A31;
+      --bg: #F7F9FC; --surface: #FFFFFF; --border: #E3E8EF;
+      --text-primary: #1A2233; --text-secondary: #5B6478; --text-tertiary: #8A93A6;
+      --success: #1E9E5C; --success-soft: #E7F6EE;
+      --warning: #E8830C; --warning-soft: #FDF1DF;
+      --danger: #D83B3B; --danger-soft: #FAE5E5;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text-primary); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.5; min-height: 100vh; }
+    html[dir=rtl] body { font-family: "Noto Naskh Arabic", "Segoe UI", Tahoma, Arial, sans-serif; }
+    .container { max-width: 560px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 14px; }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px; }
+    .header .left { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 36px; height: 36px; background: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px; }
+    .brand { font-size: 18px; font-weight: 800; color: var(--primary); }
+    .lang { color: var(--primary); text-decoration: none; font-weight: 600; font-size: 14px; border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; background: #fff; cursor: pointer; font-family: inherit; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px rgba(11,116,77,.06); }
+    .center { text-align: center; }
+    .school-name { font-weight: 800; font-size: 17px; line-height: 1.25; margin-bottom: 4px; }
+    h2 { font-size: 15px; margin: 0 0 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .4px; }
+    .line { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--text-secondary); padding: 3px 0; }
+    .line b { color: var(--text-primary); white-space: nowrap; }
+    .total { display: flex; justify-content: space-between; align-items: baseline; border-top: 2px solid var(--border); margin-top: 12px; padding-top: 12px; }
+    .total .lbl { font-weight: 700; font-size: 16px; }
+    .total .amt { font-weight: 900; font-size: 26px; color: var(--primary); }
+    .hint { font-size: 13px; color: var(--text-tertiary); }
+    .start { text-align: start !important; }
+
+    .notice { border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+    .notice.warn { background: var(--warning-soft); color: #8A4B00; }
+    .notice.bad { background: var(--danger-soft); color: #8E1E1E; }
+    .notice.ok { background: var(--success-soft); color: #0C6B3C; }
+
+    .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 15px 18px; border-radius: 12px; border: none; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; text-decoration: none; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-ghost { background: #fff; color: var(--primary); border: 1px solid var(--border); }
+    .footer { text-align: center; font-size: 12.5px; color: var(--text-tertiary); padding: 4px 0 0; }
+    .hidden { display: none !important; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; margin: 0 auto 10px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #error { color: var(--danger); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="left">
+        <div class="logo">i</div>
+        <div class="brand">Idara</div>
+      </div>
+      <button id="lang" class="lang" type="button">العربية</button>
+    </div>
+
+    <div id="loading" class="card center"><div class="spinner"></div><div data-i18n="loading">Chargement…</div></div>
+
+    <div id="due" class="card hidden">
+      <div id="school" class="school-name"></div>
+      <h2 data-i18n="due_title">Abonnement à régler</h2>
+      <div id="period" class="line"></div>
+      <div id="sms-line" class="line hidden"></div>
+      <div class="total"><span class="lbl" data-i18n="total">Total</span><span id="total" class="amt"></span></div>
+      <div id="deadline" class="notice warn hidden" style="margin-top:14px"></div>
+    </div>
+
+    <div id="nothing" class="card center hidden">
+      <div style="font-weight:800;font-size:18px" data-i18n="nothing_title">Votre abonnement est à jour</div>
+      <div class="hint" style="margin-top:6px" data-i18n="nothing_hint">Rien à régler pour l'instant. Gardez ce lien : il servira aux prochaines échéances.</div>
+      <div id="next" class="hint" style="margin-top:10px"></div>
+    </div>
+
+    <div id="pending" class="card center hidden">
+      <div style="font-weight:800;font-size:17px" data-i18n="pending_title">Un paiement est en cours</div>
+      <div class="hint" style="margin-top:6px" data-i18n="pending_hint">Nous attendons la confirmation de Wave. Si vous avez annulé, ce message disparaîtra dans quelques instants.</div>
+      <a id="pending-link" class="btn btn-ghost" style="margin-top:14px" href="#" data-i18n="pending_link">Voir ce paiement</a>
+    </div>
+
+    <div id="revoked" class="card center hidden">
+      <div style="font-weight:800;font-size:18px" data-i18n="revoked_title">Ce lien n'est plus valable</div>
+      <div class="hint" style="margin-top:6px" data-i18n="revoked_hint">Contactez Idara pour obtenir un nouveau lien.</div>
+    </div>
+
+    <button id="pay" class="btn btn-primary hidden" type="button"><span data-i18n="pay">Payer avec Wave</span></button>
+    <div id="error"></div>
+    <div id="inapp" class="notice warn hidden" data-i18n="inapp">Si Wave ne s'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).</div>
+    <div class="footer" data-i18n="footer">Paiement sécurisé via Wave · Idara</div>
+  </div>
+
+<script>
+  // Les marques « Idara » et « Wave » restent en latin en arabe (§brand).
+  // L'argent ne se traduit jamais : chiffres latins et « FCFA » (§228), placé
+  // AVANT le nombre en arabe (§239).
+  var I18N = {
+    fr: {
+      title: 'Idara — Abonnement', loading: 'Chargement…',
+      due_title: 'Abonnement à régler', total: 'Total',
+      period: 'Période', sms_line: 'dont {amount} de SMS ({count})',
+      deadline: 'Sans règlement avant le {date}, l\'accès à votre espace sera bloqué.',
+      readonly_now: 'Votre espace est en lecture seule tant que cet abonnement n\'est pas réglé.',
+      nothing_title: 'Votre abonnement est à jour',
+      nothing_hint: 'Rien à régler pour l\'instant. Gardez ce lien : il servira aux prochaines échéances.',
+      next_billing: 'Prochaine échéance : {date} — {amount}.',
+      pending_title: 'Un paiement est en cours',
+      pending_hint: 'Nous attendons la confirmation de Wave. Si vous avez annulé, ce message disparaîtra dans quelques instants.',
+      pending_link: 'Voir ce paiement',
+      revoked_title: 'Ce lien n\'est plus valable',
+      revoked_hint: 'Contactez Idara pour obtenir un nouveau lien.',
+      pay: 'Payer avec Wave',
+      inapp: 'Si Wave ne s\'ouvre pas, ouvrez ce lien dans Chrome ou Safari (menu ⋮ → « Ouvrir dans le navigateur »).',
+      footer: 'Paiement sécurisé via Wave · Idara',
+      load_error: 'Impossible de charger. Vérifiez votre connexion puis rechargez la page.',
+      start_error: 'Le paiement n\'a pas pu être lancé. Réessayez.',
+      net_error: 'Connexion impossible. Réessayez.',
+      rate_limited: 'Trop de tentatives. Patientez une minute puis réessayez.',
+      fcfa: 'FCFA', lang_button: 'العربية'
+    },
+    ar: {
+      title: 'Idara — الاشتراك', loading: 'جارٍ التحميل…',
+      due_title: 'اشتراك مستحق', total: 'المجموع',
+      period: 'الفترة', sms_line: 'منها {amount} رسائل قصيرة ({count})',
+      deadline: 'إذا لم يتم الدفع قبل {date}، سيتم حظر الوصول إلى مساحتك.',
+      readonly_now: 'مساحتك للقراءة فقط إلى أن يُسدَّد هذا الاشتراك.',
+      nothing_title: 'اشتراكك مسدَّد',
+      nothing_hint: 'لا شيء مستحق حاليًا. احتفظ بهذا الرابط: سيُستخدم للاستحقاقات القادمة.',
+      next_billing: 'الاستحقاق القادم: {date} — {amount}.',
+      pending_title: 'هناك عملية دفع جارية',
+      pending_hint: 'ننتظر تأكيد Wave. إذا كنت قد ألغيت العملية فستختفي هذه الرسالة بعد لحظات.',
+      pending_link: 'عرض هذه العملية',
+      revoked_title: 'هذا الرابط لم يعد صالحًا',
+      revoked_hint: 'تواصل مع Idara للحصول على رابط جديد.',
+      pay: 'الدفع عبر Wave',
+      inapp: 'إذا لم يُفتح Wave، افتح هذا الرابط في Chrome أو Safari (القائمة ⋮ ← « فتح في المتصفح »).',
+      footer: 'دفع آمن عبر Wave · Idara',
+      load_error: 'تعذّر التحميل. تحقق من اتصالك ثم أعد تحميل الصفحة.',
+      start_error: 'تعذّر بدء الدفع. حاول مرة أخرى.',
+      net_error: 'لا يوجد اتصال. حاول مرة أخرى.',
+      rate_limited: 'محاولات كثيرة. انتظر دقيقة ثم حاول مرة أخرى.',
+      fcfa: 'FCFA', lang_button: 'Français'
+    }
+  };
+
+  var lang = (function () {
+    var q = new URLSearchParams(location.search).get('lang');
+    if (q === 'fr' || q === 'ar') return q;
+    try { var st = localStorage.getItem('idara_lang'); if (st === 'fr' || st === 'ar') return st; } catch (e) {}
+    return /^ar/i.test(navigator.language || '') ? 'ar' : 'fr';
+  })();
+
+  function t(key, vars) {
+    var s = (I18N[lang] && I18N[lang][key]) || I18N.fr[key] || key;
+    if (vars) Object.keys(vars).forEach(function (k) { s = s.split('{' + k + '}').join(vars[k]); });
+    return s;
+  }
+  function $(id) { return document.getElementById(id); }
+  function show(id, on) { $(id).classList.toggle('hidden', !on); }
+
+  function applyLang() {
+    document.documentElement.lang = lang;
+    document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+    document.title = t('title');
+    document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = t(el.getAttribute('data-i18n')); });
+    $('lang').textContent = t('lang_button');
+    try { localStorage.setItem('idara_lang', lang); } catch (e) {}
+  }
+
+  $('lang').addEventListener('click', function () {
+    lang = lang === 'ar' ? 'fr' : 'ar';
+    applyLang();
+    if (state) render(state);
+  });
+  applyLang();
+
+  // L'argent en chiffres LATINS, « FCFA » avant le nombre en arabe (§239).
+  // Les marques d'isolation U+2066/U+2069 empêchent le montant de se retourner
+  // au milieu d'une phrase RTL.
+  function fmt(n) {
+    var g = String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return lang === 'ar'
+      ? '⁦' + t('fcfa') + ' ' + g + '⁩'
+      : '⁦' + g + ' ' + t('fcfa') + '⁩';
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    // Chiffres latins dans les deux langues : une date se lit comme un montant.
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return '⁦' + p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + '⁩';
+  }
+  function isInApp() {
+    var ua = navigator.userAgent || '';
+    return /whatsapp|fban|fbav|fb_iab|instagram|messenger|line\//i.test(ua);
+  }
+  function setError(msg) { $('error').textContent = msg || ''; }
+
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var base = location.pathname.replace(/\/$/, '');
+  var state = null;
+
+  function render(s) {
+    show('loading', false);
+    show('due', false); show('nothing', false); show('pending', false); show('revoked', false);
+    show('pay', false); show('sms-line', false); show('deadline', false);
+
+    if (s.status === 'revoked' || s.status === 'not_found') { show('revoked', true); return; }
+
+    if (s.status === 'pending') {
+      show('pending', true);
+      if (s.pendingResultUrl) $('pending-link').setAttribute('href', s.pendingResultUrl);
+      return;
+    }
+
+    if (s.status === 'nothing_due') {
+      show('nothing', true);
+      if (s.nextBillingAt) {
+        $('next').textContent = t('next_billing', {
+          date: fmtDate(s.nextBillingAt), amount: fmt(s.amountFcfa || 0)
+        });
+      }
+      return;
+    }
+
+    // status === 'due'
+    show('due', true);
+    $('school').textContent = s.schoolName || '';
+    $('period').innerHTML = '<span>' + t('period') + '</span><b>'
+      + fmtDate(s.periodStart) + ' → ' + fmtDate(s.periodEnd) + '</b>';
+    if (s.smsRefactureFcfa > 0) {
+      show('sms-line', true);
+      $('sms-line').innerHTML = '<span>'
+        + t('sms_line', { amount: fmt(s.smsRefactureFcfa), count: s.smsRefactureCount })
+        + '</span>';
+    }
+    $('total').textContent = fmt(s.amountFcfa);
+
+    // Une relance qui ne dit pas QUAND n'a fait que la moitié du chemin.
+    if (s.readOnlyEndsAt) {
+      show('deadline', true);
+      $('deadline').textContent = t('deadline', { date: fmtDate(s.readOnlyEndsAt) });
+    } else if (s.subscriptionStatus === 'ReadOnly' || s.subscriptionStatus === 'Suspended') {
+      show('deadline', true);
+      $('deadline').textContent = t('readonly_now');
+    }
+
+    show('pay', true);
+    show('inapp', isInApp());
+  }
+
+  function load() {
+    fetch(base + '/state', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        state = res.body;
+        render(state);
+      })
+      .catch(function () {
+        show('loading', false);
+        setError(t('load_error'));
+      });
+  }
+
+  $('pay').addEventListener('click', function () {
+    setError('');
+    $('pay').disabled = true;
+    fetch(base + '/start', { method: 'POST', headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        var b = res.body || {};
+        if (res.status === 429) { setError(t('rate_limited')); $('pay').disabled = false; return; }
+        if (b.status === 'redirect' && b.redirectUrl) {
+          // 🔴 On NAVIGUE l'onglet courant : window.open est refusé par Chrome
+          // Android quand il n'est pas issu d'un geste direct (§113).
+          location.href = b.redirectUrl;
+          return;
+        }
+        if (b.status === 'pending' || b.status === 'nothing_due') { load(); return; }
+        setError(b.message || t('start_error'));
+        $('pay').disabled = false;
+      })
+      .catch(function () {
+        setError(t('net_error'));
+        $('pay').disabled = false;
+      });
+  });
+
+  load();
+</script>
+</body>
+</html>

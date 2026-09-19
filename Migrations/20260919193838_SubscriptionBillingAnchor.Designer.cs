@@ -3,6 +3,7 @@ using System;
 using Idara.API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Idara.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260919193838_SubscriptionBillingAnchor")]
+    partial class SubscriptionBillingAnchor
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1839,9 +1842,6 @@ namespace Idara.API.Migrations
                     b.Property<int?>("StudentId")
                         .HasColumnType("integer");
 
-                    b.Property<int?>("SubscriptionInvoiceId")
-                        .HasColumnType("integer");
-
                     b.Property<long>("TargetAmountFcfa")
                         .HasColumnType("bigint");
 
@@ -1870,8 +1870,6 @@ namespace Idara.API.Migrations
                         .HasFilter("\"PublicResultToken\" IS NOT NULL");
 
                     b.HasIndex("StudentId");
-
-                    b.HasIndex("SubscriptionInvoiceId");
 
                     b.HasIndex("DonorId", "InitiatedAt");
 
@@ -3322,52 +3320,6 @@ namespace Idara.API.Migrations
                     b.ToTable("SubscriptionInvoices");
                 });
 
-            modelBuilder.Entity("Idara.API.Models.SubscriptionPaymentLink", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("FirstOpenedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("LastOpenedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("LastSharedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("OpenCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("RevokedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("SchoolId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SchoolId")
-                        .IsUnique()
-                        .HasFilter("\"RevokedAt\" IS NULL");
-
-                    b.HasIndex("Token")
-                        .IsUnique();
-
-                    b.ToTable("SubscriptionPaymentLinks");
-                });
-
             modelBuilder.Entity("Idara.API.Models.SubscriptionPlan", b =>
                 {
                     b.Property<int>("Id")
@@ -4492,11 +4444,6 @@ namespace Idara.API.Migrations
                         .HasForeignKey("StudentId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Idara.API.Models.SubscriptionInvoice", null)
-                        .WithMany()
-                        .HasForeignKey("SubscriptionInvoiceId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("CollectedBy");
 
                     b.Navigation("DonationCampaign");
@@ -4776,17 +4723,6 @@ namespace Idara.API.Migrations
                         .IsRequired();
 
                     b.Navigation("Subscription");
-                });
-
-            modelBuilder.Entity("Idara.API.Models.SubscriptionPaymentLink", b =>
-                {
-                    b.HasOne("Idara.API.Models.School", "School")
-                        .WithMany()
-                        .HasForeignKey("SchoolId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("School");
                 });
 
             modelBuilder.Entity("Idara.API.Models.SubscriptionPlan", b =>

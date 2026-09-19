@@ -25,13 +25,16 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly SubscriptionBillingJob _billingJob;
+        private readonly ISubscriptionPaymentLinkService _links;
         private readonly ILogger<SubscriptionsController> _logger;
 
         public SubscriptionsController(
-            AppDbContext context, SubscriptionBillingJob billingJob, ILogger<SubscriptionsController> logger)
+            AppDbContext context, SubscriptionBillingJob billingJob,
+            ISubscriptionPaymentLinkService links, ILogger<SubscriptionsController> logger)
         {
             _context = context;
             _billingJob = billingJob;
+            _links = links;
             _logger = logger;
         }
 
@@ -129,7 +132,14 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(s => s.SchoolId == schoolId.Value, ct);
             if (sub == null) return NotFound(ApiResponse<SubscriptionDto>.Fail("Abonnement introuvable."));
 
-            return Ok(ApiResponse<SubscriptionDto>.Ok(Map(sub)));
+            var dto = Map(sub);
+            // Le lien de paiement accompagne TOUJOURS l'abonnement de l'école :
+            // c'est lui que le mur de paiement propose, et il doit exister avant
+            // qu'on en ait besoin — pas au moment où l'accès vient d'être coupé.
+            var (link, _) = await _links.EnsureAsync(schoolId.Value, ct);
+            dto.PaymentLinkUrl = _links.BuildUrl(link.Token);
+
+            return Ok(ApiResponse<SubscriptionDto>.Ok(dto));
         }
 
         /// <summary>
