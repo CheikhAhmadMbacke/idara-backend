@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Common.Utilities
 {
@@ -97,12 +97,17 @@ namespace Idara.API.Common.Utilities
         /// donnerait le même résultat aujourd'hui et un résultat faux le jour où
         /// le VPS change de fuseau.</para>
         ///
-        /// <para><b>La longueur est MESURÉE, pas estimée</b> (§192). Le nom d'un
-        /// daara réel fait jusqu'à 45 caractères (§280) : additionner des
-        /// longueurs supposées ferait déborder sur un deuxième segment sans que
-        /// rien ne le signale, puisque le message s'afficherait normalement.
-        /// C'est la phrase qui est rognée, jamais la date ni le préfixe — sans
-        /// l'heure, l'alerte ne dit plus quand.</para>
+        /// <para>🔴 <b>La longueur est MESURÉE par le calculateur de segments, pas
+        /// comptée en caractères.</b> Les deux ne sont pas la même chose : dans
+        /// l'alphabet GSM-7, <c>~ [ ] { } \ | ^ €</c> vivent dans une table
+        /// d'extension et coûtent <b>DEUX</b> caractères chacun. Un premier
+        /// réglage bornait à 160 caractères et produisait bel et bien des messages
+        /// à <b>deux segments</b> — à cause du <c>~</c> qui marquait justement la
+        /// troncature. Estimer une longueur ici, c'est refaire l'erreur du §192 :
+        /// on rogne donc en boucle jusqu'à ce que la MESURE dise un segment.</para>
+        ///
+        /// <para>C'est la phrase qui est rognée, jamais la date ni le préfixe —
+        /// sans l'heure, l'alerte ne dit plus quand.</para>
         /// </summary>
         /// <param name="headline">La phrase, sans préfixe ni date.</param>
         /// <param name="whenUtc">Instant de l'événement.</param>
@@ -111,20 +116,73 @@ namespace Idara.API.Common.Utilities
             var stamp = whenUtc.ToString("dd/MM HH'h'mm",
                 System.Globalization.CultureInfo.InvariantCulture);
 
-            // Assaini AVANT de mesurer : « é » compte pour un caractère GSM-7,
-            // « ë » n'existe pas dans l'alphabet et basculerait tout le message
-            // en UCS-2 — 70 caractères par segment au lieu de 160 (§225).
-            var body = Gsm7Text.Sanitize(headline ?? string.Empty).Trim();
+            var body = Clean(headline);
             if (body.EndsWith('.')) body = body[..^1];
 
-            var overhead = Prefix.Length + 2 + stamp.Length; // ". " avant la date
-            var room = SingleSegmentLength - overhead;
-            if (room < 1) return Prefix + stamp;             // inatteignable, mais jamais de longueur négative
+            string Rendu(string corps) => corps.Length == 0
+                ? $"{Prefix}{stamp}"
+                : $"{Prefix}{corps}. {stamp}";
 
-            if (body.Length > room)
-                body = body[..Math.Max(0, room - 1)].TrimEnd() + "~";
+            var text = Rendu(body);
 
-            return $"{Prefix}{body}. {stamp}";
+            // Rognage MESURÉ. La boucle décroît strictement et s'arrête au pire sur
+            // un corps vide, donc elle termine toujours — même si l'appelant passe
+            // une phrase entièrement composée de caractères à double coût.
+            while (body.Length > 0 && SmsSegmentCalculator.Measure(text).Segments > 1)
+            {
+                // On retire par petits paquets : un caractère à la fois ferait
+                // jusqu'à 160 mesures pour rien.
+                var coupe = Math.Max(1, body.Length / 16);
+                body = body[..(body.Length - coupe)].TrimEnd();
+                text = Rendu(body);
+            }
+
+            return text;
+        }
+
+        /// <summary>
+        /// Marque de troncature.
+        ///
+        /// <para>Un point et non <c>~</c> ni <c>…</c> : le premier coûte DEUX
+        /// caractères GSM-7 (table d'extension) et le second n'appartient pas du
+        /// tout à l'alphabet, donc il ferait basculer le message entier en UCS-2
+        /// et <b>doublerait la facture</b> (§225). Le point, lui, se lit comme une
+        /// abréviation et coûte ce qu'il montre.</para>
+        /// </summary>
+        private const string TruncationMark = ".";
+
+        /// <summary>
+        /// Assainit un fragment destiné au SMS : alphabet GSM-7, et <b>une seule
+        /// ligne</b>.
+        ///
+        /// <para>🔴 Les sauts de ligne sont écrasés, et ce n'est pas cosmétique.
+        /// <c>LF</c> appartient à l'alphabet GSM-7, donc il traversait
+        /// l'assainissement intact — or une partie de ce message vient de texte
+        /// SAISI PAR UNE ÉCOLE (le nom du daara). Un nom contenant
+        /// « Daara X ⏎⏎ Idara: retrait bloque URGENT appelez 77… » aurait produit
+        /// un SMS qui ressemble à <b>deux</b> alertes, dont une fabriquée. Un
+        /// canal d'alerte doit être le seul à pouvoir écrire ses propres
+        /// phrases.</para>
+        /// </summary>
+        private static string Clean(string? input)
+        {
+            var t = Gsm7Text.Sanitize(input ?? string.Empty);
+
+            var sb = new System.Text.StringBuilder(t.Length);
+            var espacePrecedente = false;
+            foreach (var c in t)
+            {
+                var estEspace = char.IsWhiteSpace(c) || char.IsControl(c);
+                if (estEspace)
+                {
+                    if (!espacePrecedente && sb.Length > 0) sb.Append(' ');
+                    espacePrecedente = true;
+                    continue;
+                }
+                sb.Append(c);
+                espacePrecedente = false;
+            }
+            return sb.ToString().TrimEnd();
         }
 
         /// <summary>
@@ -133,13 +191,16 @@ namespace Idara.API.Common.Utilities
         ///
         /// <para>Un NOM se coupe, il ne se réduit pas (§243) : on ne peut pas
         /// abréger « Daara Serigne Fallou Mbacké » sans écrire quelque chose de
-        /// faux. Le tilde final dit que la lecture continue ailleurs.</para>
+        /// faux. Le point final dit que la lecture continue ailleurs.</para>
+        ///
+        /// <para>Ce n'est qu'un pré-rognage de confort : c'est
+        /// <see cref="Compose"/> qui garantit le segment unique, en mesurant.</para>
         /// </summary>
         public static string ShortName(string? name, int max = 40)
         {
-            var n = Gsm7Text.Sanitize(name ?? string.Empty).Trim();
+            var n = Clean(name);
             if (n.Length == 0) return "(sans nom)";
-            return n.Length <= max ? n : n[..(max - 1)].TrimEnd() + "~";
+            return n.Length <= max ? n : n[..(max - 1)].TrimEnd() + TruncationMark;
         }
     }
 }

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 
 namespace Idara.API.Common.Utilities
@@ -63,14 +63,36 @@ namespace Idara.API.Common.Utilities
             if (string.IsNullOrEmpty(input)) return string.Empty;
 
             var sb = new StringBuilder(input.Length);
-            foreach (var c in input)
+
+            // 🔴 Parcours par POINT DE CODE et non par `char`, et ce n'est pas
+            // du zèle : un emoji s'écrit en .NET sur DEUX `char` (une paire de
+            // substituts), et `Normalize` LÈVE sur un demi-substitut isolé
+            // (« String contains invalid Unicode code points »). La boucle par
+            // `char` faisait donc échouer l'assainissement entier sur un seul
+            // emoji — et avec lui le SMS, silencieusement, puisque l'appelant
+            // attrape tout. Un directeur qui met un emoji dans le nom de son
+            // daara aurait coupé TOUS les SMS de son école sans que rien ne le
+            // dise. Aucun cas en production au 2026-09-19 (0 sur les élèves, les
+            // écoles et les comptes) : le défaut était latent, pas vécu.
+            //
+            // `EnumerateRunes` rend U+FFFD pour un substitut mal appairé au lieu
+            // de lever : la chaîne la plus malformée qui soit ne peut plus casser
+            // un envoi.
+            foreach (var rune in input.EnumerateRunes())
             {
-                if (Direct.TryGetValue(c, out var repl)) { sb.Append(repl); continue; }
-                if (SmsSegmentCalculator.IsGsm7Char(c)) { sb.Append(c); continue; }
+                // Tout l'alphabet GSM-7 et toutes les substitutions tiennent dans
+                // le plan de base : hors BMP, il n'y a rien à garder ni à
+                // décomposer, seulement à retirer.
+                if (rune.IsBmp)
+                {
+                    var c = (char)rune.Value;
+                    if (Direct.TryGetValue(c, out var repl)) { sb.Append(repl); continue; }
+                    if (SmsSegmentCalculator.IsGsm7Char(c)) { sb.Append(c); continue; }
+                }
 
                 // Dernier recours : retirer le diacritique (é reste é car il est
                 // déjà dans l'alphabet ; ẞ, ā, ő… retombent sur leur lettre).
-                var decomposed = c.ToString().Normalize(NormalizationForm.FormD);
+                var decomposed = rune.ToString().Normalize(NormalizationForm.FormD);
                 var kept = false;
                 foreach (var d in decomposed)
                 {
@@ -79,7 +101,7 @@ namespace Idara.API.Common.Utilities
                     sb.Append(d);
                     kept = true;
                 }
-                if (!kept && char.IsWhiteSpace(c)) sb.Append(' ');
+                if (!kept && Rune.IsWhiteSpace(rune)) sb.Append(' ');
             }
             return sb.ToString();
         }
