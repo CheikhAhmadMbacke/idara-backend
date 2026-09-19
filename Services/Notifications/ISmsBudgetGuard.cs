@@ -22,12 +22,33 @@ namespace Idara.API.Services.Notifications
     /// senegalaise, le coupe-circuit, le palier ABSOLU de la plateforme et le
     /// plafond par DESTINATAIRE. Autrement dit, tout ce qui protege de la
     /// facture catastrophique et du harcelement d'une personne.</para></param>
+    /// <param name="OpsAlert">Alerte d'exploitation vers le numéro d'alerte
+    /// CONFIGURÉ — pas un envoi à un utilisateur.
+    ///
+    /// <para>Ce canal échappe aux plafonds par destinataire, par école, au
+    /// palier souple ET au palier absolu. Ce n'est pas une faveur, c'est la
+    /// seule façon qu'il fonctionne : le message le plus important qu'il
+    /// transporte est justement « plus aucun SMS ne part ». Le couper au moment
+    /// où le palier absolu est atteint laisserait le silence comme unique
+    /// symptôme d'une plateforme muette.</para>
+    ///
+    /// <para>🔴 Ce qui rend l'exemption sûre, c'est que le numéro est FIXE et
+    /// vient de la configuration serveur. Le raisonnement du §259 — plafonner
+    /// parce qu'un inconnu choisit le destinataire — ne s'applique pas ici :
+    /// personne d'autre que nous ne peut faire sonner ce téléphone. La dépense
+    /// reste bornée par la bourse quotidienne du canal
+    /// (<c>OpsAlerts:SmsMaxPerDay</c>), comptée par l'appelant.</para>
+    ///
+    /// <para>Reste en vigueur, sans exception : la destination sénégalaise. Une
+    /// alerte qui partirait à l'étranger serait un numéro d'alerte mal saisi, et
+    /// il vaut mieux le voir que le payer onze fois le prix.</para></param>
     public record SmsGuardContext(
         int? SchoolId,
         string RecipientE164,
         string Message,
         SmsPriority Priority,
-        bool AuthorizedCampaign = false);
+        bool AuthorizedCampaign = false,
+        bool OpsAlert = false);
 
     /// <summary>
     /// Verdict du garde-fou, accompagné du chiffrage — calculé une seule fois et

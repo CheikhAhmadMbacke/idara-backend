@@ -227,7 +227,7 @@ namespace Idara.API.Services.Notifications
                 // plafond ne peut pas être contourné par un appelant futur.
                 var verdict = await _guard.EvaluateAsync(
                     new SmsGuardContext(schoolId, phone, text, priority,
-                        req.AuthorizedCampaign), ct);
+                        req.AuthorizedCampaign, req.OpsAlert), ct);
 
                 if (!verdict.Allowed)
                 {

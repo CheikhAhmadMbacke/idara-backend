@@ -4,6 +4,7 @@ using Idara.API.DTOs.Alerts;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
+using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -103,6 +104,14 @@ namespace Idara.API.Services.Alerts
             _logger.Log(level, "[ops-alert] {Kind} — {Subject} | {Body}",
                 request.Kind, request.Subject, body.Replace('\n', ' '));
 
+            // ---- SMS : la sonnette, traitée AVANT et INDÉPENDAMMENT -----
+            // Volontairement placé avant la chaîne e-mail, et hors de ses
+            // `return` : un e-mail regroupé ou plafonné ne doit pas faire taire
+            // le SMS. Les deux canaux ont leurs propres compteurs et tombent en
+            // panne séparément — c'est même quand la boîte déborde qu'on veut
+            // encore être appelé.
+            await TrySendSmsAsync(db, alert, request, now, ct);
+
             // ---- Regroupement ------------------------------------------
             // Une réserve de décaissement à sec fait échouer le retrait de
             // chaque école qui essaie : sans regroupement, ce serait vingt
@@ -163,6 +172,124 @@ namespace Idara.API.Services.Alerts
 
             _logger.LogInformation("[ops-alert] Alerte {Kind} envoyée à {To:l} ({Key}).",
                 request.Kind, to, alert.GroupingKey);
+        }
+
+        /// <summary>
+        /// Envoie le SMS d'alerte, si cette nature le mérite et si la bourse du
+        /// jour n'est pas épuisée.
+        ///
+        /// <para><b>Ne lève jamais</b> : une sonnette qui n'a pas sonné ne doit
+        /// pas empêcher l'e-mail de partir, ni la ligne d'être écrite. Tout est
+        /// déjà en base à ce stade.</para>
+        /// </summary>
+        private async Task TrySendSmsAsync(
+            AppDbContext db, OpsAlert alert, OpsAlertRequest request, DateTime now, CancellationToken ct)
+        {
+            try
+            {
+                if (!_settings.SmsEnabled) return;
+                if (!OpsAlertSms.ShouldSend(request.Kind)) return;
+
+                // 🔴 Le numéro est validé ICI, et un numéro invalide éteint le
+                // canal au lieu de tenter l'envoi. Ce n'est pas de la politesse :
+                // un numéro étranger ferait lever au garde-fou une alerte
+                // « destinataire hors Sénégal », qui est elle-même dans la liste
+                // blanche du SMS, qui tenterait à nouveau le même numéro… La
+                // boucle se ferme en refusant de partir, pas en s'en remettant à
+                // un compteur.
+                var phone = SenegalPhone.Normalize(_settings.SmsPhone);
+                if (phone == null || !SmsSegmentCalculator.IsSenegalMobileE164(phone))
+                {
+                    if (!string.IsNullOrWhiteSpace(_settings.SmsPhone))
+                        _logger.LogWarning(
+                            "[ops-alert] Canal SMS éteint : OpsAlerts:SmsPhone n'est pas un mobile sénégalais valide.");
+                    return;
+                }
+
+                // Regroupement, sur la marque du SMS et non sur celle de
+                // l'e-mail. Même fenêtre, compteur distinct : quand la réserve
+                // de décaissement est à sec, dix écoles échouent en quelques
+                // minutes et dix SMS identiques videraient la bourse en une
+                // fois, en noyant celui qui parlerait d'autre chose.
+                var since = now.AddMinutes(-Math.Max(1, _settings.GroupingMinutes));
+                var dejaSonne = await db.OpsAlerts.AnyAsync(
+                    a => a.Id != alert.Id
+                         && a.SmsSentAt != null
+                         && a.SmsSentAt >= since
+                         && a.GroupingKey == alert.GroupingKey, ct);
+                if (dejaSonne)
+                {
+                    _logger.LogInformation(
+                        "[ops-alert] SMS regroupé : {Key} a déjà sonné dans les {Minutes} dernières minutes.",
+                        alert.GroupingKey, _settings.GroupingMinutes);
+                    return;
+                }
+
+                // Bourse quotidienne du canal. C'est elle qui remplace les
+                // plafonds dont ce canal est exempté : sans exemption il se
+                // serait tu au bout de neuf messages (le numéro d'alerte avait
+                // déjà reçu 11 SMS sur 30 jours au 2026-09-19, pour un plafond
+                // par destinataire de 20), et sans bourse une boucle pourrait
+                // envoyer sans fin.
+                var sentToday = await db.OpsAlerts.CountAsync(
+                    a => a.SmsSentAt != null && a.SmsSentAt >= now.Date, ct);
+                if (sentToday >= Math.Max(0, _settings.SmsMaxPerDay))
+                {
+                    _logger.LogWarning(
+                        "[ops-alert] Bourse SMS du jour épuisée ({Count}/jour) — {Key} reste en base et part par e-mail.",
+                        sentToday, alert.GroupingKey);
+                    return;
+                }
+
+                // Hors production, le SMS le DIT — et en tête, parce qu'une
+                // notification tronquée sur un écran verrouillé ne montre que le
+                // début. Même motif que SubjectPrefix : un banc d'essai qui
+                // n'alerte pas ne prouve rien, mais une alerte de banc d'essai
+                // indiscernable de la vraie fait croire la plateforme à l'arrêt.
+                var headline = request.SmsHeadline ?? request.Subject;
+                if (!_env.IsProduction()) headline = $"[TEST] {headline}";
+
+                var text = OpsAlertSms.Compose(headline, now);
+
+                using var scope = _scopeFactory.CreateScope();
+                var notif = scope.ServiceProvider.GetRequiredService<INotificationService>();
+
+                // Passe par le point unique d'envoi (règle CLAUDE.md) : c'est là
+                // que vivent l'assainissement GSM-7 et le registre de dépense.
+                // `Bilingual: false` et « fr » ne sont pas un oubli de l'arabe :
+                // ce canal n'a qu'un destinataire, il est francophone, et un
+                // corps bilingue coûterait TROIS segments au lieu d'un (§88).
+                var ok = await notif.SendSmsAsync(new NotificationSmsRequest(
+                    UserId: null,
+                    RawPhone: phone,
+                    PreferredLanguage: "fr",
+                    Message: new BilingualMessage(text, string.Empty, PreComposed: true),
+                    Bilingual: false,
+                    TemplateCode: OpsAlertSms.TemplateCode,
+                    RelatedEntityId: alert.Id,
+                    Priority: SmsPriority.Critical,
+                    TriggerSource: $"ops-alert:{request.Kind}",
+                    OpsAlert: true), ct);
+
+                if (!ok)
+                {
+                    // Pas de nouvelle tentative : la prochaine occurrence du même
+                    // défaut retentera d'elle-même, puisque SmsSentAt reste nul
+                    // et que le regroupement ne verra rien derrière quoi se taire.
+                    _logger.LogWarning("[ops-alert] SMS non parti pour {Key}.", alert.GroupingKey);
+                    return;
+                }
+
+                alert.SmsSentAt = now;
+                await db.SaveChangesAsync(ct);
+                _logger.LogInformation("[ops-alert] SMS envoyé ({Kind}, {Key}).", request.Kind, alert.GroupingKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[ops-alert] Envoi SMS impossible pour {Key} — l'e-mail suit son cours.",
+                    alert.GroupingKey);
+            }
         }
 
         /// <summary>

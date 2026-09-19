@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Services.Alerts
 {
@@ -24,6 +24,19 @@ namespace Idara.API.Services.Alerts
     /// <param name="Advice">Ce qu'il y a à faire, si c'est connu d'avance.</param>
     /// <param name="SchoolId">École concernée, si l'alerte en vise une.</param>
     /// <param name="RelatedId">Entité métier visée (retrait, utilisateur…).</param>
+    /// <param name="SmsHeadline">La phrase du SMS, sans préfixe ni date — celle
+    /// qui se lit sur un écran verrouillé.
+    ///
+    /// <para>N'est utilisée que si la nature de l'alerte figure dans la liste
+    /// blanche (<see cref="Common.Utilities.OpsAlertSms.ShouldSend"/>) : la
+    /// renseigner ne suffit pas à faire sonner un téléphone, et l'omettre sur une
+    /// nature qui sonne fait simplement retomber sur le <c>Subject</c>. Deux
+    /// verrous plutôt qu'un, pour qu'aucun appelant futur n'ouvre le canal par
+    /// inadvertance.</para>
+    ///
+    /// <para>🔑 Elle doit NOMMER qui est concerné (§177) : « Retrait bloque —
+    /// Daara X » et non « un retrait a échoué ». Une alerte qui ne dit pas qui
+    /// oblige à ouvrir l'e-mail, donc n'a fait que la moitié du chemin.</para></param>
     public record OpsAlertRequest(
         OpsAlertKind Kind,
         string GroupingKey,
@@ -31,7 +44,8 @@ namespace Idara.API.Services.Alerts
         IReadOnlyList<AlertFact> Facts,
         string? Advice = null,
         int? SchoolId = null,
-        int? RelatedId = null);
+        int? RelatedId = null,
+        string? SmsHeadline = null);
 
     /// <summary>
     /// Prévient le SuperAdmin par e-mail d'un événement d'exploitation, et le

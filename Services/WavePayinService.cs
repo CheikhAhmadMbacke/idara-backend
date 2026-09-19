@@ -3,7 +3,9 @@ using Idara.API.Data;
 using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
 using Idara.API.Models;
+using Idara.API.Common.Utilities;
 using Idara.API.Options;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Idara.API.Services
@@ -45,18 +47,73 @@ namespace Idara.API.Services
         private readonly IPaymentAvailabilityService _availability;
         private readonly WaveSettings _settings;
         private readonly AppDbContext _context;
+        private readonly Alerts.IOpsAlertService _alerts;
         private readonly ILogger<WavePayinService> _logger;
 
         public WavePayinService(
             IWaveClient wave, IPaymentAvailabilityService availability,
             IOptions<WaveSettings> settings,
-            AppDbContext context, ILogger<WavePayinService> logger)
+            AppDbContext context, Alerts.IOpsAlertService alerts,
+            ILogger<WavePayinService> logger)
         {
             _wave = wave;
             _availability = availability;
             _settings = settings.Value;
             _context = context;
+            _alerts = alerts;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// Prévient qu'un encaissement n'a pas pu s'ouvrir chez le prestataire.
+        ///
+        /// <para>Ne lève jamais : le paiement est déjà clos (ou laissé en état
+        /// indéterminé, §78), et une alerte ratée ne doit pas aggraver un
+        /// paiement qui a déjà échoué.</para>
+        /// </summary>
+        private async Task AlertPayinRejectedAsync(
+            Payment payment, WaveApiException ex, CancellationToken ct)
+        {
+            try
+            {
+                var ecole = await _context.Schools.AsNoTracking()
+                    .Where(x => x.Id == payment.SchoolId)
+                    .Select(x => x.Name)
+                    .FirstOrDefaultAsync(ct) ?? $"#{payment.SchoolId}";
+
+                _alerts.Queue(new Alerts.OpsAlertRequest(
+                    OpsAlertKind.PayinProviderRejected,
+                    GroupingKey: "payin-provider-rejected",
+                    Subject: "Paiement impossible — Wave refuse d'ouvrir la session",
+                    Facts: new[]
+                    {
+                        new Alerts.AlertFact("Ecole", ecole),
+                        new Alerts.AlertFact("Montant",
+                            payment.AmountFcfa.ToString("N0",
+                                System.Globalization.CultureInfo.InvariantCulture)
+                                .Replace(",", " ") + " FCFA"),
+                        new Alerts.AlertFact("Reponse Wave",
+                            $"HTTP {ex.StatusCode?.ToString() ?? "-"} {ex.Code ?? "-"}".Trim()),
+                        new Alerts.AlertFact("Detail", ex.Message.Length > 300
+                            ? ex.Message[..300] : ex.Message),
+                        new Alerts.AlertFact("Issue du paiement", ex.IsDefinitiveRejection
+                            ? "Clos en echec (Wave n'a rien execute)"
+                            : "Laisse en l'etat - issue indeterminee, le travail de verification tranchera"),
+                    },
+                    Advice: "Le payeur a appuye sur « Payer » et rien ne s'est passe. Verifier l'etat "
+                          + "du service Wave et la validite de la cle API. Tant que cela dure, AUCUNE "
+                          + "famille ne peut payer en ligne — l'encaissement en especes, lui, reste "
+                          + "ouvert au guichet.",
+                    SchoolId: payment.SchoolId,
+                    RelatedId: payment.Id,
+                    SmsHeadline: "paiement impossible, Wave refuse d'ouvrir la session ("
+                        + OpsAlertSms.ShortName(ecole, 55) + ")"));
+            }
+            catch (Exception alertEx)
+            {
+                _logger.LogError(alertEx,
+                    "[payin] Alerte impossible pour le Payment {Id} — pas bloquant", payment.Id);
+            }
         }
 
         public string ResultPageUrl(Payment payment) =>
@@ -118,6 +175,17 @@ namespace Idara.API.Services
                     payment.FailureReason = $"Wave HTTP {ex.StatusCode} {ex.Code}".Trim();
                     await _context.SaveChangesAsync(ct);
                 }
+
+                // 🔴 Ce refus était INVISIBLE avant le 2026-09-19 : une ligne de
+                // journal, et rien d'autre. Or c'est le seul échec d'encaissement
+                // qui ne vienne ni du payeur ni de l'école — la famille a appuyé
+                // sur « Payer » et l'écran n'a pas bougé. Personne ne le signale :
+                // on réessaie plus tard, ou on renonce.
+                //
+                // Groupée par CAUSE et non par paiement : si Wave est en peine,
+                // chaque famille qui tente produit une alerte, et vingt messages
+                // identiques feraient perdre le vingt-et-unième.
+                await AlertPayinRejectedAsync(payment, ex, ct);
 
                 return new PayinStartOutcome(false, "Failed", null,
                     "Le paiement est temporairement indisponible. Réessayez dans quelques secondes.",

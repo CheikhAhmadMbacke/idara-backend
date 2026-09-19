@@ -1,4 +1,4 @@
-using Idara.API.Enums;
+﻿using Idara.API.Enums;
 
 namespace Idara.API.Models
 {
@@ -52,6 +52,20 @@ namespace Idara.API.Models
         /// mais NON envoyée (regroupée, plafond atteint, ou envoi en échec) —
         /// distinction importante : elle dit si tu as réellement été prévenu.</summary>
         public DateTime? EmailedAt { get; set; }
+
+        /// <summary>
+        /// Horodatage de l'envoi du SMS d'alerte. NULL = aucun SMS pour cette
+        /// ligne — soit sa nature n'en mérite pas (<see cref="Common.Utilities.OpsAlertSms.ShouldSend"/>),
+        /// soit elle a été regroupée derrière une précédente, soit la bourse du
+        /// jour était épuisée.
+        ///
+        /// <para>🔴 Colonne SÉPARÉE de <see cref="EmailedAt"/>, et ce n'est pas
+        /// un détail : les deux canaux ont des plafonds différents et tombent en
+        /// panne séparément. Partager une seule marque ferait taire le SMS dès
+        /// que l'e-mail est plafonné — or c'est précisément quand la boîte
+        /// déborde qu'on veut encore être appelé.</para>
+        /// </summary>
+        public DateTime? SmsSentAt { get; set; }
 
         /// <summary>Traitée / classée par le SuperAdmin.</summary>
         public bool Resolved { get; set; }

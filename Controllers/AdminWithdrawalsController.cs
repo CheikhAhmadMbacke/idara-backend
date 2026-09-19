@@ -38,12 +38,15 @@ namespace Idara.API.Controllers
         private static readonly TimeSpan StuckThreshold = TimeSpan.FromHours(48);
 
         private readonly AppDbContext _context;
+        private readonly IOpsAlertService _alerts;
         private readonly ILogger<AdminWithdrawalsController> _logger;
 
         public AdminWithdrawalsController(
-            AppDbContext context, ILogger<AdminWithdrawalsController> logger)
+            AppDbContext context, IOpsAlertService alerts,
+            ILogger<AdminWithdrawalsController> logger)
         {
             _context = context;
+            _alerts = alerts;
             _logger = logger;
         }
 
@@ -274,6 +277,66 @@ namespace Idara.API.Controllers
             _logger.LogInformation("[ops-alert] Alerte {Id} classee par SuperAdmin {UserId}",
                 id, User.GetUserId());
             return Ok(ApiResponse<bool>.Ok(true, "Alerte classee."));
+        }
+
+        /// <summary>
+        /// Fait sonner le numéro d'alerte, tout de suite.
+        ///
+        /// <para><b>Pourquoi cet endpoint existe.</b> Un dispositif d'alerte ne
+        /// se vérifie pas en relisant sa configuration : il se vérifie en
+        /// recevant le message. Sans ce bouton, la seule façon de savoir si le
+        /// numéro est le bon, s'il passe les plafonds et si le texte est
+        /// lisible, serait d'attendre une vraie panne de décaissement —
+        /// c'est-à-dire le pire moment pour découvrir qu'il ne marche pas.
+        /// C'est la même doctrine que <c>wave-check.sh</c> : un contrôle qui ne
+        /// fait pas l'appel réel n'a rien prouvé (§190).</para>
+        ///
+        /// <para>L'alerte de test est une alerte comme les autres : écrite en
+        /// base, visible dans la liste, et elle consomme un jeton de la bourse du
+        /// jour. Une vérification qui emprunterait un chemin à part ne
+        /// prouverait rien du chemin réel.</para>
+        ///
+        /// <para>🔴 Sa nature est <c>SmsHardCapReached</c> et non une nature
+        /// inoffensive : c'est la seule façon d'éprouver AUSSI l'exemption de
+        /// plafond, qui est la partie la plus facile à casser sans s'en
+        /// apercevoir. Le texte, lui, dit clairement que c'est un essai — pour
+        /// ne pas refaire le coup du 2026-09-06, où une alerte de banc d'essai a
+        /// fait croire la plateforme à l'arrêt.</para>
+        /// </summary>
+        [HttpPost("/api/admin/alerts/test-sms")]
+        public async Task<ActionResult<ApiResponse<bool>>> TestAlertSms(CancellationToken ct)
+        {
+            var quand = DateTime.UtcNow.ToString("dd/MM a HH'h'mm",
+                System.Globalization.CultureInfo.InvariantCulture);
+
+            await _alerts.SendAsync(new OpsAlertRequest(
+                OpsAlertKind.SmsHardCapReached,
+                // Clé horodatée à la minute : deux essais à une minute d'intervalle
+                // sonnent tous les deux. Une clé fixe les aurait regroupés, et on
+                // aurait conclu à une panne là où le dispositif faisait son
+                // travail.
+                GroupingKey: $"alert-selftest-{DateTime.UtcNow:yyyyMMddHHmm}",
+                Subject: "ESSAI du canal d'alerte — aucune panne en cours",
+                Facts: new[]
+                {
+                    new AlertFact("Nature", "Essai declenche a la main depuis le back-office"),
+                    new AlertFact("Declenche par", User.GetUserId()?.ToString() ?? "-"),
+                    new AlertFact("Quand", quand),
+                    new AlertFact("Ce que cet essai prouve",
+                        "Le numero d'alerte est joignable, le message tient en un segment, "
+                        + "et le canal traverse bien les plafonds de depense."),
+                },
+                Advice: "Rien a faire : aucune panne n'est en cours. Si le SMS n'est PAS arrive, "
+                      + "verifier OpsAlerts:SmsPhone et OpsAlerts:SmsEnabled sur le serveur, puis "
+                      + "le journal (chercher \"[ops-alert]\").",
+                SmsHeadline: "ESSAI du canal d'alerte, aucune panne en cours"), ct);
+
+            _logger.LogInformation("[ops-alert] Essai du canal declenche par SuperAdmin {UserId}",
+                User.GetUserId());
+
+            return Ok(ApiResponse<bool>.Ok(true,
+                "Alerte d'essai envoyee. Le SMS arrive en quelques secondes ; si rien n'arrive, "
+                + "l'ecran des alertes dira si la ligne a ete ecrite."));
         }
 
         // ================================================================

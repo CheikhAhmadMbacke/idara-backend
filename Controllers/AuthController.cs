@@ -31,6 +31,7 @@ namespace Idara.API.Controllers
         private readonly INotificationService _notif;
         private readonly IUserInvitationService _invitations;
         private readonly IAuthCodeThrottle _throttle;
+        private readonly Services.Alerts.IOpsAlertService _alerts;
         private readonly IMemoryCache _cache;
         private readonly UploadSettings _uploads;
         private readonly ILogger<AuthController> _logger;
@@ -45,6 +46,7 @@ namespace Idara.API.Controllers
             INotificationService notif,
             IUserInvitationService invitations,
             IAuthCodeThrottle throttle,
+            Services.Alerts.IOpsAlertService alerts,
             IMemoryCache cache,
             IOptions<UploadSettings> uploads,
             ILogger<AuthController> logger)
@@ -58,6 +60,7 @@ namespace Idara.API.Controllers
             _notif = notif;
             _invitations = invitations;
             _throttle = throttle;
+            _alerts = alerts;
             _cache = cache;
             _uploads = uploads.Value;
             _logger = logger;
@@ -266,6 +269,39 @@ namespace Idara.API.Controllers
             await _context.SaveChangesAsync();
 
             var refreshToken = await _refreshTokens.CreateAsync(user.Id);
+
+            // Un directeur vient d'entrer. C'est une nouvelle qui se PÉRIME :
+            // mesuré le 2026-09-19 sur 90 jours, 12 comptes ont été ouverts pour
+            // 5 dossiers déposés — les sept autres se sont arrêtés en chemin, et
+            // rien ne le disait avant de recompter la base. Levée APRÈS le
+            // SaveChanges du compte, en tâche de fond : prévenir ne doit ni
+            // ralentir l'inscription ni la faire échouer (§42).
+            //
+            // 🔴 Le message ne porte PAS de nom d'école : à cet instant elle
+            // n'existe pas. Écrire un nom ici serait écrire un fait faux ; c'est
+            // le dépôt du dossier (submit-kyc) qui en donne un.
+            _alerts.Queue(new Services.Alerts.OpsAlertRequest(
+                Enums.OpsAlertKind.SchoolAccountCreated,
+                GroupingKey: $"school-account-{user.Id}",
+                Subject: "Nouveau compte directeur",
+                Facts: new[]
+                {
+                    new Services.Alerts.AlertFact("Identifiant",
+                        id.IsEmail ? id.Value : SenegalPhone.ToDisplay(id.Value, id.Value)),
+                    new Services.Alerts.AlertFact("Cree le",
+                        user.CreatedAt.ToString("dd/MM/yyyy a HH'h'mm",
+                            System.Globalization.CultureInfo.InvariantCulture)),
+                    new Services.Alerts.AlertFact("Etape suivante",
+                        "Depot du dossier d'ecole (KYC) - pas encore fait"),
+                },
+                Advice: "Le compte existe mais AUCUNE ecole n'est encore creee. C'est l'etape ou "
+                      + "l'on perd le plus de monde : 12 comptes ouverts pour 5 dossiers deposes en "
+                      + "90 jours. Un appel dans la journee vaut mieux qu'un e-mail la semaine "
+                      + "suivante.",
+                RelatedId: user.Id,
+                SmsHeadline: "nouveau compte directeur "
+                    + (id.IsEmail ? id.Value : SenegalPhone.ToDisplay(id.Value, id.Value))
+                    + ", dossier d'ecole pas encore depose"));
 
             var response = new LoginResponse
             {
@@ -564,6 +600,53 @@ namespace Idara.API.Controllers
         /// Soumission des informations de l'école (KYC) avec documents en base64.
         /// </summary>
         [Authorize(Roles = UserRoles.SchoolAdmin)]
+        /// <summary>
+        /// Prévient qu'un dossier d'école vient d'être déposé et attend une
+        /// validation.
+        ///
+        /// <para>Appelé depuis les DEUX chemins de <c>submit-kyc</c> : la
+        /// première soumission et la re-soumission après rejet. Une méthode
+        /// plutôt que deux copies — deux copies finissent par se contredire
+        /// (§199), et c'est la re-soumission qu'on oublierait, alors qu'elle est
+        /// justement celle qui attend une réponse depuis le plus longtemps.</para>
+        /// </summary>
+        private void QueueKycSubmittedAlert(School school, bool resoumission)
+        {
+            var nom = string.IsNullOrWhiteSpace(school.Name) ? "(sans nom)" : school.Name;
+            var quand = (school.SubmittedAt ?? DateTime.UtcNow)
+                .ToString("dd/MM/yyyy a HH'h'mm", System.Globalization.CultureInfo.InvariantCulture);
+
+            _alerts.Queue(new Services.Alerts.OpsAlertRequest(
+                Enums.OpsAlertKind.SchoolKycSubmitted,
+                // Groupée par ÉCOLE et non par cause : deux dossiers déposés le
+                // même jour sont deux nouvelles distinctes, chacune mérite sa
+                // sonnerie. La clé par école évite seulement qu'une double
+                // soumission en rafale sonne deux fois.
+                GroupingKey: $"school-kyc-{school.Id}",
+                Subject: resoumission
+                    ? $"Dossier d'ecole RE-soumis — {nom}"
+                    : $"Nouvelle ecole — {nom}",
+                Facts: new[]
+                {
+                    new Services.Alerts.AlertFact("Ecole", nom),
+                    new Services.Alerts.AlertFact("Depose le", quand),
+                    new Services.Alerts.AlertFact("Responsable",
+                        $"{school.RepresentativeFirstName} {school.RepresentativeLastName}".Trim()),
+                    new Services.Alerts.AlertFact("Telephone",
+                        SenegalPhone.ToDisplay(school.PhoneNumber, "-")),
+                    new Services.Alerts.AlertFact("Adresse", school.Address ?? "-"),
+                    new Services.Alerts.AlertFact("Nature",
+                        resoumission ? "Re-soumission apres rejet" : "Premiere soumission"),
+                },
+                Advice: "Le dossier attend une validation dans SuperAdmin > Ecoles en attente. "
+                      + "Tant qu'il n'est pas valide, les comptes restent inactifs et l'ecole ne "
+                      + "peut rien faire.",
+                SchoolId: school.Id,
+                RelatedId: school.Id,
+                SmsHeadline: (resoumission ? "dossier RE-soumis - " : "nouvelle ecole - ")
+                    + OpsAlertSms.ShortName(nom, 60) + ", a valider"));
+        }
+
         [HttpPost("submit-kyc")]
         public async Task<IActionResult> SubmitKyc([FromBody] SubmitKycRequest request)
         {
@@ -612,6 +695,7 @@ namespace Idara.API.Controllers
                 user.School.SubmittedAt = DateTime.UtcNow;
                 user.School.RejectionReason = null;
                 await _context.SaveChangesAsync();
+                QueueKycSubmittedAlert(user.School, resoumission: true);
                 return Ok(ApiResponse<bool>.Ok(true, "Informations mises à jour et soumises à validation."));
             }
 
@@ -641,6 +725,8 @@ namespace Idara.API.Controllers
             // Fondations paiement (wallet + settings) dès la création de l'école,
             // sans attendre le prochain redémarrage / le seed DbInitializer.
             await _context.EnsurePaymentFoundationsAsync(school.Id);
+
+            QueueKycSubmittedAlert(school, resoumission: false);
 
             return Ok(ApiResponse<bool>.Ok(true, "Informations soumises. En attente de validation par l'administration."));
         }

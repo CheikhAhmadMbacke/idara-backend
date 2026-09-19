@@ -1,4 +1,4 @@
-namespace Idara.API.Enums
+﻿namespace Idara.API.Enums
 {
     /// <summary>
     /// Nature d'une alerte d'exploitation — un événement dont TU dois être
@@ -58,5 +58,33 @@ namespace Idara.API.Enums
         /// signature d'un robot qui tire des numéros au hasard.
         /// </summary>
         AuthCodeChannelClosed = 20,
+
+        // ===== Encaissements =====
+
+        /// <summary>
+        /// Le prestataire refuse d'ouvrir une session de paiement : le payeur a
+        /// appuyé sur « Payer » et rien ne s'est passé. Rien à corriger côté
+        /// école ni côté famille — c'est nous ou Wave.
+        ///
+        /// <para>Distinct d'un paiement abandonné, qui est le cas le plus
+        /// fréquent et parfaitement normal : la famille a changé d'avis. Seul le
+        /// refus TECHNIQUE remonte ici.</para>
+        /// </summary>
+        PayinProviderRejected = 30,
+
+        // ===== Arrivées sur la plateforme =====
+        // Ni une panne ni un coût : une nouvelle qui se périme. Un directeur qui
+        // vient d'ouvrir un compte se rappelle le jour même ; une semaine plus
+        // tard, il est passé à autre chose. Mesuré en prod le 2026-09-19 :
+        // 12 comptes créés pour 5 dossiers déposés en 90 jours — les sept qui se
+        // sont arrêtés en route ne se voyaient qu'après coup.
+
+        /// <summary>Un compte de directeur vient d'être créé. L'école n'existe
+        /// pas encore : à ce stade il n'y a qu'un numéro ou une adresse.</summary>
+        SchoolAccountCreated = 40,
+
+        /// <summary>Un dossier d'école vient d'être déposé et attend TA
+        /// validation. C'est ici, et seulement ici, qu'un nom d'école existe.</summary>
+        SchoolKycSubmitted = 41,
     }
 }

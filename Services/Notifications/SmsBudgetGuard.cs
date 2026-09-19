@@ -92,6 +92,31 @@ namespace Idara.API.Services.Notifications
                 }
 
                 // ============================================================
+                // 1bis. Le canal d'ALERTE d'exploitation. Placé APRÈS le
+                // contrôle de destination — une alerte qui partirait hors du
+                // Sénégal est un numéro mal saisi, et rien ne justifie de payer
+                // onze fois le prix pour le découvrir — et AVANT tous les
+                // plafonds, qu'il traverse.
+                //
+                // 🔴 Le message le plus important que ce canal transporte est
+                // « plus aucun SMS ne part ». Le soumettre aux paliers de
+                // dépense reviendrait à le taire exactement quand il compte.
+                // Ce qui rend l'exemption sûre : le destinataire est FIXE et
+                // vient de la configuration serveur, donc aucun tiers ne peut
+                // faire sonner ce téléphone (raisonnement inverse du §259, où
+                // c'est l'appelant qui choisit le numéro). La dépense reste
+                // bornée par la bourse quotidienne du canal, comptée chez
+                // OpsAlertService.
+                //
+                // Mesuré le 2026-09-19, et c'est ce qui a rendu cette exemption
+                // nécessaire : le numéro d'alerte avait DÉJÀ reçu 11 SMS sur
+                // 30 jours, pour un plafond par destinataire de 20. Branché sans
+                // exemption, le dispositif se serait tu au bout de neuf alertes,
+                // sans un mot.
+                // ============================================================
+                if (ctx.OpsAlert) return Allow();
+
+                // ============================================================
                 // 2. Le coupe-circuit manuel. Avant tout comptage : c'est le
                 // geste qu'on fait quand on a vu la facture déraper, il doit
                 // agir même si la base de comptage est en peine.

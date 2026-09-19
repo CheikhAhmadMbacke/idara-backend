@@ -306,6 +306,10 @@ namespace Idara.API.Data
             // la fenêtre ? » — requêté à CHAQUE alerte levée.
             modelBuilder.Entity<OpsAlert>()
                 .HasIndex(a => new { a.GroupingKey, a.EmailedAt });
+            // Même question pour le SMS, sur sa PROPRE marque : les deux canaux
+            // se regroupent séparément, donc ils s'interrogent séparément.
+            modelBuilder.Entity<OpsAlert>()
+                .HasIndex(a => new { a.GroupingKey, a.SmsSentAt });
 
             // --- PushDeviceToken : token unique (réaffectable), index par user ---
             modelBuilder.Entity<PushDeviceToken>()

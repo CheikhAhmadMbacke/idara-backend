@@ -44,6 +44,11 @@
     /// l'avance par le SuperAdmin : il échappe aux plafonds par école et au
     /// palier souple, jamais au palier absolu ni au plafond par destinataire.
     /// Voir <see cref="SmsGuardContext"/>.</param>
+    /// <param name="OpsAlert">Alerte d'exploitation vers le numéro d'alerte
+    /// configuré — <b>réservé à <c>OpsAlertService</c></b>, qui tient la bourse
+    /// quotidienne du canal. Ce n'est pas un envoi à un utilisateur : il traverse
+    /// tous les plafonds sauf la destination sénégalaise. Voir
+    /// <see cref="SmsGuardContext.OpsAlert"/> pour le motif.</param>
     public record NotificationSmsRequest(
         int? UserId,
         string? RawPhone,
@@ -58,7 +63,8 @@
         string? TriggerSource = null,
         int? TriggerUserId = null,
         IReadOnlyList<int>? GroupedEntityIds = null,
-        bool AuthorizedCampaign = false);
+        bool AuthorizedCampaign = false,
+        bool OpsAlert = false);
 
     /// <summary>
     /// Demande d'envoi d'une notification PUSH UNIQUEMENT (pas de SMS) à un

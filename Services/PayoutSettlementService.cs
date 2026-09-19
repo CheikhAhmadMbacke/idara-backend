@@ -680,7 +680,12 @@ namespace Idara.API.Services
                        + "la meme chose.",
                 },
                 SchoolId: schoolId,
-                RelatedId: withdrawalId));
+                RelatedId: withdrawalId,
+                SmsHeadline: type == PayoutAlertType.StuckUnderVerification
+                    ? "retrait coince en verification ("
+                      + OpsAlertSms.ShortName(schoolName ?? "plateforme", 55) + "), fonds reserves"
+                    : "anomalie de decaissement " + type.ToString() + " ("
+                      + OpsAlertSms.ShortName(schoolName ?? "plateforme", 55) + ")"));
         }
 
         /// <summary>
@@ -735,7 +740,19 @@ namespace Idara.API.Services
                     },
                     Advice: PayoutFailureClassifier.Advice(cause),
                     SchoolId: withdrawal.SchoolId,
-                    RelatedId: withdrawal.Id));
+                    RelatedId: withdrawal.Id,
+                    // La phrase n'est renseignée que pour la panne PRESTATAIRE.
+                    // Les deux autres causes (numéro du bénéficiaire refusé, refus
+                    // de son opérateur) restent en e-mail : l'école corrige
+                    // elle-même, son solde lui a déjà été restitué, et rien
+                    // n'attend de geste de notre part dans l'heure.
+                    // 🔴 Renseigner la phrase ne suffit d'ailleurs pas à faire
+                    // sonner : OpsAlertSms.ShouldSend tranche en second, et
+                    // WithdrawalFailed n'y figure pas.
+                    SmsHeadline: cause == PayoutFailureCause.ProviderOutage
+                        ? "retrait bloque - le prestataire ne peut pas decaisser ("
+                          + OpsAlertSms.ShortName(schoolName, 60) + ")"
+                        : null));
             }
             catch (Exception ex)
             {
