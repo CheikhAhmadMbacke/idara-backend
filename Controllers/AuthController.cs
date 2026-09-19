@@ -695,6 +695,12 @@ namespace Idara.API.Controllers
                 user.School.SubmittedAt = DateTime.UtcNow;
                 user.School.RejectionReason = null;
                 await _context.SaveChangesAsync();
+
+                // Le type vient peut-être d'être posé : un daara reçoit alors sa
+                // matière Coran. Idempotent, et sans effet sur une école qui l'a
+                // sciemment supprimée.
+                await _context.EnsureQuranSubjectAsync(user.School.Id);
+
                 QueueKycSubmittedAlert(user.School, resoumission: true);
                 return Ok(ApiResponse<bool>.Ok(true, "Informations mises à jour et soumises à validation."));
             }
@@ -725,6 +731,11 @@ namespace Idara.API.Controllers
             // Fondations paiement (wallet + settings) dès la création de l'école,
             // sans attendre le prochain redémarrage / le seed DbInitializer.
             await _context.EnsurePaymentFoundationsAsync(school.Id);
+
+            // Dans un daara on apprend forcément le Coran : la matière est là dès
+            // le premier jour, sans que l'école ait à la créer. Une école
+            // franco-arabe la crée elle-même si elle le souhaite (2026-09-19).
+            await _context.EnsureQuranSubjectAsync(school.Id);
 
             QueueKycSubmittedAlert(school, resoumission: false);
 

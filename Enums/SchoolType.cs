@@ -14,15 +14,28 @@ namespace Idara.API.Enums
     /// <c>default(SchoolType)</c> écrit par mégarde vaudrait 0 — donc une
     /// erreur visible — au lieu de classer silencieusement une école en daara.
     ///
-    /// ⚠️ Les écoles créées AVANT ce champ restent volontairement sans type.
-    /// Les déclarer daara d'office serait inventer une donnée que nous n'avons
-    /// pas ; sans type, on propose simplement TOUS les niveaux (repli le plus
-    /// large, jamais bloquant). Même principe qu'au §138 pour le régime
-    /// d'hébergement des élèves.
+    /// ⚠️ <b>Les écoles antérieures à ce champ ont été reprises le 2026-09-19</b>,
+    /// et la règle qui figurait ici — ne jamais leur inventer un type — est donc
+    /// caduque POUR ELLES. Ce jour-là, Cheikh a désigné nommément les DEUX
+    /// écoles franco-arabes de la plateforme, ce qui a rendu le reste certain :
+    /// toutes les autres sont des daara. Ce n'était plus une supposition mais
+    /// une donnée qu'il détenait, d'où
+    /// <c>DbInitializer.BackfillSchoolTypesAsync</c>.
+    ///
+    /// La règle reste entière pour la SUITE : une école qui ne renseigne pas son
+    /// type demeure « non renseignée » — on lui propose alors TOUS les niveaux
+    /// (repli le plus large, jamais bloquant) et aucune matière n'est pré-créée.
+    /// Même principe qu'au §138 pour le régime d'hébergement des élèves.
     /// </remarks>
     public enum SchoolType
     {
-        /// <summary>Daara / école coranique : mémorisation du Coran.</summary>
+        /// <summary>
+        /// Daara / école coranique : mémorisation du Coran.
+        /// <para>🔑 Seul type qui reçoit une matière « Coran » <b>pré-créée</b>
+        /// (<c>QuranSubjectExtensions.EnsureQuranSubjectAsync</c>) : dans un daara
+        /// on apprend forcément le Coran. Une école franco-arabe, pas
+        /// nécessairement — elle la crée elle-même si elle le veut.</para>
+        /// </summary>
         Daara = 1,
 
         /// <summary>École franco-arabe : double cursus, programme français ET coranique.</summary>

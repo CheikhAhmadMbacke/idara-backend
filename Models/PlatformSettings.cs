@@ -485,6 +485,22 @@ namespace Idara.API.Models
         /// </remarks>
         public DateTime? QuranSubjectsRetypedAt { get; set; }
 
+        /// <summary>
+        /// 🏫 Quand la reprise du TYPE des écoles a été jouée.
+        /// </summary>
+        /// <remarks>
+        /// <para>Même discipline que <see cref="QuranSubjectsRetypedAt"/> : une
+        /// reprise de données se joue UNE FOIS. Sans ce marqueur, une école qui
+        /// corrige elle-même son type dans sa fiche le verrait repasser en daara
+        /// au déploiement suivant — elle perdrait toujours, sans jamais
+        /// comprendre pourquoi (§74).</para>
+        ///
+        /// <para>La reprise pose aussi, dans la même passe, la matière « Coran »
+        /// des daara qui n'en ont pas : les deux vont ensemble, puisque c'est
+        /// le type qui commande la matière.</para>
+        /// </remarks>
+        public DateTime? SchoolTypesBackfilledAt { get; set; }
+
         // ============================================================
         //  📷 Import par PHOTO (lecture d'un cahier par l'IA)
         // ============================================================

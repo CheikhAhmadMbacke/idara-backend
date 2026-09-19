@@ -45,6 +45,7 @@ namespace Idara.API.Data
             await NormalizeUserPhonesAsync();
             await BackfillSearchIndexAsync();
             await RetypeQuranSubjectsAsync();
+            await BackfillSchoolTypesAsync();
             await SeedDemoSchoolAsync();
             await SeedDemoTeacherAsync();
             await TrimDemoTeacherAssignmentsAsync();
@@ -165,6 +166,136 @@ namespace Idara.API.Data
                 _logger.LogWarning(ex, "[subjects] Reprise du type des matières de Coran impossible.");
             }
         }
+
+        /// <summary>
+        /// 🏫 Donne son type à chaque école DÉJÀ en base, et sa matière « Coran »
+        /// à chaque daara qui n'en a pas.
+        ///
+        /// <para><b>Décision de Cheikh, le 2026-09-19.</b> Les écoles inscrites
+        /// avant l'arrivée du champ <c>Type</c> sont toutes des daara, sauf deux
+        /// qu'il a désignées comme franco-arabes. La règle qui prévalait — ne
+        /// jamais leur inventer un type — tombe : ce n'est plus une supposition,
+        /// c'est une donnée qu'il détient.</para>
+        ///
+        /// <para><b>On ne touche PAS à une école qui a choisi son type
+        /// elle-même</b> (choix explicite de Cheikh) — sauf les deux
+        /// franco-arabes, qu'il a nommées et qui priment donc sur le formulaire.</para>
+        ///
+        /// <para>🔴 <b>Une reprise qui n'est pas sûre d'elle ne fait RIEN.</b> La
+        /// désignation se fait par identifiant de production ; si l'un d'eux ne
+        /// désigne pas l'école attendue, la passe s'arrête sans rien écrire et
+        /// sans poser son marqueur — elle se rejouera. Le contraire coûterait
+        /// cher : une école franco-arabe classée daara reçoit une matière Coran
+        /// qu'elle n'a pas demandée et de mauvais niveaux de classe, en silence.</para>
+        ///
+        /// <para>🔴 <b>Jouée UNE SEULE FOIS</b>, marqueur en base à l'appui, pour
+        /// la raison de toujours : une école qui corrige son type dans sa fiche
+        /// le verrait repasser en daara au déploiement suivant, et perdrait
+        /// toujours sans comprendre pourquoi (§74).</para>
+        /// </summary>
+        /// <remarks>Publique à dessein : une reprise qu'on ne peut vérifier qu'en
+        /// production ne se vérifie jamais (§133/§178).</remarks>
+        public async Task BackfillSchoolTypesAsync()
+        {
+            try
+            {
+                var platform = await _context.GetPlatformSettingsAsync();
+                if (platform.SchoolTypesBackfilledAt != null) return;
+
+                // Garde-fou : un identifiant laissé à zéro ne désignerait aucune
+                // école, et les exceptions tomberaient silencieusement dans le
+                // défaut. Mieux vaut ne rien faire et le dire.
+                if (SchoolTypeBackfill.Designations.Any(d => d.SchoolId <= 0))
+                {
+                    _logger.LogError(
+                        "[school-type] Reprise SUSPENDUE : une école désignée n'a pas d'identifiant. Aucune école n'a été touchée.");
+                    return;
+                }
+
+                // Volume minuscule (une dizaine d'écoles) : tout tient en mémoire.
+                var schools = await _context.Schools.ToListAsync();
+
+                // ① Reconnaître les écoles désignées nommément. Un identifiant
+                // absent est NORMAL hors production (base de développement, base
+                // neuve) : on l'ignore. Un identifiant présent dont le NOM ne
+                // correspond pas est une alerte — la base n'est pas celle qu'on
+                // croit, et se tromper d'école coûte cher : deux écoles DISTINCTES
+                // du même propriétaire y portent presque le même nom, l'une daara
+                // et l'autre franco-arabe.
+                var designees = new Dictionary<int, SchoolType>();
+                foreach (var sig in SchoolTypeBackfill.Designations)
+                {
+                    var school = schools.FirstOrDefault(s => s.Id == sig.SchoolId);
+                    if (school == null)
+                    {
+                        _logger.LogInformation(
+                            "[school-type] École désignée #{Id} (« {Nom} ») absente de cette base — ignorée.",
+                            sig.SchoolId, sig.NomAttendu);
+                        continue;
+                    }
+
+                    if (!SchoolTypeBackfill.Correspond(sig, school.Name, school.NameAr))
+                    {
+                        _logger.LogError(
+                            "[school-type] Reprise SUSPENDUE : l'école #{Id} s'appelle « {Trouve} », on attendait « {Attendu} ». Aucune école n'a été touchée.",
+                            sig.SchoolId, SchoolDisplayName.From(school).Primary(), sig.NomAttendu);
+                        return;
+                    }
+
+                    designees[school.Id] = sig.Type;
+                }
+
+                // ② Poser les types.
+                var poses = 0;
+                foreach (var s in schools)
+                {
+                    SchoolType cible;
+                    if (designees.TryGetValue(s.Id, out var designe))
+                    {
+                        // Désignée nommément : elle prime sur le formulaire.
+                        cible = designe;
+                    }
+                    else if (s.Type != null)
+                    {
+                        // Une école qui a renseigné son type garde le sien.
+                        continue;
+                    }
+                    else
+                    {
+                        cible = SchoolTypeBackfill.Defaut;
+                    }
+
+                    if (s.Type == cible) continue;
+
+                    _logger.LogInformation(
+                        "[school-type] École {Id} « {Nom} » : {Avant} → {Apres}.",
+                        s.Id, SchoolDisplayName.From(s).Primary(),
+                        s.Type?.ToString() ?? "non renseigné", cible);
+                    s.Type = cible;
+                    poses++;
+                }
+                await _context.SaveChangesAsync();
+
+                // ③ La matière « Coran » des daara. Après ②, donc en tenant
+                // compte des types qu'on vient de poser.
+                var crees = 0;
+                foreach (var s in schools.Where(s => s.Type == SchoolType.Daara))
+                    if (await _context.EnsureQuranSubjectAsync(s.Id)) crees++;
+
+                platform.SchoolTypesBackfilledAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "[school-type] Reprise jouée : {Poses} type(s) posé(s) sur {Total} école(s), {Crees} matière(s) Coran créée(s).",
+                    poses, schools.Count, crees);
+            }
+            catch (Exception ex)
+            {
+                // Un défaut de reprise ne doit jamais empêcher l'API de démarrer.
+                _logger.LogWarning(ex, "[school-type] Reprise du type des écoles impossible.");
+            }
+        }
+
 
         /// <summary>
         /// Purge les incidents de plus de 30 jours (durée annoncée dans la
@@ -294,6 +425,10 @@ namespace Idara.API.Data
             var school = new School
             {
                 Name = "École de démonstration",
+                // L'école de démonstration est un daara : c'est ce que montre le
+                // compte de démo (halaqa, cahier de suivi coranique). Sans type,
+                // elle n'aurait ni les bons niveaux de classe ni sa matière Coran.
+                Type = SchoolType.Daara,
                 Address = "Dakar, Sénégal",
                 PhoneNumber = "+221770000000",
                 KycStatus = KycStatus.Validated,

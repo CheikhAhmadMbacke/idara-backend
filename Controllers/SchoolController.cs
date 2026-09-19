@@ -97,6 +97,8 @@ namespace Idara.API.Controllers
 
             ApplySchoolFields(school, dto);
             await _context.SaveChangesAsync();
+            // Le type vient peut-être de passer à « daara » : la matière Coran suit.
+            await _context.EnsureQuranSubjectAsync(id);
             _logger.LogInformation("[school] École {SchoolId} éditée par SuperAdmin {AdminId}", id, User.GetUserId());
 
             var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == id);
@@ -123,6 +125,8 @@ namespace Idara.API.Controllers
 
             ApplySchoolFields(school, dto);
             await _context.SaveChangesAsync();
+            // Le type vient peut-être de passer à « daara » : la matière Coran suit.
+            await _context.EnsureQuranSubjectAsync(schoolId.Value);
             _logger.LogInformation("[school] École {SchoolId} éditée par son SchoolAdmin {AdminId}", schoolId, User.GetUserId());
 
             var reloaded = await _context.Schools.Include(s => s.Users).FirstAsync(s => s.Id == schoolId.Value);
