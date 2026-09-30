@@ -423,10 +423,13 @@ namespace Idara.API.Services
         {
             try
             {
+                // EnableSsl + port 587 = STARTTLS. C'est le SEUL mode que
+                // SmtpClient sache parler : sur le port 465 (SSL implicite, que
+                // Private Email propose aussi) il reste bloque jusqu'au timeout.
                 using var client = new SmtpClient(_settings.SmtpServer, _settings.SmtpPort)
                 {
                     EnableSsl = true,
-                    Credentials = new NetworkCredential(_settings.SenderEmail, _settings.SenderPassword)
+                    Credentials = new NetworkCredential(_settings.EffectiveUsername, _settings.SenderPassword)
                 };
 
                 var from = new MailAddress(_settings.SenderEmail, _settings.SenderName);
@@ -439,6 +442,10 @@ namespace Idara.API.Services
                     SubjectEncoding = System.Text.Encoding.UTF8,
                     BodyEncoding = System.Text.Encoding.UTF8,
                 };
+
+                // L'expediteur est un alias : une reponse doit lui revenir, et
+                // non a la boite technique qui a ouvert la session.
+                message.ReplyToList.Add(new MailAddress(_settings.EffectiveReplyTo, _settings.SenderName));
 
                 await client.SendMailAsync(message);
             }

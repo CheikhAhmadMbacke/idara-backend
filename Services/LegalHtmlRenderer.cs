@@ -81,7 +81,7 @@ namespace Idara.API.Services
 
         private static string Contact(PlatformSettings p) =>
             string.IsNullOrWhiteSpace(p.LegalContactEmail)
-                ? "contact.pyranil@gmail.com"
+                ? "idara@pyranil.com"
                 : p.LegalContactEmail!;
 
         // ================================================================
