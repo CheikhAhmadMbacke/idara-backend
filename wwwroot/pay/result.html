@@ -284,6 +284,7 @@
         ok_sub_topup: 'Le solde de votre école a bien été crédité. Le reçu est ci-dessous.',
         ok_sub_donation: 'Merci pour votre don. Le daara a bien reçu votre soutien. Le reçu est ci-dessous.',
         ok_sub_ocr: 'Vos pages de lecture ont été ajoutées à votre compte. Vous pouvez reprendre la lecture de votre cahier.',
+        ok_sub_ai: 'Vos commandes de l\'assistant ont été ajoutées à votre compte. Vous pouvez reprendre la conversation.',
         failed_title: 'Paiement échoué',
         expired_title: 'Paiement expiré',
         failed_sub: "Le paiement n'a pas pu être traité. Vous pouvez réessayer.",
@@ -296,6 +297,7 @@
         amount_donation: 'Montant du don',
         amount_ocr: 'Montant payé',
         pages_ocr: 'Pages de lecture',
+        commands_ai: 'Commandes de l\'assistant',
         student: 'Élève',
         donor: 'Donateur',
         school: 'École',
@@ -308,7 +310,7 @@
         preview_alt: 'Reçu',
         preview_unavailable: 'Aperçu indisponible — utilisez « Télécharger le reçu » ci-dessous.',
         footer_secure: 'Paiement sécurisé via Wave',
-        wa_payment: 'paiement', wa_topup: 'rechargement', wa_donation: 'don', wa_ocr: 'achat de pages',
+        wa_payment: 'paiement', wa_topup: 'rechargement', wa_donation: 'don', wa_ocr: 'achat de pages', wa_ai: 'achat de commandes',
         wa_text: 'Bonjour, voici le reçu de mon {kind} Idara ({amount}).'
       },
       ar: {
@@ -328,6 +330,7 @@
         ok_sub_topup: 'تم إضافة المبلغ إلى رصيد مدرستكم. الإيصال أدناه.',
         ok_sub_donation: 'شكرا على تبرعكم. لقد وصل دعمكم إلى الدارة. الإيصال أدناه.',
         ok_sub_ocr: 'تمت إضافة صفحات القراءة إلى حسابكم. يمكنكم متابعة قراءة دفتركم.',
+        ok_sub_ai: 'تمت إضافة أوامر المساعد إلى حسابكم. يمكنكم متابعة المحادثة.',
         failed_title: 'فشل الدفع',
         expired_title: 'انتهت صلاحية الدفع',
         failed_sub: 'تعذّرت معالجة الدفع. يمكنكم المحاولة مجددا.',
@@ -340,6 +343,7 @@
         amount_donation: 'مبلغ التبرع',
         amount_ocr: 'المبلغ المدفوع',
         pages_ocr: 'صفحات القراءة',
+        commands_ai: 'أوامر المساعد',
         student: 'التلميذ',
         donor: 'المتبرع',
         school: 'المدرسة',
@@ -352,7 +356,7 @@
         preview_alt: 'الإيصال',
         preview_unavailable: 'المعاينة غير متاحة — استعملوا « تحميل الإيصال » أدناه.',
         footer_secure: 'دفع آمن عبر Wave',
-        wa_payment: 'دفعتي', wa_topup: 'شحني', wa_donation: 'تبرعي', wa_ocr: 'شرائي',
+        wa_payment: 'دفعتي', wa_topup: 'شحني', wa_donation: 'تبرعي', wa_ocr: 'شرائي', wa_ai: 'شرائي',
         wa_text: 'السلام عليكم، هذا إيصال {kind} عبر Idara ({amount}).'
       }
     };
@@ -444,7 +448,7 @@
     function renderSummary(data) {
       const rows = [
         {
-          label: data.isOcrPages ? t('amount_ocr') : data.isTopup ? t('amount_topup') : data.isDonation ? t('amount_donation') : t('amount_paid'),
+          label: (data.isOcrPages || data.isAssistantCredits) ? t('amount_ocr') : data.isTopup ? t('amount_topup') : data.isDonation ? t('amount_donation') : t('amount_paid'),
           value: money(data.amountChargedFcfa),
           big: true,
         },
@@ -452,6 +456,7 @@
       if (data.studentName) rows.push({ label: t('student'), value: data.studentName });
       if (data.isDonation && data.donorName) rows.push({ label: t('donor'), value: data.donorName });
       if (data.isOcrPages && data.ocrPages) rows.push({ label: t('pages_ocr'), value: String(data.ocrPages) });
+      if (data.isAssistantCredits && data.assistantCommands) rows.push({ label: t('commands_ai'), value: String(data.assistantCommands) });
       if (data.schoolName) rows.push({ label: data.isDonation ? t('daara') : t('school'), value: data.schoolName });
       // Les marques restent en latin, meme en arabe (regle projet).
       rows.push({ label: t('method'), value: data['operator'] === 'Orange' ? 'Orange Money' : 'Wave' });
@@ -475,7 +480,7 @@
         // attachés depuis une web page, mais ouvre parfaitement un lien externe
         // que le destinataire peut télécharger.
         const pdfUrl = `${window.location.origin}/pay/${paymentId}/${token}/receipt.pdf`;
-        const waKind = data.isOcrPages ? t('wa_ocr') : data.isDonation ? t('wa_donation') : data.isTopup ? t('wa_topup') : t('wa_payment');
+        const waKind = data.isAssistantCredits ? t('wa_ai') : data.isOcrPages ? t('wa_ocr') : data.isDonation ? t('wa_donation') : data.isTopup ? t('wa_topup') : t('wa_payment');
         const waText = encodeURIComponent(
           t('wa_text', { kind: waKind, amount: money(data.amountChargedFcfa) }) + ' ' + pdfUrl
         );
@@ -534,8 +539,8 @@
 
           if (s === 'completed') {
             setState('success', '✓',
-              data.isOcrPages ? t('ok_title_ocr') : data.isTopup ? t('ok_title_topup') : data.isDonation ? t('ok_title_donation') : t('ok_title_payment'),
-              data.isOcrPages ? t('ok_sub_ocr') : data.isTopup ? t('ok_sub_topup') : data.isDonation ? t('ok_sub_donation') : t('ok_sub_payment'));
+              (data.isOcrPages || data.isAssistantCredits) ? t('ok_title_ocr') : data.isTopup ? t('ok_title_topup') : data.isDonation ? t('ok_title_donation') : t('ok_title_payment'),
+              data.isAssistantCredits ? t('ok_sub_ai') : data.isOcrPages ? t('ok_sub_ocr') : data.isTopup ? t('ok_sub_topup') : data.isDonation ? t('ok_sub_donation') : t('ok_sub_payment'));
             // Affiche le PDF en iframe.
             // Aperçu image du reçu ; un appui ouvre le PDF complet.
             pdfFrame.src = `/pay/${paymentId}/${token}/receipt.png`;

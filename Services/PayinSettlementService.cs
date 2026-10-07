@@ -259,6 +259,14 @@ namespace Idara.API.Services
                 return;
             }
 
+            // Commandes de l'assistant IA (2026-10-07) : même règle que les
+            // pages — un service acheté à la plateforme, aucun wallet crédité.
+            if (payment.Purpose == PaymentPurpose.AssistantCredits)
+            {
+                GrantPurchasedAssistantCommands(payment);
+                return;
+            }
+
             var netAmount = payment.NetCreditedFcfa;
 
             // ================================================================
@@ -434,6 +442,48 @@ namespace Idara.API.Services
                 pages, payment.SchoolId, payment.Id, payment.AmountFcfa);
         }
 
+        /// <summary>
+        /// Octroie les commandes de l'assistant achetées — dans la transaction
+        /// qui bascule le paiement, idempotent sur le PaymentId (rejeu webhook).
+        /// </summary>
+        private void GrantPurchasedAssistantCommands(Payment payment)
+        {
+            var commands = payment.AssistantCommandsPurchased;
+            if (commands <= 0)
+            {
+                _logger.LogError(
+                    "[payin-settle] Achat de commandes sans quantité : Payment.Id={Id} — rien octroyé",
+                    payment.Id);
+                return;
+            }
+
+            var already = _context.AssistantCreditGrants.Local.Any(g => g.PaymentId == payment.Id)
+                || _context.AssistantCreditGrants.Any(g => g.PaymentId == payment.Id);
+            if (already)
+            {
+                _logger.LogInformation(
+                    "[payin-settle] Commandes déjà octroyées pour Payment.Id={Id} — rejeu ignoré", payment.Id);
+                return;
+            }
+
+            _context.AssistantCreditGrants.Add(new AssistantCreditGrant
+            {
+                SchoolId = payment.SchoolId,
+                Commands = commands,
+                Reason = $"Achat de {commands} commande(s) de l'assistant — paiement {payment.Id}",
+                GrantedByUserId = null,
+                PaymentId = payment.Id,
+                PricePerCommandFcfa = payment.AssistantPricePerCommandFcfa,
+                AmountFcfa = payment.AmountFcfa,
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            _logger.LogInformation(
+                "[payin-settle] {Commands} commande(s) d'assistant octroyées à l'école {SchoolId} "
+                + "(paiement {Id}, {Amount} FCFA)",
+                commands, payment.SchoolId, payment.Id, payment.AmountFcfa);
+        }
+
         public async Task RunPostCompletionEffectsAsync(int paymentId, string source, CancellationToken ct = default)
         {
             // Re-lecture fraîche du Payment complété.
@@ -502,6 +552,11 @@ namespace Idara.API.Services
             if (payment.Purpose == PaymentPurpose.OcrPages)
             {
                 await NotifyOcrPagesPurchasedAsync(payment, ct);
+                return;
+            }
+            if (payment.Purpose == PaymentPurpose.AssistantCredits)
+            {
+                await NotifyAssistantCommandsPurchasedAsync(payment, ct);
                 return;
             }
 
@@ -753,6 +808,39 @@ namespace Idara.API.Services
             {
                 _logger.LogError(ex,
                     "[payin-settle] Échec notification achat de pages Payment.Id={Id} — pas bloquant",
+                    payment.Id);
+            }
+        }
+
+        /// <summary>Push à la direction : ses commandes d'assistant sont créditées. Jamais de SMS.</summary>
+        private async Task NotifyAssistantCommandsPurchasedAsync(Payment payment, CancellationToken ct)
+        {
+            try
+            {
+                var admins = await _context.Users
+                    .Where(u => u.SchoolId == payment.SchoolId && !u.IsDeleted
+                                && (u.Role == UserRoles.SchoolAdmin || u.Role == UserRoles.SchoolStaff))
+                    .Select(u => new { u.Id, u.PreferredLanguage })
+                    .ToListAsync(ct);
+
+                var msg = NotificationTemplates.AssistantCommandsPurchased(
+                    payment.AssistantCommandsPurchased, payment.AmountFcfa);
+
+                foreach (var a in admins)
+                {
+                    await _notif.SendPushOnlyAsync(new PushOnlyRequest(
+                        UserId: a.Id,
+                        PreferredLanguage: a.PreferredLanguage ?? "fr",
+                        Message: msg,
+                        TemplateCode: "ASSISTANT_COMMANDS_PURCHASED",
+                        RelatedEntityId: payment.Id,
+                        PushRoute: "/assistant"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[payin-settle] Échec notification achat de commandes Payment.Id={Id} — pas bloquant",
                     payment.Id);
             }
         }

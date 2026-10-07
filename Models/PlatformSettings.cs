@@ -646,6 +646,58 @@ namespace Idara.API.Models
         /// </summary>
         public int OcrMaxPagesPerPurchase { get; set; } = 300;
 
+        // ===== Assistant IA (2026-10-07) =====
+        //
+        // Option PAYANTE, en crédits prépayés (décision de Cheikh) : l'école
+        // achète des commandes par Wave, exactement comme les pages de lecture.
+        // Une commande = un message envoyé à l'assistant qui a abouti ; la
+        // confirmation d'une carte ne coûte rien (aucun appel à l'IA).
+        //
+        // ⚠️ Colonnes ajoutées à une ligne SINGLETON EXISTANTE : la migration
+        // les SÈME explicitement (§193/§254), sinon tout vaudrait 0 et
+        // l'assistant naîtrait éteint, gratuit et sans plafond.
+
+        /// <summary>Interrupteur général, sans redéploiement.</summary>
+        public bool AssistantEnabled { get; set; } = true;
+
+        /// <summary>La vente de commandes est-elle ouverte.</summary>
+        public bool AssistantPurchaseEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Commandes offertes une fois pour toutes, pour essayer. 20 commandes
+        /// coûtent au plus ~600 F à la plateforme — le prix d'une démonstration.
+        /// </summary>
+        public int AssistantFreeCommands { get; set; } = 20;
+
+        /// <summary>
+        /// Prix d'une commande. Coût mesuré attendu : 15 à 40 F selon la
+        /// longueur de l'échange (Opus 5.5, effort bas). Tarif de lancement à
+        /// réviser sur la mesure du registre, comme les pages (§234).
+        /// </summary>
+        public long AssistantPricePerCommandFcfa { get; set; } = 50;
+
+        /// <summary>Commandes achetables en une fois (une école qui se trompe d'un zéro).</summary>
+        public int AssistantMaxCommandsPerPurchase { get; set; } = 1000;
+
+        /// <summary>
+        /// Plafond de dépense JOURNALIÈRE de la plateforme, toutes écoles
+        /// confondues. Protège d'une boucle ou d'un abus — le danger est le
+        /// VOLUME, pas le prix (§191).
+        /// </summary>
+        public long AssistantDailyPlatformCapFcfa { get; set; } = 10000;
+
+        /// <summary>Commandes par utilisateur et par heure — frein à un script.</summary>
+        public int AssistantMaxCommandsPerUserPerHour { get; set; } = 60;
+
+        /// <summary>Tarif d'entrée du modèle (centimes de FCFA par million de tokens). Opus 5.5 : 4 $.</summary>
+        public long AssistantInputPriceCentimesPerMTok { get; set; } = 242800;
+
+        /// <summary>Tarif de sortie (centimes/MTok). Opus 5.5 : 20 $.</summary>
+        public long AssistantOutputPriceCentimesPerMTok { get; set; } = 1214000;
+
+        /// <summary>Tarif d'une lecture en cache (centimes/MTok). Opus 5.5 : 0,20 $.</summary>
+        public long AssistantCacheReadPriceCentimesPerMTok { get; set; } = 12140;
+
         public DateTime? UpdatedAt { get; set; }
 
         /// <summary>

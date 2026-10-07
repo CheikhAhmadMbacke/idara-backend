@@ -186,6 +186,15 @@ builder.Services.AddSingleton<IExportPdfService, ExportPdfService>();
 builder.Services.AddSingleton<IInvestorReportPdfService, InvestorReportPdfService>();
 builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<ICashPaymentService, CashPaymentService>();
+builder.Services.AddScoped<ICashReceiptNotifier, CashReceiptNotifier>();
+builder.Services.AddScoped<IPaymentRosterService, PaymentRosterService>();
+builder.Services.Configure<Idara.API.Options.AssistantSettings>(
+    builder.Configuration.GetSection(Idara.API.Options.AssistantSettings.SectionName));
+builder.Services.AddScoped<Idara.API.Services.Assistant.AssistantToolbox>();
+builder.Services.AddScoped<Idara.API.Services.Assistant.IAssistantCreditService,
+    Idara.API.Services.Assistant.AssistantCreditService>();
+builder.Services.AddScoped<Idara.API.Services.Assistant.IAssistantService,
+    Idara.API.Services.Assistant.AssistantService>();
 builder.Services.AddScoped<IPaymentLinkService, PaymentLinkService>();
 builder.Services.AddScoped<ISubscriptionPaymentLinkService, SubscriptionPaymentLinkService>();
 builder.Services.AddScoped<IUserDeletionService, UserDeletionService>();

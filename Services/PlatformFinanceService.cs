@@ -81,7 +81,8 @@ namespace Idara.API.Services
             var surplus8 = await _db.Payments
                 .Where(p => p.Status == PaymentStatus.Completed
                             && p.Operator != PaymentOperator.Cash
-                            && p.Purpose != PaymentPurpose.OcrPages)
+                            && p.Purpose != PaymentPurpose.OcrPages
+                            && p.Purpose != PaymentPurpose.AssistantCredits)
                 .SumAsync(p => p.NetCreditedFcfa - p.WalletCreditedFcfa, ct);
 
             // Revenus d'abonnement encaissés (débités du wallet école → gain plateforme).
@@ -105,7 +106,8 @@ namespace Idara.API.Services
             var ocrPageRevenue = await _db.Payments
                 .Where(p => p.Status == PaymentStatus.Completed
                             && p.Operator != PaymentOperator.Cash
-                            && p.Purpose == PaymentPurpose.OcrPages)
+                            && (p.Purpose == PaymentPurpose.OcrPages
+                                || p.Purpose == PaymentPurpose.AssistantCredits))
                 .SumAsync(p => p.NetCreditedFcfa, ct);
 
             // 🔑 CE QUE LA PLATEFORME A SUPPORTÉ sur les décaissements des
@@ -547,7 +549,7 @@ namespace Idara.API.Services
                     // mesure la plus trompeuse qu'on puisse montrer à un
                     // investisseur, puisqu'elle grossit d'autant plus que le
                     // produit se vend mal aux familles.
-                    var famille = payments.Where(p => p.Purpose != PaymentPurpose.OcrPages).ToList();
+                    var famille = payments.Where(p => !PaymentPurposes.IsPlatformService(p.Purpose)).ToList();
                     var online = famille
                         .Where(p => p.Operator != PaymentOperator.Cash && In(p.When)).ToList();
                     var cash = famille
@@ -564,7 +566,7 @@ namespace Idara.API.Services
                     // Pages de lecture vendues : le net encaissé, en entier —
                     // même règle que dans P.
                     var ocrRev = payments
-                        .Where(p => p.Purpose == PaymentPurpose.OcrPages
+                        .Where(p => PaymentPurposes.IsPlatformService(p.Purpose)
                                     && p.Operator != PaymentOperator.Cash && In(p.When))
                         .Sum(p => p.NetCreditedFcfa);
                     var fees = payoutFees.Where(f => In(f.When)).Sum(f => f.FeesFcfa);
@@ -631,7 +633,7 @@ namespace Idara.API.Services
                 // OcrPageRevenueFcfa. Sans ce filtre, GrossRevenueTotalFcfa
                 // compterait la recette deux fois.
                 PaymentMarginTotalFcfa = onlineAll
-                    .Where(p => p.Purpose != PaymentPurpose.OcrPages)
+                    .Where(p => !PaymentPurposes.IsPlatformService(p.Purpose))
                     .Sum(p => p.NetCreditedFcfa - p.WalletCreditedFcfa),
             };
             kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0

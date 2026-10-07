@@ -325,7 +325,9 @@ namespace Idara.API.Services
                                     ? "Paiement libre"
                                     : payment.Purpose == PaymentPurpose.OcrPages
                                         ? $"Achat de {payment.OcrPagesPurchased} page(s) de lecture de cahier"
-                                        : "Recharge du wallet école");
+                                        : payment.Purpose == PaymentPurpose.AssistantCredits
+                                            ? $"Achat de {payment.AssistantCommandsPurchased} commande(s) de l'assistant IA"
+                                            : "Recharge du wallet école");
                             });
                         }
                     }

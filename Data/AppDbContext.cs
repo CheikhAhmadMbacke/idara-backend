@@ -94,6 +94,9 @@ namespace Idara.API.Data
 
         /// <summary>Pages accordées à une école en plus de son quota de base.</summary>
         public DbSet<OcrPageGrant> OcrPageGrants { get; set; }
+        public DbSet<AssistantTurn> AssistantTurns { get; set; }
+        public DbSet<AssistantCreditGrant> AssistantCreditGrants { get; set; }
+        public DbSet<AssistantAction> AssistantActions { get; set; }
 
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
@@ -238,6 +241,45 @@ namespace Idara.API.Data
                 .WithMany()
                 .HasForeignKey(g => g.PaymentId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            // --- Assistant IA (2026-10-07) : meme discipline que la lecture de
+            // cahier. Le solde d'une ecole et la depense du jour se lisent dans
+            // le registre des echanges, jamais dans un compteur.
+            modelBuilder.Entity<AssistantTurn>()
+                .HasIndex(t => new { t.SchoolId, t.CreatedAt });
+            modelBuilder.Entity<AssistantTurn>()
+                .HasIndex(t => t.CreatedAt);
+            modelBuilder.Entity<AssistantTurn>()
+                .HasOne(t => t.School)
+                .WithMany()
+                .HasForeignKey(t => t.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<AssistantCreditGrant>()
+                .HasIndex(g => g.SchoolId);
+            modelBuilder.Entity<AssistantCreditGrant>()
+                .HasOne(g => g.School)
+                .WithMany()
+                .HasForeignKey(g => g.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Un paiement n'octroie ses commandes QU'UNE FOIS (rejeu de webhook).
+            modelBuilder.Entity<AssistantCreditGrant>()
+                .HasIndex(g => g.PaymentId)
+                .IsUnique()
+                .HasFilter("\"PaymentId\" IS NOT NULL");
+            modelBuilder.Entity<AssistantCreditGrant>()
+                .HasOne(g => g.Payment)
+                .WithMany()
+                .HasForeignKey(g => g.PaymentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<AssistantAction>()
+                .HasIndex(a => new { a.SchoolId, a.CreatedAt });
+            modelBuilder.Entity<AssistantAction>()
+                .HasOne(a => a.School)
+                .WithMany()
+                .HasForeignKey(a => a.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<TranslationProposal>()
                 .HasOne(p => p.Reviewer)

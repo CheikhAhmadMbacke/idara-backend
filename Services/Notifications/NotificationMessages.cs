@@ -349,6 +349,34 @@ namespace Idara.API.Services.Notifications
             Fr: $"{pages} page(s) de lecture ajoutee(s) a votre compte ({montantFcfa} FCFA). Vous pouvez reprendre la lecture de votre cahier.",
             Ar: $"تمت إضافة {pages} صفحة قراءة إلى حسابكم ({montantFcfa} FCFA). يمكنكم متابعة قراءة دفتركم.");
 
+        // Commandes de l'assistant IA achetées (2026-10-07). Même raisonnement
+        // que les pages : on annonce ce qui a été reçu, pas un solde crédité.
+        public static BilingualMessage AssistantCommandsPurchased(int commandes, long montantFcfa) => new(
+            Fr: $"{commandes} commande(s) de l'assistant ajoutee(s) a votre compte ({montantFcfa} FCFA).",
+            Ar: $"تمت إضافة {commandes} أمر للمساعد إلى حسابكم ({montantFcfa} FCFA).");
+
+        /// <summary>
+        /// Relance d'impayé envoyée par l'ÉCOLE, à sa demande (assistant IA,
+        /// 2026-10-07), avec le lien de paiement permanent du responsable
+        /// (§161). Distincte du rappel automatique : c'est le daara qui parle.
+        /// Sans accent dans la partie française (GSM-7, §225).
+        /// </summary>
+        public static BilingualMessage SchoolPaymentReminder(
+            string? ecole, string eleves, long montantFcfa, string? lien)
+        {
+            var e = string.IsNullOrWhiteSpace(ecole) ? "Votre ecole" : Gsm7Text.Sanitize(ecole).Trim();
+            var n = Gsm7Text.Sanitize(eleves).Trim();
+            return new(
+                Fr: string.IsNullOrWhiteSpace(lien)
+                    ? $"{e} : la scolarite de {n} ({montantFcfa} FCFA) reste a regler. Merci de passer au daara ou de payer sur l'application."
+                    : $"{e} : la scolarite de {n} ({montantFcfa} FCFA) reste a regler. Payez ici : {lien}",
+                Ar: string.IsNullOrWhiteSpace(lien)
+                    ? $"{e}: رسوم {n} ({montantFcfa} FCFA) ما زالت غير مدفوعة. يرجى المرور بالمدرسة أو الدفع عبر التطبيق."
+                    : $"{e}: رسوم {n} ({montantFcfa} FCFA) ما زالت غير مدفوعة. ادفعوا هنا: {lien}");
+        }
+
+        public const string SchoolPaymentReminderCode = "SCHOOL_PAYMENT_REMINDER";
+
         // Auto-ajustement de palier à la facturation : l'effectif de l'école a
         // dépassé le plafond de son plan, on l'a remontée au plan adapté.
         public static BilingualMessage SubscriptionPlanUpgraded(

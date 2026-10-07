@@ -93,6 +93,8 @@ namespace Idara.API.Controllers
             // l'école elle-même, qui vient de PAYER. Une page de confirmation
             // qui décrit la mauvaise opération est pire qu'aucune page.
             var isOcrPages = payment.Purpose == PaymentPurpose.OcrPages;
+            // Même raison pour les commandes de l'assistant IA (2026-10-07).
+            var isAssistantCredits = payment.Purpose == PaymentPurpose.AssistantCredits;
             var donor = isDonation && payment.DonorId.HasValue
                 ? await _context.Users.FirstOrDefaultAsync(u => u.Id == payment.DonorId.Value, ct)
                 : null;
@@ -114,6 +116,8 @@ namespace Idara.API.Controllers
                 isDonation,
                 isOcrPages,
                 ocrPages = payment.OcrPagesPurchased,
+                isAssistantCredits,
+                assistantCommands = payment.AssistantCommandsPurchased,
                 donorName = donor?.FullName,
             });
         }

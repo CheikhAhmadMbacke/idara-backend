@@ -89,6 +89,16 @@ namespace Idara.API.Models
         public long OcrPricePerPageFcfa { get; set; }
 
         /// <summary>
+        /// Commandes de l'assistant IA achetées, quand <see cref="Purpose"/> ==
+        /// <c>AssistantCredits</c> (zéro ailleurs). FIGÉ à l'initiation, comme
+        /// les pages : l'école reçoit ce qu'elle a acheté.
+        /// </summary>
+        public int AssistantCommandsPurchased { get; set; }
+
+        /// <summary>Prix unitaire figé de ces commandes.</summary>
+        public long AssistantPricePerCommandFcfa { get; set; }
+
+        /// <summary>
         /// Facture d'abonnement que ce paiement solde
         /// (<see cref="Enums.PaymentPurpose.Subscription"/> uniquement).
         /// </summary>

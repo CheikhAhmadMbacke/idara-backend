@@ -108,6 +108,9 @@ namespace Idara.API.Common.Utilities
         {
             Enums.PaymentPurpose.WalletTopup => "Recharge du wallet",
             Enums.PaymentPurpose.Donation => "Don",
+            Enums.PaymentPurpose.OcrPages => "Pages de lecture",
+            Enums.PaymentPurpose.AssistantCredits => "Commandes de l'assistant",
+            Enums.PaymentPurpose.Subscription => "Abonnement",
             _ => "Paiement mensualité"
         };
     }

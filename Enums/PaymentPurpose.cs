@@ -19,6 +19,10 @@ namespace Idara.API.Enums
     ///   OcrPages, ne crédite AUCUN wallet : c'est un revenu de la plateforme.
     ///   Le webhook solde la facture d'abonnement, avance le cycle et rend
     ///   l'accès — au lieu de créditer un solde.
+    /// - AssistantCredits : l'école achète des commandes de l'assistant IA
+    ///   (2026-10-07). 🔴 Même règle qu'OcrPages, et compté avec lui partout
+    ///   (<see cref="PaymentPurposes.IsPlatformService"/>) : aucun wallet
+    ///   crédité, revenu de la plateforme, le webhook octroie des commandes.
     /// </summary>
     public enum PaymentPurpose
     {
@@ -26,6 +30,19 @@ namespace Idara.API.Enums
         WalletTopup = 1,
         Donation = 2,
         OcrPages = 3,
-        Subscription = 4
+        Subscription = 4,
+        AssistantCredits = 5
+    }
+
+    /// <summary>
+    /// 🔑 Les SERVICES que la plateforme vend aux écoles (lecture de cahier,
+    /// assistant IA). Un seul endroit pour les nommer : la finance (P, GMV,
+    /// marge) doit les traiter à l'identique, et un objet oublié dans un seul
+    /// filtre compterait la recette deux fois sans que rien ne le signale.
+    /// </summary>
+    public static class PaymentPurposes
+    {
+        public static bool IsPlatformService(PaymentPurpose p) =>
+            p == PaymentPurpose.OcrPages || p == PaymentPurpose.AssistantCredits;
     }
 }
