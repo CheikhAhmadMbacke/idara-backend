@@ -21,11 +21,15 @@ namespace Idara.API.Options
         public string ApiKey { get; set; } = string.Empty;
 
         /// <summary>
-        /// Modèle employé. Opus 5.5 : les commandes mêlent français, arabe,
-        /// noms wolof et montants — la justesse prime, et l'effort bas tient le
-        /// coût. À remesurer sur le registre avant de descendre d'un cran.
+        /// Modèle employé : <b>Sonnet 5.5</b>, choisi sur MESURE le 2026-10-07.
+        /// Même batterie de 13 commandes (FR, AR, dictée bruitée, langues
+        /// refusées, cas ambigus) contre Opus 5.5 : cartes IDENTIQUES au champ
+        /// près, mêmes ambiguïtés détectées, 4,0 F par commande contre 8,0 F,
+        /// 8,8 s contre 13,4 s. Les trois écarts de forme relevés ont été
+        /// corrigés dans l'invite. Revenir à Opus = changer cette ligne (ou
+        /// <c>Assistant__Model</c>) : le coût se recalcule seul (ModelPricing).
         /// </summary>
-        public string Model { get; set; } = "claude-opus-5-5";
+        public string Model { get; set; } = "claude-sonnet-5-5";
 
         /// <summary>Plafond de tokens produits par aller-retour.</summary>
         public int MaxTokens { get; set; } = 4096;

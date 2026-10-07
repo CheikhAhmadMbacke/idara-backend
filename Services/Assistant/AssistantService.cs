@@ -68,6 +68,10 @@ namespace Idara.API.Services.Assistant
             // Client PARTAGÉ : un client par requête ouvrirait une connexion
             // HTTP par commande.
             _client = string.IsNullOrWhiteSpace(key) ? null : Clients.GetOrAdd(key, k => new AnthropicClient { ApiKey = k });
+            if (!ModelPricing.IsKnown(_settings.Model))
+                _logger.LogWarning(
+                    "[assistant] Modèle {Model} absent de ModelPricing : son coût est compté au tarif le plus cher",
+                    _settings.Model);
         }
 
         public bool IsConfigured => _client != null;
@@ -217,7 +221,13 @@ namespace Idara.API.Services.Assistant
             turn.Success = failure == null && !string.IsNullOrWhiteSpace(reply);
             // Une commande n'est due que si elle a rendu quelque chose (§234 :
             // un échec n'a rien donné à l'école).
-            turn.ChargedCommands = turn.Success ? 1 : 0;
+            // Une commande réussie se prend d'abord sur l'INCLUS du plan payé
+            // (Pro, Grand), et seulement ensuite sur les crédits.
+            if (turn.Success)
+            {
+                if (status.IncludedAvailable) turn.IncludedCommands = 1;
+                else turn.ChargedCommands = 1;
+            }
             turn.BlockedReason = failure;
             turn.Reply = reply == null ? null : Trunc(reply, 1000);
             turn.DurationMs = (int)sw.ElapsedMilliseconds;
@@ -240,7 +250,7 @@ namespace Idara.API.Services.Assistant
             return new(true, reply, null, cards, after);
         }
 
-        private static void Account(AssistantTurn turn, Usage? u, PlatformSettings p)
+        private void Account(AssistantTurn turn, Usage? u, PlatformSettings p)
         {
             if (u == null) return;
             var input = (long)u.InputTokens;
@@ -253,12 +263,10 @@ namespace Idara.API.Services.Assistant
             turn.CacheReadTokens += (int)cacheRead;
             turn.CacheWriteTokens += (int)cacheWrite;
 
-            // Écriture en cache = 1,25 × le tarif d'entrée (cache de 5 min).
-            var cost = (input * p.AssistantInputPriceCentimesPerMTok
-                        + cacheWrite * p.AssistantInputPriceCentimesPerMTok * 5 / 4
-                        + cacheRead * p.AssistantCacheReadPriceCentimesPerMTok
-                        + output * p.AssistantOutputPriceCentimesPerMTok) / 1_000_000;
-            turn.CostCentimes += Math.Max(1, cost);
+            // Le tarif du modèle RÉELLEMENT employé × le taux de change réel :
+            // passer d'Opus à Sonnet recalcule le coût sans aucun réglage.
+            turn.CostCentimes += Math.Max(1, ModelPricing.CostCentimes(
+                _settings.Model, input, cacheWrite, cacheRead, output, p.AiUsdRateFcfa));
         }
 
         private List<MessageParam> BuildMessages(
@@ -311,12 +319,14 @@ namespace Idara.API.Services.Assistant
             - Réponds dans la langue du DERNIER message de l'utilisateur : en français s'il écrit en français,
               en arabe s'il écrit en arabe (arabe standard simple et clair). Peu importe la langue de l'application.
             - Si le message est dans une autre langue (wolof, anglais, pulaar, etc.), n'exécute RIEN et réponds,
-              dans la « langue configurée de l'application » indiquée dans le contexte, que tu ne comprends que
-              le français et l'arabe, et invite-le à reformuler dans l'une des deux. Un nom propre wolof ou peul
+              dans la « langue configurée de l'application » indiquée dans le contexte — et dans CETTE SEULE
+              langue, sans traduction à la suite —, que tu ne comprends que le français et l'arabe, et
+              invite-le à reformuler dans l'une des deux. Un nom propre wolof ou peul
               dans une phrase française ou arabe n'est PAS une autre langue.
             - Le produit s'écrit « Idara » en français et « «إدارا» » en arabe — jamais « إدارة » pour le nom.
-            - L'argent : toujours en chiffres latins avec « FCFA » (« 20 000 FCFA » en français,
-              « FCFA 20000 » en arabe). Jamais de chiffres arabes orientaux, jamais de devise traduite.
+            - L'argent : toujours en chiffres latins avec « FCFA ». En français « 20 000 FCFA » ; en arabe,
+              TOUJOURS le sigle d'abord : « FCFA 20000 », jamais « 20000 FCFA ». Jamais de chiffres arabes
+              orientaux, jamais de devise traduite.
 
             CE QUE TU FAIS
             - Répondre aux questions sur les élèves, les classes, les tarifs et les paiements, avec les outils.
@@ -352,7 +362,8 @@ namespace Idara.API.Services.Assistant
             - Court, chaleureux, concret : tes lecteurs ne sont pas des informaticiens. Pas de jargon, pas
               d'identifiants techniques, pas de tableaux. Une liste courte si besoin, avec des tirets.
             - Pas de Markdown (ni astérisques, ni dièses, ni gras) : ton texte s'affiche tel quel.
-            - Salue en retour quand on te salue (« Wa aleykoum salam », « وعليكم السلام »).
+            - Salue en retour SEULEMENT quand on te salue (« Wa aleykoum salam », « وعليكم السلام ») ; sinon,
+              va droit au but.
             """;
     }
 }

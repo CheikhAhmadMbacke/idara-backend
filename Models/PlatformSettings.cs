@@ -684,19 +684,26 @@ namespace Idara.API.Models
         /// confondues. Protège d'une boucle ou d'un abus — le danger est le
         /// VOLUME, pas le prix (§191).
         /// </summary>
-        public long AssistantDailyPlatformCapFcfa { get; set; } = 10000;
+        public long AssistantDailyPlatformCapFcfa { get; set; } = 25000;
 
         /// <summary>Commandes par utilisateur et par heure — frein à un script.</summary>
         public int AssistantMaxCommandsPerUserPerHour { get; set; } = 60;
 
-        /// <summary>Tarif d'entrée du modèle (centimes de FCFA par million de tokens). Opus 5.5 : 4 $.</summary>
-        public long AssistantInputPriceCentimesPerMTok { get; set; } = 242800;
+        /// <summary>
+        /// Commandes par ÉCOLE et par jour, tous plans confondus — l'« usage
+        /// raisonnable » de l'illimité Grand. 100/jour ≈ 2 200/mois : aucun
+        /// secrétariat humain n'y arrive, un script si.
+        /// </summary>
+        public int AssistantDailySchoolCap { get; set; } = 100;
 
-        /// <summary>Tarif de sortie (centimes/MTok). Opus 5.5 : 20 $.</summary>
-        public long AssistantOutputPriceCentimesPerMTok { get; set; } = 1214000;
-
-        /// <summary>Tarif d'une lecture en cache (centimes/MTok). Opus 5.5 : 0,20 $.</summary>
-        public long AssistantCacheReadPriceCentimesPerMTok { get; set; } = 12140;
+        /// <summary>
+        /// 💱 <b>Ce que coûte RÉELLEMENT un dollar Anthropic</b>, en FCFA, frais de
+        /// carte compris. Relevé sur les débits Wave de Cheikh : 61 592 F pour
+        /// 100 $ (12/06/2026, 615,9) et 12 195 F pour 20 $ (10/09/2026, 609,8) —
+        /// on garde le plus défavorable. Les tarifs par modèle, eux, sont dans
+        /// <c>ModelPricing</c> : changer de modèle ne demande aucun réglage.
+        /// </summary>
+        public long AiUsdRateFcfa { get; set; } = 616;
 
         public DateTime? UpdatedAt { get; set; }
 

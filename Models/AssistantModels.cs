@@ -37,6 +37,12 @@ namespace Idara.API.Models
         /// </summary>
         public int ChargedCommands { get; set; }
 
+        /// <summary>
+        /// Commandes imputées à l'INCLUS du plan (Pro, Grand) — 1 ou 0. Une
+        /// commande est soit incluse, soit payée en crédit, jamais les deux.
+        /// </summary>
+        public int IncludedCommands { get; set; }
+
         public bool Success { get; set; }
 
         /// <summary>Motif court quand le garde-fou a refusé ou que l'appel a échoué.</summary>

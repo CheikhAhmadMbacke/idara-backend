@@ -61,6 +61,20 @@ namespace Idara.API.Models
         /// <summary>Quota de notifications inclus par cycle (spec §4.2).</summary>
         public int NotificationQuota { get; set; }
 
+        // ===== Assistant IA inclus (2026-10-07) =====
+        // Le levier vers Pro et Grand : l'assistant y est INCLUS. Accordé
+        // seulement quand le plan est PAYÉ pour le cycle en cours — voir
+        // AssistantCreditService.EntitlementAsync.
+
+        /// <summary>Commandes incluses par cycle de facturation. 0 = aucune (crédits).</summary>
+        public int AssistantIncludedCommands { get; set; }
+
+        /// <summary>Assistant illimité (usage raisonnable : AssistantDailySchoolCap).</summary>
+        public bool AssistantUnlimited { get; set; }
+
+        /// <summary>Prix d'une commande achetée au-delà de l'inclus. Null = tarif plateforme.</summary>
+        public long? AssistantCreditPriceFcfa { get; set; }
+
         /// <summary>Plan visible/souscriptible. Désactiver masque le plan des nouveaux abos sans casser les abos en cours.</summary>
         public bool IsActive { get; set; } = true;
 
