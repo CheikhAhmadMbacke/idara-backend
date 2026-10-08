@@ -45,6 +45,7 @@ namespace Idara.API.Services.Assistant
         private readonly AppDbContext _db;
         private readonly AssistantToolbox _tools;
         private readonly IAssistantCreditService _credits;
+        private readonly Idara.API.Services.Alerts.IOpsAlertService _alerts;
         private readonly ILogger<AssistantService> _logger;
         private readonly AnthropicClient? _client;
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, AnthropicClient> Clients = new();
@@ -55,8 +56,10 @@ namespace Idara.API.Services.Assistant
             AppDbContext db,
             AssistantToolbox tools,
             IAssistantCreditService credits,
+            Idara.API.Services.Alerts.IOpsAlertService alerts,
             ILogger<AssistantService> logger)
         {
+            _alerts = alerts;
             _settings = settings.Value;
             _db = db;
             _tools = tools;
@@ -222,6 +225,13 @@ namespace Idara.API.Services.Assistant
                 _logger.LogError(ex, "[assistant] Échec de l'échange {TurnId} (école {SchoolId})", turn.Id, caller.SchoolId);
                 failure = "provider_error";
                 turn.Error = Trunc(ex.Message, 500);
+                // 🔋 Crédits épuisés : toute la plateforme est touchée, Cheikh
+                // le sait par SMS dans la minute (alerte regroupée sur 30 min).
+                if (Idara.API.Common.Utilities.AnthropicErrors.IsCreditExhausted(ex))
+                {
+                    failure = "provider_credits";
+                    _alerts.Queue(Idara.API.Common.Utilities.AnthropicErrors.CreditAlert("Assistant IA"));
+                }
             }
 
             // Des propositions ont été déposées mais le modèle n'a pas conclu :

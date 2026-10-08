@@ -86,5 +86,14 @@
         /// <summary>Un dossier d'école vient d'être déposé et attend TA
         /// validation. C'est ici, et seulement ici, qu'un nom d'école existe.</summary>
         SchoolKycSubmitted = 41,
+
+        // ===== Intelligence artificielle =====
+
+        /// <summary>
+        /// Anthropic refuse tout appel : crédits épuisés (le rechargement
+        /// automatique a échoué). L'assistant ET la lecture de cahier sont à
+        /// l'arrêt. Voir <c>AnthropicErrors</c>.
+        /// </summary>
+        AiCreditsExhausted = 50,
     }
 }

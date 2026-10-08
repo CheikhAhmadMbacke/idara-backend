@@ -305,6 +305,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.WithdrawalProviderOutage => true,
             OpsAlertKind.WithdrawalStuck => true,
             OpsAlertKind.PayoutAnomaly => true,
+            OpsAlertKind.AiCreditsExhausted => true,
             _ => false,
         };
 
@@ -318,6 +319,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.WithdrawalProviderOutage => "Retrait — le prestataire ne peut pas décaisser",
             OpsAlertKind.WithdrawalStuck => "Retrait — bloqué en vérification",
             OpsAlertKind.PayoutAnomaly => "Décaissement — anomalie comptable",
+            OpsAlertKind.AiCreditsExhausted => "IA — crédits Anthropic épuisés",
             _ => kind.ToString(),
         };
 

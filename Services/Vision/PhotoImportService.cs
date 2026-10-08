@@ -54,6 +54,7 @@ namespace Idara.API.Services.Vision
         private readonly IDocumentVisionService _vision;
         private readonly IStudentImportService _students;
         private readonly IStaffImportService _staff;
+        private readonly Idara.API.Services.Alerts.IOpsAlertService _alerts;
         private readonly ILogger<PhotoImportService> _logger;
 
         public PhotoImportService(
@@ -62,8 +63,10 @@ namespace Idara.API.Services.Vision
             IDocumentVisionService vision,
             IStudentImportService students,
             IStaffImportService staff,
+            Idara.API.Services.Alerts.IOpsAlertService alerts,
             ILogger<PhotoImportService> logger)
         {
+            _alerts = alerts;
             _db = db;
             _guard = guard;
             _vision = vision;
@@ -159,6 +162,17 @@ namespace Idara.API.Services.Vision
                     rows: 0, uncertain: 0, batchId: null, durationMs: 0, ct);
 
                 _logger.LogError(ex, "[photo-import] Lecture échouée pour l'école {SchoolId}", schoolId);
+
+                // 🔋 Crédits Anthropic épuisés : ce n'est PAS la photo. Dire à
+                // l'école de « vérifier que ses photos sont nettes » l'enverrait
+                // reprendre ses pages pour rien.
+                if (Idara.API.Common.Utilities.AnthropicErrors.IsCreditExhausted(ex))
+                {
+                    _alerts.Queue(Idara.API.Common.Utilities.AnthropicErrors.CreditAlert("Lecture de cahier (import par photo)"));
+                    throw new InvalidOperationException(
+                        "La lecture des cahiers est momentanément indisponible. Réessayez un peu plus tard : "
+                        + "aucune page ne vous a été décomptée.");
+                }
                 throw new InvalidOperationException(
                     "La lecture des photos a échoué. Vérifiez qu'elles sont nettes et bien cadrées, "
                     + "puis réessayez.");
