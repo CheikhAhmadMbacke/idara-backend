@@ -5,6 +5,7 @@ using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Models;
 using Idara.API.Options;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Idara.API.Services.Assistant
@@ -17,7 +18,9 @@ namespace Idara.API.Services.Assistant
         string? Reply,
         string? BlockedReason,
         List<AssistantCardDto> Cards,
-        AssistantStatus Status);
+        AssistantStatus Status,
+        int? ConversationId = null,
+        string? ConversationTitle = null);
 
     public interface IAssistantService
     {
@@ -25,7 +28,7 @@ namespace Idara.API.Services.Assistant
 
         Task<AssistantChatResult> ChatAsync(
             AssistantCaller caller, string message, IReadOnlyList<AssistantHistoryItem> history,
-            bool fromVoice, CancellationToken ct);
+            bool fromVoice, int? conversationId, CancellationToken ct);
     }
 
     /// <summary>
@@ -81,14 +84,23 @@ namespace Idara.API.Services.Assistant
 
         public async Task<AssistantChatResult> ChatAsync(
             AssistantCaller caller, string message, IReadOnlyList<AssistantHistoryItem> history,
-            bool fromVoice, CancellationToken ct)
+            bool fromVoice, int? conversationId, CancellationToken ct)
         {
             var status = await _credits.DescribeAsync(caller.SchoolId, caller.UserId, IsConfigured, ct);
             if (!status.Available || _client == null)
-                return new(false, null, status.BlockedReason ?? "disabled", new(), status);
+                return new(false, null, status.BlockedReason ?? "disabled", new(), status, conversationId);
 
             var platform = await _db.GetPlatformSettingsAsync(ct);
             var sw = Stopwatch.StartNew();
+
+            var conversation = await ResolveConversationAsync(caller, message, conversationId, history.Count > 0, ct);
+            // 💬 L'historique se relit en BASE dès que la discussion en a un :
+            // c'est elle qui sait ce que sont devenues les cartes (confirmée,
+            // annulée, expirée) — l'application, rouverte depuis l'historique,
+            // ne le sait plus. Celui de l'application ne sert qu'aux discussions
+            // ouvertes avant l'historique.
+            var stored = await StoredHistoryAsync(conversation.Id, ct);
+            if (stored.Count > 0) history = stored;
 
             // Le registre s'ouvre AVANT l'appel : les propositions s'y rattachent,
             // et un appel qui plante laisse quand même sa trace.
@@ -96,7 +108,8 @@ namespace Idara.API.Services.Assistant
             {
                 SchoolId = caller.SchoolId,
                 UserId = caller.UserId,
-                Prompt = Trunc(message, 1000),
+                ConversationId = conversation.Id,
+                Prompt = Trunc(message, 2000),
                 Model = _settings.Model,
                 CreatedAt = DateTime.UtcNow,
             };
@@ -259,7 +272,7 @@ namespace Idara.API.Services.Assistant
             }
             if (declined != null) turn.BlockedReason = "declined:" + declined;
             turn.BlockedReason ??= failure;
-            turn.Reply = reply == null ? null : Trunc(reply, 1000);
+            turn.Reply = reply == null ? null : Trunc(reply, 8000);
             turn.DurationMs = (int)sw.ElapsedMilliseconds;
             await _db.SaveChangesAsync(CancellationToken.None);
 
@@ -275,9 +288,118 @@ namespace Idara.API.Services.Assistant
                 return new(false, AssistantToolbox.T(caller.Lang,
                     "Je n'ai pas pu répondre cette fois-ci. Réessayez dans un instant : cette tentative ne vous a rien coûté.",
                     "لم أتمكن من الرد هذه المرة. أعيدوا المحاولة بعد قليل: هذه المحاولة لم تكلفكم شيئا."),
-                    failure, cards, after);
+                    failure, cards, after, conversation.Id, conversation.Title);
             }
-            return new(true, reply, null, cards, after);
+            return new(true, reply, null, cards, after, conversation.Id, conversation.Title);
+        }
+
+        /// <summary>
+        /// La discussion de ce message : celle que l'application désigne, sinon
+        /// une nouvelle.
+        ///
+        /// <para>🔴 <b>Une application antérieure à l'historique</b> n'envoie
+        /// aucun identifiant, mais bien son historique. Créer une discussion par
+        /// message remplirait la liste d'autant de lignes : on rattache donc à la
+        /// dernière discussion de la personne si elle date de moins de deux
+        /// heures. Un identifiant inconnu, masqué ou d'une autre personne ouvre
+        /// une discussion neuve, sans erreur — il ne donne jamais accès à celle
+        /// d'un autre.</para>
+        /// </summary>
+        private async Task<AssistantConversation> ResolveConversationAsync(
+            AssistantCaller caller, string message, int? conversationId, bool legacyHistory, CancellationToken ct)
+        {
+            var now = DateTime.UtcNow;
+            var mine = _db.AssistantConversations.Where(x =>
+                x.SchoolId == caller.SchoolId && x.UserId == caller.UserId && x.HiddenAt == null);
+
+            AssistantConversation? conv = null;
+            if (conversationId != null)
+                conv = await mine.FirstOrDefaultAsync(x => x.Id == conversationId, ct);
+            else if (legacyHistory)
+            {
+                var since = now.AddHours(-2);
+                conv = await mine.Where(x => x.UpdatedAt >= since)
+                    .OrderByDescending(x => x.UpdatedAt).FirstOrDefaultAsync(ct);
+            }
+
+            if (conv == null)
+            {
+                conv = new AssistantConversation
+                {
+                    SchoolId = caller.SchoolId,
+                    UserId = caller.UserId,
+                    Title = TitleFrom(message),
+                    CreatedAt = now,
+                };
+                _db.AssistantConversations.Add(conv);
+            }
+            conv.UpdatedAt = now;
+            await _db.SaveChangesAsync(ct);
+            return conv;
+        }
+
+        /// <summary>
+        /// Le titre d'une discussion : le début de sa première demande, coupé sur
+        /// un mot. Pas d'appel à l'IA — un titre ne doit rien coûter.
+        /// </summary>
+        public static string TitleFrom(string message)
+        {
+            var flat = System.Text.RegularExpressions.Regex.Replace(message ?? "", @"\s+", " ").Trim();
+            const int max = 60;
+            if (flat.Length <= max) return flat;
+            var cut = flat[..max];
+            var space = cut.LastIndexOf(' ');
+            if (space > 30) cut = cut[..space];
+            return cut.TrimEnd(' ', ',', ';', ':', '.') + "…";
+        }
+
+        /// <summary>
+        /// Les derniers échanges de la discussion, avec ce que sont devenues
+        /// leurs cartes. Sans cette mention, l'assistant croirait toujours en
+        /// attente un élève inscrit depuis — et le reproposerait.
+        /// </summary>
+        private async Task<List<AssistantHistoryItem>> StoredHistoryAsync(int conversationId, CancellationToken ct)
+        {
+            var take = Math.Max(1, _settings.MaxHistoryMessages / 2);
+            var turns = await _db.AssistantTurns
+                .Where(t => t.ConversationId == conversationId && t.Reply != null)
+                .OrderByDescending(t => t.Id)
+                .Take(take)
+                .Select(t => new { t.Id, t.Prompt, t.Reply })
+                .ToListAsync(ct);
+            if (turns.Count == 0) return new();
+
+            var ids = turns.Select(t => t.Id).ToList();
+            var actions = await _db.AssistantActions
+                .Where(a => a.TurnId != null && ids.Contains(a.TurnId.Value))
+                .OrderBy(a => a.Id)
+                .Select(a => new { TurnId = a.TurnId!.Value, a.Title, a.Status, a.ExpiresAt, a.ResultMessage })
+                .ToListAsync(ct);
+
+            var now = DateTime.UtcNow;
+            var items = new List<AssistantHistoryItem>();
+            foreach (var t in turns.OrderBy(t => t.Id))
+            {
+                items.Add(new("user", t.Prompt));
+                var reply = t.Reply ?? "";
+                foreach (var a in actions.Where(a => a.TurnId == t.Id))
+                {
+                    var state = a.Status switch
+                    {
+                        Enums.AssistantActionStatus.Done => "confirmée et exécutée",
+                        Enums.AssistantActionStatus.Failed => "confirmée mais en échec",
+                        Enums.AssistantActionStatus.Cancelled => "annulée par l'utilisateur",
+                        Enums.AssistantActionStatus.Expired => "expirée, jamais exécutée",
+                        _ when a.ExpiresAt < now => "expirée, jamais exécutée",
+                        _ => "en attente de confirmation",
+                    };
+                    reply += $"\n[Proposition « {a.Title} » : {state}"
+                        + (string.IsNullOrWhiteSpace(a.ResultMessage) ? "" : $" — {Trunc(a.ResultMessage, 300)}")
+                        + "]";
+                }
+                items.Add(new("assistant", reply));
+            }
+            return items;
         }
 
         /// <summary>

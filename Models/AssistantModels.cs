@@ -24,10 +24,20 @@ namespace Idara.API.Models
         /// <summary>Qui a parlé à l'assistant.</summary>
         public int UserId { get; set; }
 
-        /// <summary>La demande, tronquée à 1 000 caractères — pour comprendre après coup.</summary>
+        /// <summary>
+        /// La discussion à laquelle l'échange appartient (2026-10-08). Null pour
+        /// les échanges antérieurs à l'historique des discussions.
+        /// </summary>
+        public int? ConversationId { get; set; }
+        public AssistantConversation? Conversation { get; set; }
+
+        /// <summary>
+        /// La demande, entière (2 000 caractères au plus, la limite de saisie) :
+        /// l'historique des discussions la ré-affiche.
+        /// </summary>
         public string Prompt { get; set; } = string.Empty;
 
-        /// <summary>Le début de la réponse, tronqué — même usage.</summary>
+        /// <summary>La réponse, tronquée à 8 000 caractères — l'historique la ré-affiche.</summary>
         public string? Reply { get; set; }
 
         /// <summary>
@@ -161,5 +171,42 @@ namespace Idara.API.Models
         public DateTime ExpiresAt { get; set; }
 
         public DateTime? ResolvedAt { get; set; }
+    }
+
+    /// <summary>
+    /// 💬 Une discussion avec l'assistant (2026-10-08) — ce que la liste
+    /// « Historique » affiche, comme les sessions de Claude Code.
+    ///
+    /// <para>🔒 <b>Une discussion appartient à UNE personne</b> : le directeur ne
+    /// lit pas celles de son personnel, ni l'inverse. Elle peut contenir des
+    /// noms, des montants, des numéros.</para>
+    ///
+    /// <para>🔴 <b>Supprimer une discussion la MASQUE</b> (<see cref="HiddenAt"/>) :
+    /// ses échanges (<see cref="AssistantTurn"/>) sont le registre de ce qui a
+    /// été décompté et facturé, et restent append-only (§55). Ses propositions
+    /// encore en attente sont annulées — une carte qu'on ne voit plus ne doit
+    /// plus pouvoir se confirmer.</para>
+    /// </summary>
+    public class AssistantConversation
+    {
+        public int Id { get; set; }
+
+        public int SchoolId { get; set; }
+        public School School { get; set; } = null!;
+
+        public int UserId { get; set; }
+
+        /// <summary>
+        /// Le début de la première demande, renommable. Jamais généré par l'IA :
+        /// un titre ne doit pas coûter une commande.
+        /// </summary>
+        public string Title { get; set; } = string.Empty;
+
+        public DateTime CreatedAt { get; set; }
+
+        /// <summary>Dernier échange — l'ordre de la liste.</summary>
+        public DateTime UpdatedAt { get; set; }
+
+        public DateTime? HiddenAt { get; set; }
     }
 }

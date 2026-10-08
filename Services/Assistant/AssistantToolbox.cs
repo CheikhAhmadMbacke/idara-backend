@@ -828,10 +828,18 @@ namespace Idara.API.Services.Assistant
         // Confirmation
         // =====================================================================
 
+        /// <summary>
+        /// Une carte en attente dont l'heure est passée s'AFFICHE expirée — rouverte
+        /// depuis l'historique, elle ne doit pas tendre un « Confirmer » qui
+        /// échouera. La base, elle, ne change qu'au geste (<see cref="ConfirmAsync"/>).
+        /// </summary>
         public static AssistantCardDto ToCard(AssistantAction a) => new(
             a.Id, a.Kind.ToString(), a.Title,
             JsonSerializer.Deserialize<List<AssistantCardLine>>(a.SummaryJson, Json) ?? new(),
-            a.Status.ToString(), a.ExpiresAt, a.ResultMessage);
+            a.Status == AssistantActionStatus.Pending && a.ExpiresAt < DateTime.UtcNow
+                ? AssistantActionStatus.Expired.ToString()
+                : a.Status.ToString(),
+            a.ExpiresAt, a.ResultMessage);
 
         public async Task<AssistantConfirmResult?> ConfirmAsync(AssistantCaller c, int actionId, CancellationToken ct)
         {

@@ -97,6 +97,7 @@ namespace Idara.API.Data
         public DbSet<AssistantTurn> AssistantTurns { get; set; }
         public DbSet<AssistantCreditGrant> AssistantCreditGrants { get; set; }
         public DbSet<AssistantAction> AssistantActions { get; set; }
+        public DbSet<AssistantConversation> AssistantConversations { get; set; }
 
         // ----- Notifications (Phase 2) -----
         public DbSet<NotificationLog> NotificationLogs { get; set; }
@@ -271,6 +272,25 @@ namespace Idara.API.Data
                 .HasOne(g => g.Payment)
                 .WithMany()
                 .HasForeignKey(g => g.PaymentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // 💬 Discussions (2026-10-08) : la liste se lit par personne, la
+            // plus recente d'abord.
+            modelBuilder.Entity<AssistantConversation>()
+                .HasIndex(c => new { c.SchoolId, c.UserId, c.UpdatedAt });
+            modelBuilder.Entity<AssistantConversation>()
+                .Property(c => c.Title).HasMaxLength(120);
+            modelBuilder.Entity<AssistantConversation>()
+                .HasOne(c => c.School)
+                .WithMany()
+                .HasForeignKey(c => c.SchoolId)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<AssistantTurn>()
+                .HasIndex(t => t.ConversationId);
+            modelBuilder.Entity<AssistantTurn>()
+                .HasOne(t => t.Conversation)
+                .WithMany()
+                .HasForeignKey(t => t.ConversationId)
                 .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<AssistantAction>()

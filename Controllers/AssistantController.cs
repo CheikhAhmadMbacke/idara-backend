@@ -63,8 +63,51 @@ namespace Idara.API.Controllers
             /// <summary>Le message a été dicté : l'assistant tolère une transcription imparfaite.</summary>
             public bool FromVoice { get; set; }
 
+            /// <summary>
+            /// La discussion à poursuivre (2026-10-08). Absente = une discussion
+            /// neuve — ou, pour une application antérieure à l'historique, la
+            /// dernière de moins de deux heures.
+            /// </summary>
+            public int? ConversationId { get; set; }
+
             public List<HistoryItemDto> History { get; set; } = new();
         }
+
+        public class RenameConversationDto
+        {
+            [Required(ErrorMessage = "Le titre est vide.")]
+            [StringLength(120, MinimumLength = 1, ErrorMessage = "Le titre doit faire au plus 120 caractères.")]
+            public string Title { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        /// 🎙️ Ce qu'a donné une dictée, vu du téléphone. JOURNALISÉ seulement :
+        /// c'est ce qui dira, navigateur par navigateur, où la voix échoue —
+        /// au lieu de le deviner.
+        /// </summary>
+        public class VoiceEventDto
+        {
+            /// <summary>android | web</summary>
+            [StringLength(20)] public string Platform { get; set; } = string.Empty;
+            /// <summary>Famille de navigateur déduite côté client (chrome, samsung, opera…).</summary>
+            [StringLength(40)] public string? Browser { get; set; }
+            [StringLength(400)] public string? UserAgent { get; set; }
+            [StringLength(10)] public string? Lang { get; set; }
+            /// <summary>ok | error | unsupported | no_start | no_speech</summary>
+            [Required, StringLength(30)] public string Outcome { get; set; } = string.Empty;
+            [StringLength(80)] public string? Error { get; set; }
+            /// <summary>Longueur de la transcription — jamais son contenu.</summary>
+            public int Chars { get; set; }
+        }
+
+        public record ConversationListItemDto(
+            int Id, string Title, DateTime CreatedAt, DateTime UpdatedAt, int Exchanges, int PendingCards);
+
+        public record ConversationExchangeDto(
+            int TurnId, string Prompt, string? Reply, bool Ok, DateTime CreatedAt, List<AssistantCardDto> Cards);
+
+        public record ConversationDetailDto(
+            int Id, string Title, DateTime CreatedAt, DateTime UpdatedAt, List<ConversationExchangeDto> Exchanges);
 
         public class BuyCommandsDto
         {
@@ -100,11 +143,129 @@ namespace Idara.API.Controllers
             var history = dto.History
                 .Select(h => new AssistantHistoryItem(h.Role, h.Text))
                 .ToList();
-            var r = await _assistant.ChatAsync(c, dto.Message.Trim(), history, dto.FromVoice, ct);
+            var r = await _assistant.ChatAsync(c, dto.Message.Trim(), history, dto.FromVoice, dto.ConversationId, ct);
             // 200 même pour un refus métier (solde épuisé, plafond) : l'écran
             // l'affiche dans la conversation, et un code d'erreur HTTP le
             // ferait passer pour une panne.
             return Ok(ApiResponse<AssistantChatResult>.Ok(r, r.Ok ? "OK" : (r.BlockedReason ?? "error")));
+        }
+
+        // =====================================================================
+        // 💬 Historique des discussions (2026-10-08)
+        // 🔒 Chacun ne voit que les SIENNES : le filtre porte sur l'école ET la
+        // personne du jeton, jamais sur un identifiant fourni seul.
+        // =====================================================================
+
+        private IQueryable<Models.AssistantConversation> Mine(AssistantCaller c) =>
+            _context.AssistantConversations.Where(x =>
+                x.SchoolId == c.SchoolId && x.UserId == c.UserId && x.HiddenAt == null);
+
+        /// <summary>`GET /api/assistant/conversations` — les plus récentes d'abord.</summary>
+        [HttpGet("conversations")]
+        public async Task<IActionResult> Conversations([FromQuery] int limit = 100, CancellationToken ct = default)
+        {
+            var c = Caller();
+            if (c == null) return Forbid();
+            limit = Math.Clamp(limit, 1, 200);
+            var now = DateTime.UtcNow;
+
+            var list = await Mine(c)
+                .OrderByDescending(x => x.UpdatedAt)
+                .Take(limit)
+                .Select(x => new ConversationListItemDto(
+                    x.Id, x.Title, x.CreatedAt, x.UpdatedAt,
+                    _context.AssistantTurns.Count(t => t.ConversationId == x.Id),
+                    _context.AssistantActions.Count(a =>
+                        a.Status == AssistantActionStatus.Pending && a.ExpiresAt > now
+                        && _context.AssistantTurns.Any(t => t.Id == a.TurnId && t.ConversationId == x.Id))))
+                .ToListAsync(ct);
+            return Ok(ApiResponse<List<ConversationListItemDto>>.Ok(list, "OK"));
+        }
+
+        /// <summary>`GET /api/assistant/conversations/{id}` — la discussion entière, cartes comprises.</summary>
+        [HttpGet("conversations/{id:int}")]
+        public async Task<IActionResult> Conversation(int id, CancellationToken ct)
+        {
+            var c = Caller();
+            if (c == null) return Forbid();
+            var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
+
+            var turns = await _context.AssistantTurns
+                .Where(t => t.ConversationId == id)
+                .OrderBy(t => t.Id)
+                .Select(t => new { t.Id, t.Prompt, t.Reply, t.Success, t.CreatedAt })
+                .ToListAsync(ct);
+            var ids = turns.Select(t => t.Id).ToList();
+            var actions = await _context.AssistantActions
+                .Where(a => a.TurnId != null && ids.Contains(a.TurnId.Value)
+                    && a.SchoolId == c.SchoolId && a.UserId == c.UserId)
+                .OrderBy(a => a.Id)
+                .ToListAsync(ct);
+
+            var exchanges = turns.Select(t => new ConversationExchangeDto(
+                t.Id, t.Prompt, t.Reply, t.Success && t.Reply != null, t.CreatedAt,
+                actions.Where(a => a.TurnId == t.Id).Select(AssistantToolbox.ToCard).ToList())).ToList();
+
+            return Ok(ApiResponse<ConversationDetailDto>.Ok(
+                new ConversationDetailDto(conv.Id, conv.Title, conv.CreatedAt, conv.UpdatedAt, exchanges), "OK"));
+        }
+
+        /// <summary>`PATCH /api/assistant/conversations/{id}` — renommer.</summary>
+        [HttpPatch("conversations/{id:int}")]
+        public async Task<IActionResult> RenameConversation(int id, [FromBody] RenameConversationDto dto, CancellationToken ct)
+        {
+            var c = Caller();
+            if (c == null) return Forbid();
+            var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
+            var title = System.Text.RegularExpressions.Regex.Replace(dto.Title, @"\s+", " ").Trim();
+            if (title.Length == 0) return BadRequest(ApiResponse<bool>.Fail("Le titre est vide."));
+            conv.Title = title;
+            await _context.SaveChangesAsync(ct);
+            return Ok(ApiResponse<object>.Ok(new { conv.Id, conv.Title }, "OK"));
+        }
+
+        /// <summary>
+        /// `DELETE /api/assistant/conversations/{id}` — la discussion disparaît de
+        /// la liste. 🔴 Ses échanges restent au registre (ce qui a été décompté,
+        /// §55) ; ses cartes encore en attente sont annulées, pour qu'aucune ne
+        /// puisse se confirmer depuis un écran resté ouvert.
+        /// </summary>
+        [HttpDelete("conversations/{id:int}")]
+        public async Task<IActionResult> DeleteConversation(int id, CancellationToken ct)
+        {
+            var c = Caller();
+            if (c == null) return Forbid();
+            var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
+
+            var now = DateTime.UtcNow;
+            conv.HiddenAt = now;
+            var turnIds = _context.AssistantTurns.Where(t => t.ConversationId == id).Select(t => t.Id);
+            var pending = await _context.AssistantActions
+                .Where(a => a.Status == AssistantActionStatus.Pending && a.TurnId != null && turnIds.Contains(a.TurnId.Value))
+                .ToListAsync(ct);
+            foreach (var a in pending)
+            {
+                a.Status = AssistantActionStatus.Cancelled;
+                a.ResolvedAt = now;
+            }
+            await _context.SaveChangesAsync(ct);
+            return Ok(ApiResponse<bool>.Ok(true, "Discussion supprimée."));
+        }
+
+        /// <summary>`POST /api/assistant/voice-event` — journal des dictées (aucun contenu).</summary>
+        [HttpPost("voice-event")]
+        public IActionResult VoiceEvent([FromBody] VoiceEventDto dto)
+        {
+            var c = Caller();
+            if (c == null) return Forbid();
+            _logger.LogInformation(
+                "[assistant/voice] {Outcome} école {SchoolId} : {Platform}/{Browser} langue={Lang} erreur={Error} "
+                + "caractères={Chars} UA={UserAgent}",
+                dto.Outcome, c.SchoolId, dto.Platform, dto.Browser, dto.Lang, dto.Error, dto.Chars, dto.UserAgent);
+            return NoContent();
         }
 
         /// <summary>`POST /api/assistant/actions/{id}/confirm` — l'école valide une carte.</summary>
