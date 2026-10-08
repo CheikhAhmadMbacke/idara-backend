@@ -41,4 +41,14 @@
     </Content>
   </ItemGroup>
 
+  <!-- Guide pas à pas de l'assistant IA (§300) : EMBARQUÉ dans l'assemblage,
+       donc impossible de l'oublier au déploiement. Généré par
+       Tools/build-assistant-guide.js ; le modèle (template) n'est pas embarqué.
+       WithCulture="false" : sans lui, MSBuild lit « .fr » / « .ar » comme une
+       CULTURE et range le guide dans un assemblage satellite — introuvable. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\AssistantGuide\guide.fr.md" LogicalName="AssistantGuide.fr.md" WithCulture="false" />
+    <EmbeddedResource Include="Assets\AssistantGuide\guide.ar.md" LogicalName="AssistantGuide.ar.md" WithCulture="false" />
+  </ItemGroup>
+
 </Project>

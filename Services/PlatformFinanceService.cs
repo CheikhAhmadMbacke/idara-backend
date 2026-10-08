@@ -82,13 +82,28 @@ namespace Idara.API.Services
                 .Where(p => p.Status == PaymentStatus.Completed
                             && p.Operator != PaymentOperator.Cash
                             && p.Purpose != PaymentPurpose.OcrPages
-                            && p.Purpose != PaymentPurpose.AssistantCredits)
+                            && p.Purpose != PaymentPurpose.AssistantCredits
+                            && p.Purpose != PaymentPurpose.Subscription)
                 .SumAsync(p => p.NetCreditedFcfa - p.WalletCreditedFcfa, ct);
 
             // Revenus d'abonnement encaissés (débités du wallet école → gain plateforme).
             var subscriptionRevenue = await _db.SubscriptionInvoices
                 .Where(i => i.Status == SubscriptionInvoiceStatus.Paid)
                 .SumAsync(i => i.AmountFcfa, ct);
+
+            // 🔴 Abonnement réglé par WAVE (lien public, ou passage anticipé à
+            // un plan, 2026-10-07) : la facture compte le prix affiché, mais la
+            // réserve n'a reçu que le NET — la plateforme absorbe la commission
+            // (article 8.2, §145). On la retranche ici. Ces paiements sont exclus
+            // de `surplus8` juste au-dessus : sans cela, la recette serait
+            // comptée DEUX fois (net dans le surplus, brut dans la facture).
+            // Défaut latent depuis le lien du 2026-09-19, sans effet tant
+            // qu'aucun abonnement n'avait été réglé par Wave.
+            var subscriptionLinkFees = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Completed
+                            && p.Purpose == PaymentPurpose.Subscription)
+                .SumAsync(p => p.AmountFcfa - p.NetCreditedFcfa, ct);
+            subscriptionRevenue -= subscriptionLinkFees;
 
             // Pages de lecture de cahier achetées par les écoles.
             //
@@ -549,7 +564,7 @@ namespace Idara.API.Services
                     // mesure la plus trompeuse qu'on puisse montrer à un
                     // investisseur, puisqu'elle grossit d'autant plus que le
                     // produit se vend mal aux familles.
-                    var famille = payments.Where(p => !PaymentPurposes.IsPlatformService(p.Purpose)).ToList();
+                    var famille = payments.Where(p => !PaymentPurposes.PaysPlatform(p.Purpose)).ToList();
                     var online = famille
                         .Where(p => p.Operator != PaymentOperator.Cash && In(p.When)).ToList();
                     var cash = famille
@@ -603,7 +618,12 @@ namespace Idara.API.Services
                 .Select(s => new { s.Status, s.AmountFcfa })
                 .ToListAsync(ct);
 
-            var onlineAll = payments.Where(p => p.Operator != PaymentOperator.Cash).ToList();
+            // Volume des FAMILLES : ce que les écoles paient à la plateforme
+            // (services, abonnement par Wave) n'en fait pas partie — ni pour le
+            // GMV, ni pour la marge (PaymentPurposes.PaysPlatform).
+            var onlineAll = payments
+                .Where(p => p.Operator != PaymentOperator.Cash && !PaymentPurposes.PaysPlatform(p.Purpose))
+                .ToList();
             var kpis = new InvestorKpisDto
             {
                 SchoolsValidatedTotal = schoolDates.Count,
@@ -633,7 +653,6 @@ namespace Idara.API.Services
                 // OcrPageRevenueFcfa. Sans ce filtre, GrossRevenueTotalFcfa
                 // compterait la recette deux fois.
                 PaymentMarginTotalFcfa = onlineAll
-                    .Where(p => !PaymentPurposes.IsPlatformService(p.Purpose))
                     .Sum(p => p.NetCreditedFcfa - p.WalletCreditedFcfa),
             };
             kpis.ArpuFcfa = kpis.SchoolsActivePaying > 0

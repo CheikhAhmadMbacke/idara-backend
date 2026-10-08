@@ -104,9 +104,34 @@ namespace Idara.API.Services.Assistant
             InputSchema = new() { Properties = props, Required = required },
         };
 
+        /// <summary>Le refus : rendu par le SERVEUR, jamais rédigé par l'IA, et jamais facturé.</summary>
+        public const string DeclineTool = "decline_request";
+
         /// <summary>Ordre et contenu STABLES : ils forment le préfixe mis en cache.</summary>
         public static IReadOnlyList<ToolUnion> Definitions { get; } = new List<ToolUnion>
         {
+            Def(DeclineTool,
+                "À appeler SEUL, sans rien écrire d'autre, quand la demande sort du périmètre d'Idara "
+                + "(culture générale, rédaction, conseils personnels, santé, politique, autre logiciel, "
+                + "données d'une autre école ou de toute la plateforme…), quand elle est dans une autre "
+                + "langue que le français ou l'arabe, ou quand elle est incompréhensible (dictée ratée). "
+                + "Le serveur affiche lui-même un message fixe et la demande n'est pas décomptée.",
+                new()
+                {
+                    ["reason"] = S(new { type = "string", @enum = new[] { "off_topic", "unsupported_language", "unintelligible" } }),
+                },
+                "reason"),
+
+            Def("get_app_guide",
+                "Guide pas à pas d'un écran d'Idara, avec les libellés EXACTS affichés dans la langue de "
+                + "l'application de l'utilisateur. À appeler dès qu'on demande COMMENT faire quelque chose "
+                + "dans l'application. Ne décris jamais un écran de mémoire : cite le guide.",
+                new()
+                {
+                    ["topic"] = S(new { type = "string", @enum = AssistantGuide.Topics.ToArray() }),
+                },
+                "topic"),
+
             Def("search_students",
                 "Cherche des élèves de l'école par nom, prénom, matricule ou nom d'un responsable, et/ou "
                 + "liste les élèves d'une classe (class_id). Accepte l'arabe comme le latin et ignore les "
@@ -201,6 +226,7 @@ namespace Idara.API.Services.Assistant
             {
                 return name switch
                 {
+                    "get_app_guide" => AppGuide(c, input),
                     "search_students" => await SearchStudentsAsync(c, input, ct),
                     "list_classes" => await ListClassesAsync(c, ct),
                     "get_payment_roster" => await RosterAsync(c, input, ct),
@@ -219,6 +245,14 @@ namespace Idara.API.Services.Assistant
 
         private static ToolOutcome Ok(object payload) => new(JsonSerializer.Serialize(payload, Json), false);
         private static ToolOutcome Error(string message) => new(JsonSerializer.Serialize(new { error = message }, Json), true);
+
+        private static ToolOutcome AppGuide(AssistantCaller c, IReadOnlyDictionary<string, JsonElement> input)
+        {
+            var topic = Str(input, "topic") ?? throw new ToolInputException("topic est requis.");
+            var text = AssistantGuide.For(topic, c.Lang)
+                ?? throw new ToolInputException($"Sujet inconnu. Sujets : {string.Join(", ", AssistantGuide.Topics)}.");
+            return new ToolOutcome(text, false);
+        }
 
         private async Task<ToolOutcome> SearchStudentsAsync(
             AssistantCaller c, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
@@ -328,6 +362,41 @@ namespace Idara.API.Services.Assistant
                 throw new ToolInputException("Mois ou année invalide.");
 
             var r = await _roster.BuildAsync(c.SchoolId, year, month, ct);
+
+            // 🔴 Le MODE de facturation change le sens de la question. En
+            // montant libre, l'école n'a AUCUNE mensualité : « qui n'a pas
+            // payé » ne se lit pas dans des factures, et conseiller de « créer
+            // les mensualités » est faux (vu en production le 2026-10-07 : 40
+            // élèves « sans mensualité » dans une école en montant libre).
+            var mode = await _db.SchoolPaymentSettings.AsNoTracking()
+                .Where(s => s.SchoolId == c.SchoolId)
+                .Select(s => (BillingMode?)s.BillingMode).FirstOrDefaultAsync(ct);
+            if (mode == BillingMode.FreeAmount)
+            {
+                var from = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
+                var to = from.AddMonths(1);
+                var payers = await _db.Payments
+                    .Where(p => p.SchoolId == c.SchoolId && p.Status == PaymentStatus.Completed
+                                && p.Purpose == PaymentPurpose.SchoolFee && p.StudentId != null
+                                && p.PaidAt >= from && p.PaidAt < to)
+                    .Select(p => p.StudentId!.Value).Distinct().ToListAsync(ct);
+                var active = await ScopedStudents(c).Where(s => s.ExitDate == null)
+                    .Select(s => new { s.Id, s.FirstName, s.LastName, ClassName = s.Class != null ? s.Class.Name : null })
+                    .ToListAsync(ct);
+                return Ok(new
+                {
+                    year, month,
+                    billing_mode = "free_amount",
+                    note = "L'école est en MONTANT LIBRE : aucune mensualité n'est générée, chaque famille paie ce "
+                         + "qu'elle veut, et un rappel mensuel part automatiquement aux familles. On ne peut donc "
+                         + "pas dire qui « doit » : seulement qui a payé quelque chose ce mois-ci. Pour avoir des "
+                         + "mensualités et des retards, il faut passer en montant fixe (guide : payment_settings).",
+                    students_total = active.Count,
+                    paid_something_this_month = payers.Count,
+                    paid_nothing_this_month = active.Where(s => !payers.Contains(s.Id)).Take(200)
+                        .Select(s => new { student_id = s.Id, name = $"{s.FirstName} {s.LastName}".Trim(), @class = s.ClassName }),
+                });
+            }
             var unpaid = r.Entries
                 .Where(e => e.Status is RosterPaymentStatus.Overdue or RosterPaymentStatus.Pending)
                 .Take(200)
@@ -346,6 +415,7 @@ namespace Idara.API.Services.Assistant
             return Ok(new
             {
                 year, month,
+                billing_mode = "fixed_amount",
                 paid = r.PaidCount, pending = r.PendingCount, overdue = r.OverdueCount,
                 without_invoice = r.NoInvoiceCount,
                 deadline = r.DeadlineDate?.ToString("yyyy-MM-dd"),

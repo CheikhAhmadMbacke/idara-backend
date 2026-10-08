@@ -44,5 +44,13 @@ namespace Idara.API.Enums
     {
         public static bool IsPlatformService(PaymentPurpose p) =>
             p == PaymentPurpose.OcrPages || p == PaymentPurpose.AssistantCredits;
+
+        /// <summary>
+        /// L'argent va d'une école À LA PLATEFORME (services ET abonnement payé
+        /// par Wave). Rien de tout cela n'est du volume d'affaires des familles :
+        /// le compter dans le GMV gonflerait le produit de notre propre chiffre.
+        /// </summary>
+        public static bool PaysPlatform(PaymentPurpose p) =>
+            IsPlatformService(p) || p == PaymentPurpose.Subscription;
     }
 }

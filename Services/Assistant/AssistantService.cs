@@ -104,6 +104,7 @@ namespace Idara.API.Services.Assistant
             var cards = new List<AssistantCardDto>();
             string? reply = null;
             string? failure = null;
+            string? declined = null;
 
             try
             {
@@ -165,6 +166,21 @@ namespace Idara.API.Services.Assistant
                         }
                     }
 
+                    // 🔒 Le refus n'est JAMAIS rédigé par l'IA : un texte libre
+                    // pourrait déborder du périmètre (vu en production : une
+                    // dictée ratée contenant « suicide » a produit un conseil de
+                    // santé et un numéro d'urgence). Le serveur affiche un
+                    // message fixe, et la demande n'est pas décomptée.
+                    var decline = toolUses.FirstOrDefault(t => t.Name == AssistantToolbox.DeclineTool);
+                    if (decline != null)
+                    {
+                        declined = decline.Input.TryGetValue("reason", out var why) && why.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? why.GetString() ?? "off_topic" : "off_topic";
+                        reply = DeclineMessage(declined, caller, message);
+                        cards.Clear();
+                        break;
+                    }
+
                     if (toolUses.Count == 0)
                     {
                         reply = string.Join("\n", text).Trim();
@@ -223,12 +239,16 @@ namespace Idara.API.Services.Assistant
             // un échec n'a rien donné à l'école).
             // Une commande réussie se prend d'abord sur l'INCLUS du plan payé
             // (Pro, Grand), et seulement ensuite sur les crédits.
-            if (turn.Success)
+            // Un refus (hors sujet, autre langue, incompréhensible) ne coûte
+            // RIEN à l'école — décision de Cheikh. Son coût reste au registre,
+            // et le plafond journalier par école le borne.
+            if (turn.Success && declined == null)
             {
                 if (status.IncludedAvailable) turn.IncludedCommands = 1;
                 else turn.ChargedCommands = 1;
             }
-            turn.BlockedReason = failure;
+            if (declined != null) turn.BlockedReason = "declined:" + declined;
+            turn.BlockedReason ??= failure;
             turn.Reply = reply == null ? null : Trunc(reply, 1000);
             turn.DurationMs = (int)sw.ElapsedMilliseconds;
             await _db.SaveChangesAsync(CancellationToken.None);
@@ -248,6 +268,29 @@ namespace Idara.API.Services.Assistant
                     failure, cards, after);
             }
             return new(true, reply, null, cards, after);
+        }
+
+        /// <summary>
+        /// Les trois refus, FIXES. Langue : celle de l'appli pour une langue non
+        /// prise en charge (demande de Cheikh) ; sinon l'arabe si le message
+        /// est écrit en arabe, la langue de l'appli à défaut.
+        /// </summary>
+        private static string DeclineMessage(string reason, AssistantCaller c, string message)
+        {
+            var lang = reason == "unsupported_language" ? c.Lang
+                : System.Text.RegularExpressions.Regex.IsMatch(message, @"[\u0600-\u06FF]") ? "ar" : c.Lang;
+            return reason switch
+            {
+                "unsupported_language" => AssistantToolbox.T(lang,
+                    "Je ne comprends que le français et l'arabe. Reformulez votre demande dans l'une de ces deux langues. Cette demande ne vous a pas été décomptée.",
+                    "لا أفهم إلا الفرنسية والعربية. أعيدوا صياغة طلبكم بإحدى هاتين اللغتين. لم يُحتسب هذا الطلب."),
+                "unintelligible" => AssistantToolbox.T(lang,
+                    "Je n'ai pas compris votre message. S'il a été dicté, réessayez dans un endroit calme ou écrivez-le. Cette demande ne vous a pas été décomptée.",
+                    "لم أفهم رسالتكم. إذا كانت مملاة صوتيا، أعيدوا المحاولة في مكان هادئ أو اكتبوها. لم يُحتسب هذا الطلب."),
+                _ => AssistantToolbox.T(lang,
+                    "Je suis l'assistant d'Idara : je ne peux vous aider que pour votre école dans Idara — élèves, classes, paiements, relances, et l'utilisation de l'application. Cette demande ne vous a pas été décomptée.",
+                    "أنا مساعد «إدارا»: لا أستطيع مساعدتكم إلا في شؤون مدرستكم داخل «إدارا» — التلاميذ والأقسام والمدفوعات والتذكيرات واستعمال التطبيق. لم يُحتسب هذا الطلب."),
+            };
         }
 
         private void Account(AssistantTurn turn, Usage? u, PlatformSettings p)
@@ -336,7 +379,35 @@ namespace Idara.API.Services.Assistant
               enregistrés automatiquement, avec leur reçu : ne propose jamais de les ressaisir. Si l'utilisateur
               dit « elle a payé par Wave », demande-lui si c'est par le lien Idara ou directement sur le numéro
               du daara, sauf si c'est évident.
-            - Tu ne fais rien d'autre (pas de culture générale, pas de rédaction hors école) : dis-le poliment.
+            - Guider pas à pas dans l'application (« comment ajouter un élève ? », « où sont les retraits ? ») :
+              appelle get_app_guide et suis-le À LA LETTRE, avec ses libellés exacts entre « » — onglet du
+              bas, bouton, champ, dans l'ordre. Ne décris jamais un écran de mémoire. Si aucun sujet du guide
+              ne couvre la question, dis-le et renvoie vers le support.
+            - Répondre sur Idara et Pyranil Solution avec les faits ci-dessous, et rien de plus.
+
+            PÉRIMÈTRE — RÈGLE ABSOLUE
+            - Tu n'es PAS un assistant général. Tout ce qui ne concerne pas l'école de l'utilisateur dans
+              Idara, l'usage d'Idara, ou les faits sur Idara et Pyranil ci-dessous est HORS SUJET : culture
+              générale, rédaction, traduction, conseils personnels, santé, religion, politique, autres
+              logiciels, données d'une autre école, chiffres de toute la plateforme. Dans ces cas, et aussi
+              pour une autre langue ou un message incompréhensible, appelle decline_request SEUL, sans écrire
+              une seule phrase : le serveur répond à ta place, et la demande n'est pas facturée.
+            - Une phrase qui contient un mot alarmant au milieu d'une dictée incohérente est une dictée ratée :
+              decline_request avec « unintelligible ».
+
+            IDARA ET PYRANIL — FAITS (et seulement ceux-là)
+            - Idara : logiciel de gestion des daara (écoles coraniques) et des écoles franco-arabes du
+              Sénégal. Application Android, application web (idara.sn) et ordinateur. Français et arabe.
+            - Édité par Pyranil Solution, à Dakar (Sénégal).
+            - Support : par WhatsApp au +221 76 363 53 27, ou par courriel à idara@pyranil.com — en
+              français et en wolof, du lundi au samedi. On peut aussi signaler un problème depuis
+              l'application (guide : account_and_language).
+            - Tarifs à jour : idara.sn/plans. L'assistant est inclus dans le plan Pro (400 commandes par
+              mois) et illimité dans le plan Grand, une fois le plan payé ; ailleurs, les commandes s'achètent.
+            - Conditions d'utilisation : idara.sn/cgu · Confidentialité : idara.sn/confidentialite ·
+              Mentions légales : idara.sn/mentions-legales.
+            - Si on te demande autre chose sur l'entreprise (adresse, dirigeants, chiffres), renvoie vers le
+              support sans rien inventer.
 
             COMMENT
             - Les outils propose_* n'écrivent RIEN : ils créent une carte que l'utilisateur doit confirmer.
@@ -353,7 +424,11 @@ namespace Idara.API.Services.Assistant
             - Pour un paiement, trouve la facture (get_student_invoices) ; « sa mensualité » = la plus ancienne
               mensualité non soldée, sauf précision.
             - « Qui n'a pas payé ce mois-ci » : get_payment_roster du mois en cours. Pour les relances,
-              propose_send_reminders avec ces élèves.
+              propose_send_reminders avec ces élèves. Lis son billing_mode : en « free_amount », l'école n'a
+              pas de mensualités — dis-le, donne qui a payé quelque chose ce mois-ci, et ne conseille JAMAIS
+              de « créer les mensualités » : c'est un choix de l'école (guide : payment_settings). En montant
+              libre, ne propose PAS de relance : il n'y a pas de dette à réclamer, et un rappel mensuel part
+              déjà automatiquement aux familles.
             - Messages dictés à la voix : la transcription peut être imparfaite. Si un nom ou un montant paraît
               douteux, reformule ce que tu as compris et demande confirmation avant de proposer.
             - Un outil qui rend une erreur te dit pourquoi : explique-le simplement ou corrige ta demande.

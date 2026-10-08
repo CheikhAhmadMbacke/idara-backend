@@ -182,6 +182,36 @@ namespace Idara.API.Services
                 return;
             }
 
+            // 💳 Passage IMMÉDIAT à un plan (2026-10-07) : le plan visé voyage sur
+            // le paiement, et la facture naît payée, par la même règle que le
+            // paiement par le solde. Idempotent : un rejeu retrouve la facture.
+            if (payment.SubscriptionPlanId is int planId)
+            {
+                if (payment.SubscriptionInvoiceId != null)
+                {
+                    _logger.LogInformation(
+                        "[payin-settle] Passage immédiat déjà appliqué (Payment {Id}) — rejeu ignoré", payment.Id);
+                    return;
+                }
+                var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == planId, ct);
+                if (plan == null)
+                {
+                    _logger.LogError(
+                        "[payin-settle] Plan {PlanId} introuvable pour le passage immédiat (Payment {Id}) — à régulariser à la main",
+                        planId, payment.Id);
+                    return;
+                }
+                var cfg = await _context.GetPlatformSettingsAsync(ct);
+                var inv = SubscriptionActivationService.Apply(
+                    _context, sub, plan, payment.AmountFcfa, DateTime.UtcNow, cfg.SubscriptionBillingDay);
+                await _context.SaveChangesAsync(ct);
+                payment.SubscriptionInvoiceId = inv.Id;
+                _logger.LogInformation(
+                    "[payin-settle] École {SchoolId} : passage immédiat au plan {Plan} réglé par Wave ({Amount} FCFA), prochain prélèvement {Next:yyyy-MM-dd}",
+                    payment.SchoolId, plan.Name, payment.AmountFcfa, sub.NextBillingAt);
+                return;
+            }
+
             // La facture visée a été FIGÉE au démarrage du paiement : son montant
             // a pu bouger depuis (réagrégation des SMS refacturés), et l'école
             // doit solder celle qu'elle a vue, pas celle du moment (§136).

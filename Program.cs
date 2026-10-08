@@ -188,6 +188,7 @@ builder.Services.AddScoped<IInvoiceRepricingService, InvoiceRepricingService>();
 builder.Services.AddScoped<ICashPaymentService, CashPaymentService>();
 builder.Services.AddScoped<ICashReceiptNotifier, CashReceiptNotifier>();
 builder.Services.AddScoped<IPaymentRosterService, PaymentRosterService>();
+builder.Services.AddScoped<ISubscriptionActivationService, SubscriptionActivationService>();
 builder.Services.Configure<Idara.API.Options.AssistantSettings>(
     builder.Configuration.GetSection(Idara.API.Options.AssistantSettings.SectionName));
 builder.Services.AddScoped<Idara.API.Services.Assistant.AssistantToolbox>();

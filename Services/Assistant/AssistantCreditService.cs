@@ -85,9 +85,9 @@ namespace Idara.API.Services.Assistant
             var paid = await _db.SubscriptionInvoices.AsNoTracking()
                 .Where(i => i.SchoolId == schoolId
                             && i.Status == SubscriptionInvoiceStatus.Paid
-                            && i.PeriodStart <= nowUtc && i.PeriodEnd > nowUtc)
+                            && i.PeriodStart <= nowUtc && i.PeriodEnd.AddDays(1) > nowUtc)
                 .OrderByDescending(i => i.PeriodStart)
-                .Select(i => new { i.PeriodStart, i.PeriodEnd, Base = i.AmountFcfa - i.SmsRefactureFcfa })
+                .Select(i => new { i.PeriodStart, PeriodEnd = i.PeriodEnd.AddDays(1), Base = i.AmountFcfa - i.SmsRefactureFcfa })
                 .FirstOrDefaultAsync(ct);
             if (paid == null || paid.Base < sub.AmountFcfa) return null;
 

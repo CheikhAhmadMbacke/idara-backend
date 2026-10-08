@@ -112,6 +112,13 @@ namespace Idara.API.Models
         /// </remarks>
         public int? SubscriptionInvoiceId { get; set; }
 
+        /// <summary>
+        /// Plan à appliquer AU RÈGLEMENT — passage immédiat à un plan payé par
+        /// Wave (2026-10-07). Rien ne change avant le webhook : la facture naît
+        /// payée, par <c>SubscriptionActivationService.Apply</c>.
+        /// </summary>
+        public int? SubscriptionPlanId { get; set; }
+
         public long AmountFcfa { get; set; }
         public long FeesFcfa { get; set; }
         public long NetCreditedFcfa { get; set; }

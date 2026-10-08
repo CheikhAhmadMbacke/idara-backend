@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Common;
@@ -353,6 +354,59 @@ namespace Idara.API.Controllers
                 }
             }
             return Ok(ApiResponse<SubscriptionCapacityDto>.Ok(dto));
+        }
+
+        public class ActivateNowDto { public int PlanId { get; set; } }
+
+        /// <summary>
+        /// `GET /api/subscriptions/me/activate-now/quote?planId=` — ce que coûterait
+        /// le passage immédiat, ce qu'il couvre (jusqu'au prochain 8), et si le
+        /// solde suffit. L'écran le montre AVANT tout paiement.
+        /// </summary>
+        [HttpGet("me/activate-now/quote")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> ActivateNowQuote(
+            [FromQuery] int planId, [FromServices] ISubscriptionActivationService activation, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return BadRequest(ApiResponse<bool>.Fail("École introuvable."));
+            return Ok(ApiResponse<ActivationQuote>.Ok(await activation.QuoteAsync(schoolId.Value, planId, ct)));
+        }
+
+        /// <summary>
+        /// `POST /api/subscriptions/me/activate-now` — payer un plan MAINTENANT
+        /// (fin d'essai anticipée ou montée). Solde si suffisant, sinon Wave.
+        /// </summary>
+        [HttpPost("me/activate-now")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> ActivateNow(
+            [FromBody] ActivateNowDto dto, [FromServices] ISubscriptionActivationService activation, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return BadRequest(ApiResponse<bool>.Fail("École introuvable."));
+            var school = await _context.Schools.AsNoTracking().FirstOrDefaultAsync(s => s.Id == schoolId.Value, ct);
+            var r = await activation.ActivateAsync(schoolId.Value, dto.PlanId, SchoolDisplayName.From(school).Primary(), ct);
+            if (!r.Ok) return BadRequest(ApiResponse<bool>.Fail(r.Error ?? "Le passage au plan n'a pas pu se faire."));
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                status = r.Status,
+                paymentId = r.PaymentId,
+                redirectUrl = r.RedirectUrl,
+            }, r.Status == "Paid" ? "Plan activé." : "Paiement initié."));
+        }
+
+        /// <summary>`GET /api/subscriptions/me/activate-now/{paymentId}` — le webhook fait foi, ceci le lit.</summary>
+        [HttpGet("me/activate-now/{paymentId:int}")]
+        [Authorize(Roles = UserRoles.SchoolAdmin)]
+        public async Task<IActionResult> ActivateNowStatus(int paymentId, CancellationToken ct)
+        {
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null) return BadRequest(ApiResponse<bool>.Fail("École introuvable."));
+            var p = await _context.Payments.AsNoTracking().FirstOrDefaultAsync(
+                x => x.Id == paymentId && x.SchoolId == schoolId.Value
+                     && x.Purpose == PaymentPurpose.Subscription && x.SubscriptionPlanId != null, ct);
+            if (p == null) return NotFound(ApiResponse<bool>.Fail("Paiement introuvable."));
+            return Ok(ApiResponse<object>.Ok(new { status = p.Status.ToString(), failureReason = p.FailureReason }));
         }
 
         /// <summary>L'école change elle-même de plan (plans PUBLICS actifs uniquement). SchoolAdmin.</summary>
