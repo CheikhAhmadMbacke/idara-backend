@@ -475,9 +475,9 @@ namespace Idara.API.Controllers
             {
                 await _context.LockPlatformAsync(ct);
                 var (owed, p) = await _finance.ComputeDebtAndPlatformAsync(ct);
-                var safeThreshold = (long)Math.Ceiling(owed * (1 + _finance.SafetyMarginPercent / 100.0));
-                // min(P, réserve − seuil) : conservateur, ne descend jamais sous D×(1+marge).
-                var withdrawable = Math.Max(0, Math.Min(p.TotalFcfa, reserve - safeThreshold));
+                // min(P, réserve − dette) : on ne retire jamais l'argent des écoles.
+                // (Plus de marge de sécurité depuis le 2026-10-08 : voir PlatformFinanceService.)
+                var withdrawable = Math.Max(0, Math.Min(p.TotalFcfa, reserve - owed));
                 var cost = dto.Amount + feeEstimate;
                 if (cost > withdrawable)
                 {

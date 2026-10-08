@@ -22,19 +22,19 @@ namespace Idara.API.DTOs.Admin
         /// <summary>Écart R − (D + P). ≈ 0 = sain. &lt; 0 = sortie non enregistrée à consigner.</summary>
         public long DiscrepancyFcfa { get; set; }
 
-        /// <summary>"green" | "yellow" | "red" (solvabilité R vs D).</summary>
+        /// <summary>"green" | "red" (solvabilité R vs D). « yellow » n'existe plus depuis la suppression de la marge (2026-10-08).</summary>
         public string HealthColor { get; set; } = "green";
 
         /// <summary>Montant à ajouter pour couvrir strictement la dette (max(0, D − R)).</summary>
         public long AmountToCoverDebtFcfa { get; set; }
 
-        /// <summary>Montant à ajouter pour atteindre la marge sereine (max(0, D×(1+marge) − R)).</summary>
+        /// <summary>Égal à <see cref="AmountToCoverDebtFcfa"/> depuis la suppression de la marge — gardé pour les applications installées.</summary>
         public long AmountToReachSafeFcfa { get; set; }
 
-        /// <summary>Gains plateforme retirables en sécurité : max(0, min(P, R − D×(1+marge))).</summary>
+        /// <summary>Gains plateforme retirables : max(0, min(P, R − D)).</summary>
         public long WithdrawablePlatformFcfa { get; set; }
 
-        /// <summary>Marge de sécurité appliquée (%). Ex : 5 → seuil vert = D×1,05.</summary>
+        /// <summary>Toujours 0 depuis le 2026-10-08 (marge supprimée) — gardé pour les applications installées.</summary>
         public double SafetyMarginPercent { get; set; }
 
         /// <summary>Commentaire d'analyse en clair (FR).</summary>

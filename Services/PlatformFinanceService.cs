@@ -24,9 +24,6 @@ namespace Idara.API.Services
         private readonly IWaveClient _wave;
         private readonly ILogger<PlatformFinanceService> _logger;
 
-        /// <summary>Marge de sécurité au-dessus de la dette (décision produit : 5%).</summary>
-        /// <inheritdoc/>
-        public double SafetyMarginPercent => 5.0;
 
         /// <summary>Tolérance sur l'écart de réconciliation (arrondis du prestataire).</summary>
         private const long EpsilonFcfa = 50;
@@ -219,13 +216,16 @@ namespace Idara.API.Services
                 ReserveLive = reserveLive,
                 OwedToSchoolsFcfa = owedToSchools,
                 Platform = platform,
-                SafetyMarginPercent = SafetyMarginPercent,
+                // 🔑 Plus de marge de sécurité depuis le 2026-10-08 (décision de
+                // Cheikh) : elle « couvrait les frais des futurs retraits », que
+                // l'école paie elle-même depuis le 2026-09-17 (§275) — 305 F
+                // restés à la plateforme sur 841 963 F retirés, 0,04 %. Elle
+                // immobilisait 5 % de la dette, un montant qui grandissait à chaque
+                // paiement sans que rien ne le remplisse plus. Champ gardé à 0
+                // pour les applications déjà installées.
+                SafetyMarginPercent = 0,
                 ComputedAt = DateTime.UtcNow
             };
-
-            // Seuil sereign = D × (1 + marge). Arrondi supérieur (on ne descend pas
-            // sous le seuil à cause d'un arrondi).
-            var safeThreshold = (long)Math.Ceiling(owedToSchools * (1 + SafetyMarginPercent / 100.0));
 
             if (!reserveLive)
             {
@@ -237,15 +237,11 @@ namespace Idara.API.Services
 
             dto.DiscrepancyFcfa = reserve - (owedToSchools + platformTotal);
             dto.AmountToCoverDebtFcfa = Math.Max(0, owedToSchools - reserve);
-            dto.AmountToReachSafeFcfa = Math.Max(0, safeThreshold - reserve);
-            dto.WithdrawablePlatformFcfa = Math.Max(0, Math.Min(platformTotal, reserve - safeThreshold));
-
-            if (reserve < owedToSchools)
-                dto.HealthColor = "red";
-            else if (reserve < safeThreshold)
-                dto.HealthColor = "yellow";
-            else
-                dto.HealthColor = "green";
+            // Sans marge, « sain » = la réserve couvre la dette ; les deux montants
+            // à ajouter se confondent.
+            dto.AmountToReachSafeFcfa = dto.AmountToCoverDebtFcfa;
+            dto.WithdrawablePlatformFcfa = Math.Max(0, Math.Min(platformTotal, reserve - owedToSchools));
+            dto.HealthColor = reserve < owedToSchools ? "red" : "green";
 
             dto.Analysis = BuildAnalysis(dto);
 
@@ -905,21 +901,13 @@ namespace Idara.API.Services
             {
                 msg = $"CRITIQUE : la réserve Wave ({Fmt(d.ReserveSenePayFcfa)} FCFA) est INFÉRIEURE à ce qu'on "
                     + $"doit aux écoles ({Fmt(d.OwedToSchoolsFcfa)} FCFA). Ajoute au moins "
-                    + $"{Fmt(d.AmountToCoverDebtFcfa)} FCFA sur ton compte marchand Wave pour couvrir la dette "
-                    + $"(idéalement {Fmt(d.AmountToReachSafeFcfa)} FCFA pour la marge de sécurité).";
-            }
-            else if (d.HealthColor == "yellow")
-            {
-                msg = $"ATTENTION : la réserve ({Fmt(d.ReserveSenePayFcfa)} FCFA) couvre la dette écoles "
-                    + $"({Fmt(d.OwedToSchoolsFcfa)} FCFA) mais la marge est faible. Ajoute "
-                    + $"{Fmt(d.AmountToReachSafeFcfa)} FCFA pour atteindre la marge sereine de "
-                    + $"{d.SafetyMarginPercent:0}% (couvre les frais des futurs retraits).";
+                    + $"{Fmt(d.AmountToCoverDebtFcfa)} FCFA sur ton compte marchand Wave pour couvrir la dette.";
             }
             else
             {
                 msg = $"SAIN : la réserve ({Fmt(d.ReserveSenePayFcfa)} FCFA) couvre la dette écoles "
-                    + $"({Fmt(d.OwedToSchoolsFcfa)} FCFA) + la marge de sécurité. Gains plateforme retirables "
-                    + $"en sécurité : {Fmt(d.WithdrawablePlatformFcfa)} FCFA.";
+                    + $"({Fmt(d.OwedToSchoolsFcfa)} FCFA). Gains plateforme retirables : "
+                    + $"{Fmt(d.WithdrawablePlatformFcfa)} FCFA.";
             }
 
             if (d.DiscrepancyFcfa < -EpsilonFcfa)

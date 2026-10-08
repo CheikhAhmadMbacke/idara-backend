@@ -1,4 +1,4 @@
-using Idara.API.DTOs.Admin;
+﻿using Idara.API.DTOs.Admin;
 
 namespace Idara.API.Services
 {
@@ -41,8 +41,6 @@ namespace Idara.API.Services
         Task<(long owedToSchools, PlatformBalanceDto platform)> ComputeDebtAndPlatformAsync(
             CancellationToken ct = default);
 
-        /// <summary>Marge de sécurité au-dessus de la dette (%). Seuil vert = D×(1+marge).</summary>
-        double SafetyMarginPercent { get; }
 
         /// <summary>
         /// Rapproche les payouts `completed` de SenePay avec les retraits Idara :
