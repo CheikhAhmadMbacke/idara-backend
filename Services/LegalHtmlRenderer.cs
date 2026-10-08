@@ -624,18 +624,28 @@ vérification, information de paiement, rappels.</p>
 </ul>
 
 <h2 id="ia">15. Fonctions d'intelligence artificielle</h2>
-<p>Certaines fonctions optionnelles reposent sur un service d'intelligence
-artificielle, notamment la lecture automatique d'un registre papier photographié
-en vue d'un import.</p>
+<p>Deux fonctions optionnelles reposent sur un service d'intelligence
+artificielle fourni par <strong>Anthropic, PBC</strong> (États-Unis) :</p>
+<ul>
+  <li>la <strong>lecture automatique d'un registre papier photographié</strong>, en
+      vue d'un import ;</li>
+  <li>l'<strong>assistant de l'établissement</strong>, à qui la direction ou le
+      personnel pose des questions et donne des instructions, par écrit ou à la voix,
+      en français ou en arabe.</li>
+</ul>
 <div class="box warn">
-  <p>L'usage de ces fonctions suppose la <strong>transmission du document
-  photographié à un prestataire technique situé hors du Sénégal</strong>, aux seules
-  fins de transcription. Ces fonctions sont <strong>facultatives</strong> : elles ne
-  s'activent que sur action de l'établissement, qui en est informé au moment de
-  l'usage.</p>
-  <p>La transcription est un travail de lecture, non de vérification :
-  l'établissement <strong>contrôle et corrige</strong> le résultat avant tout
-  enregistrement. Aucune donnée n'est écrite sans validation humaine.</p>
+  <p>L'usage de ces fonctions suppose la <strong>transmission, à ce prestataire
+  situé hors du Sénégal, des données nécessaires à la demande</strong> : le document
+  photographié, ou le texte de la demande et les données de l'établissement utiles
+  pour y répondre. Ces fonctions sont <strong>facultatives</strong> : elles ne
+  s'activent que sur action de l'établissement.</p>
+  <p>L'intelligence artificielle <strong>propose, l'établissement décide</strong> :
+  la transcription est relue et corrigée avant tout enregistrement, et l'assistant
+  ne fait que préparer des actions — inscription, enregistrement d'un paiement,
+  envoi de relances — que l'établissement doit <strong>confirmer</strong>. Aucune
+  donnée n'est écrite et aucun message n'est envoyé sans validation humaine.</p>
+  <p>Les réponses de l'assistant peuvent être inexactes : l'établissement reste
+  responsable des actions qu'il confirme.</p>
 </div>
 
 <h2 id="surveillance">16. Contrôle des flux financiers</h2>
@@ -928,6 +938,7 @@ sur sa demande.</p>
   <tr><td>Assurer la sécurité et corriger les pannes</td><td>Intérêt légitime</td></tr>
   <tr><td>Photographie de l'élève, données de santé</td><td>Consentement recueilli par l'école</td></tr>
   <tr><td>Lecture automatisée d'un registre photographié</td><td>Demande explicite de l'école</td></tr>
+  <tr><td>Assistant de l'école : répondre à ses demandes et préparer les actions qu'elle confirme</td><td>Demande explicite de l'école</td></tr>
 </table></div>
 
 <h2 id="acces">6. Qui accède aux données</h2>
@@ -959,7 +970,7 @@ régulière.</p>
   <tr><td>Sonatel / Orange</td><td>Acheminement des SMS</td><td>Sénégal</td></tr>
   <tr><td>Google (Firebase)</td><td>Notifications mobiles</td><td>États-Unis</td></tr>
   <tr><td>Google (courriel)</td><td>Envoi des courriels de service</td><td>États-Unis</td></tr>
-  <tr><td>Prestataire d'intelligence artificielle</td><td>Lecture automatisée d'un registre photographié, sur demande de l'école</td><td>États-Unis</td></tr>
+  <tr><td>Anthropic, PBC</td><td>Intelligence artificielle : lecture d'un registre photographié et assistant de l'école, uniquement sur leur demande</td><td>États-Unis</td></tr>
 </table></div>
 <p>Chacun n'accède qu'aux données nécessaires à sa fonction et ne peut les utiliser
 à d'autres fins. Toute évolution de cette liste est publiée sur cette page.</p>
@@ -970,7 +981,8 @@ Certains prestataires sont établis aux <strong>États-Unis</strong> ; les trans
 correspondants sont limités aux données strictement nécessaires à leur fonction :
 un identifiant d'appareil pour les notifications, un message pour l'acheminement
 d'un courriel, une photographie de registre pour une transcription demandée par
-l'école.</p>
+l'école, le texte d'une demande à l'assistant et les données de l'école
+nécessaires pour y répondre.</p>
 <p>Ces transferts s'effectuent sur la base des garanties contractuelles proposées
 par ces prestataires.</p>
 
@@ -978,6 +990,7 @@ par ces prestataires.</p>
 <div class="scroll"><table>
   <tr><th>Données</th><th>Durée</th></tr>
   <tr><td>Données scolaires d'un élève</td><td>Tant que l'école est abonnée, puis 90 jours après la fin du contrat</td></tr>
+  <tr><td>Demandes à l'assistant et ses réponses</td><td>Comme les données scolaires de l'école</td></tr>
   <tr><td>Compte utilisateur</td><td>Jusqu'à sa suppression, puis anonymisation</td></tr>
   <tr><td>Écritures financières, factures, reçus</td><td>10 ans, conformément aux obligations comptables</td></tr>
   <tr><td>Registre des envois de messages</td><td>12 mois, puis anonymisation</td></tr>
@@ -1047,15 +1060,38 @@ disparaissent lorsque vous effacez les données du navigateur ou désinstallez
 l'application. <strong>Aucun traceur publicitaire n'est utilisé.</strong></p>
 
 <h2 id="ia">16. Intelligence artificielle</h2>
-<p>Une fonction facultative permet à l'école d'importer son registre papier en le
-photographiant : l'image est transmise à un prestataire d'intelligence
-artificielle qui en transcrit le contenu.</p>
+<p>Deux fonctions facultatives, réservées à l'école, reposent sur le service
+d'intelligence artificielle d'<strong>Anthropic, PBC</strong> (États-Unis).</p>
+<h3>16.1 Lecture d'un registre photographié</h3>
+<p>L'école peut importer son registre papier en le photographiant : l'image est
+transmise à Anthropic, qui en transcrit le contenu. La transcription est
+<strong>relue et corrigée par l'école</strong> avant tout enregistrement.</p>
+<h3>16.2 Assistant de l'école</h3>
+<p>La direction et le personnel peuvent poser des questions et donner des
+instructions à un assistant, par écrit ou à la voix (« qui n'a pas payé ce
+mois-ci ? », « inscris tel élève »). Pour répondre, sont transmis à Anthropic :
+le texte de la demande, les derniers échanges de la conversation, et les données
+de l'école utiles à la réponse — par exemple le nom d'un élève, sa classe, le nom
+de son responsable, les montants dus.</p>
 <ul>
-  <li>Cette fonction ne s'active que sur action explicite de l'école.</li>
-  <li>La transcription est <strong>relue et corrigée par l'école</strong> avant tout
-      enregistrement : rien n'est écrit sans validation humaine.</li>
-  <li>Les images transmises ne sont pas utilisées pour entraîner un modèle.</li>
-  <li>Aucune décision automatisée n'est prise à l'égard d'un élève.</li>
+  <li>L'assistant <strong>ne voit que les données de l'école</strong> de la personne
+      qui l'utilise ; il n'a accès ni aux autres écoles, ni aux données de la
+      plateforme.</li>
+  <li>Il <strong>propose, il n'exécute pas</strong> : une inscription, un paiement
+      ou un envoi de SMS n'a lieu que lorsque l'école le confirme.</li>
+  <li>La <strong>dictée vocale</strong> utilise le service de reconnaissance de la
+      parole du téléphone ou du navigateur : Idara ne reçoit que le texte transcrit,
+      jamais l'enregistrement de la voix.</li>
+  <li>Les demandes et les réponses sont conservées avec les données de l'école,
+      pour le suivi de la consommation et l'assistance.</li>
+</ul>
+<h3>16.3 Pour les deux fonctions</h3>
+<ul>
+  <li>Elles ne s'activent que sur action explicite de l'école.</li>
+  <li>Les données transmises ne sont <strong>pas utilisées pour entraîner un
+      modèle</strong>, conformément aux conditions commerciales d'Anthropic.</li>
+  <li>Aucune décision automatisée n'est prise à l'égard d'un élève ou d'une
+      famille.</li>
 </ul>
 
 <h2 id="violation">17. Violation de données</h2>
