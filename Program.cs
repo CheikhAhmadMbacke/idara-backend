@@ -156,6 +156,11 @@ builder.Services.AddScoped<Idara.API.Services.Auth.IAuthCodeThrottle,
                            Idara.API.Services.Auth.AuthCodeThrottle>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
+// Chemins partagés écrans + assistant (§199, 2026-10-08).
+builder.Services.AddScoped<IAccessCodeService, AccessCodeService>();
+builder.Services.AddScoped<IAttendanceService, AttendanceService>();
+builder.Services.AddScoped<ICoranDailyService, CoranDailyService>();
+builder.Services.AddScoped<IClassCreationService, ClassCreationService>();
 // Création d'un compte par une école : source unique, partagée par le
 // formulaire d'invitation ET l'import en masse du personnel.
 builder.Services.AddScoped<IUserInvitationService, UserInvitationService>();

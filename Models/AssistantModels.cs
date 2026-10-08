@@ -61,6 +61,21 @@ namespace Idara.API.Models
         /// <summary>Message technique, jamais montré à l'école.</summary>
         public string? Error { get; set; }
 
+        /// <summary>
+        /// La question que l'assistant n'a PAS su traiter avec ses outils
+        /// (outil <c>report_unanswered</c>, §304). C'est la liste, vue au
+        /// back-office, de ce qu'il faut lui apprendre ensuite.
+        /// </summary>
+        public string? UnansweredTopic { get; set; }
+
+        /// <summary>
+        /// Les outils appelés pendant l'échange, dans l'ordre (« find_guardian,
+        /// get_sms_history »). Relu dans l'historique : sans lui, l'assistant ne
+        /// sait plus, au message suivant, ce qu'il avait VÉRIFIÉ ou seulement
+        /// affirmé — vu à l'essai du 2026-10-08 (§304).
+        /// </summary>
+        public string? ToolsUsed { get; set; }
+
         /// <summary>Modèle réellement employé — le tarif en dépend.</summary>
         public string Model { get; set; } = string.Empty;
 

@@ -20,11 +20,15 @@ namespace Idara.API.Controllers
         private readonly IInvoiceRepricingService _repricing;
         private readonly ILogger<ClassesController> _logger;
 
+        private readonly Services.IClassCreationService _classCreation;
+
         public ClassesController(
             AppDbContext context,
             IInvoiceRepricingService repricing,
-            ILogger<ClassesController> logger)
+            ILogger<ClassesController> logger,
+            Services.IClassCreationService classCreation)
         {
+            _classCreation = classCreation;
             _context = context;
             _repricing = repricing;
             _logger = logger;
@@ -155,48 +159,10 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
-            var duplicate = await _context.Classes.AnyAsync(c =>
-                c.SchoolId == schoolId.Value && !c.IsDeleted && c.Name.ToLower() == dto.Name.ToLower());
-            if (duplicate)
-                return BadRequest(ApiResponse<bool>.Fail("Une classe avec ce nom existe déjà."));
-
-            var now = DateTime.UtcNow;
-            var entity = new Class
-            {
-                Name = dto.Name,
-                Description = dto.Description,
-                Level = dto.Level,
-                Capacity = dto.Capacity,
-                SchoolId = schoolId.Value,
-                CreatedAt = now
-            };
-            _context.Classes.Add(entity);
-            await _context.SaveChangesAsync();
-
-            // Mensualité saisie à la création → première version du tarif de la
-            // classe. Écrite dans ClassFee, la même table que l'écran « Tarif
-            // par classe » : une classe créée avec un tarif y apparaît
-            // immédiatement, avec son historique.
-            if (dto.MonthlyFeeFcfa is > 0)
-            {
-                _context.ClassFees.Add(new ClassFee
-                {
-                    ClassId = entity.Id,
-                    SchoolId = schoolId.Value,
-                    AmountFcfa = dto.MonthlyFeeFcfa.Value,
-                    EffectiveFrom = now.ToUtcDay(),
-                    CreatedById = userId.Value,
-                    CreatedAt = now
-                });
-                await _context.SaveChangesAsync();
-
-                _logger.LogInformation(
-                    "[classes] Tarif initial posé à la création : SchoolId={SchoolId} ClassId={ClassId} Amount={Amount}",
-                    schoolId, entity.Id, dto.MonthlyFeeFcfa.Value);
-            }
-
-            // Pas de re-tarification : une classe qui vient d'être créée n'a
-            // encore aucun élève, donc aucune facture à réaligner.
+            // Même chemin que l'assistant (§199).
+            var created = await _classCreation.CreateAsync(schoolId.Value, userId.Value, dto, HttpContext.RequestAborted);
+            if (!created.Ok) return BadRequest(ApiResponse<bool>.Fail(created.Error!));
+            var entity = created.Class!;
 
             return CreatedAtAction(nameof(GetClass), new { id = entity.Id }, new ClassDto
             {

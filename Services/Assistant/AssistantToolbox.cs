@@ -18,7 +18,17 @@ using Microsoft.EntityFrameworkCore;
 namespace Idara.API.Services.Assistant
 {
     /// <summary>Qui parle à l'assistant, et dans quelle langue l'application est réglée.</summary>
-    public record AssistantCaller(int SchoolId, int UserId, string Role, string Lang);
+    /// <summary>
+    /// Qui parle à l'assistant, et dans quelle langue l'application est réglée.
+    /// <para>🔒 <c>VisibleClassIds</c> : périmètre pédagogique (§150) — <c>null</c>
+    /// = toute l'école (direction), une liste = les classes d'un enseignant.
+    /// Calculé par le SERVEUR à partir du jeton, jamais fourni par le modèle.</para>
+    /// </summary>
+    public record AssistantCaller(int SchoolId, int UserId, string Role, string Lang,
+        IReadOnlyList<int>? VisibleClassIds = null)
+    {
+        public bool IsDirection => Role is Constants.UserRoles.SchoolAdmin or Constants.UserRoles.SchoolStaff;
+    }
 
     /// <summary>Une ligne de carte de confirmation. <c>AmountFcfa</c> renseigné = l'application formate l'argent (§239).</summary>
     public record AssistantCardLine(string Label, string? Value, long? AmountFcfa = null);
@@ -47,7 +57,7 @@ namespace Idara.API.Services.Assistant
     /// <para>Tout est cloisonné à l'école du jeton : l'identifiant d'école ne
     /// vient JAMAIS du modèle.</para>
     /// </summary>
-    public class AssistantToolbox
+    public partial class AssistantToolbox
     {
         private static readonly TimeSpan ProposalLifetime = TimeSpan.FromMinutes(30);
 
@@ -66,6 +76,12 @@ namespace Idara.API.Services.Assistant
         private readonly IGuardianPaymentService _guardianPayments;
         private readonly IPaymentLinkService _paymentLinks;
         private readonly INotificationService _notif;
+        private readonly IAccessCodeService _accessCodes;
+        private readonly IAttendanceService _attendance;
+        private readonly ICoranDailyService _coranDaily;
+        private readonly IClassCreationService _classCreation;
+        private readonly Observability.ITelemetrySink _telemetry;
+        private readonly Observability.IIncidentAlertService _incidentAlerts;
         private readonly ILogger<AssistantToolbox> _logger;
 
         public AssistantToolbox(
@@ -77,8 +93,20 @@ namespace Idara.API.Services.Assistant
             IGuardianPaymentService guardianPayments,
             IPaymentLinkService paymentLinks,
             INotificationService notif,
+            IAccessCodeService accessCodes,
+            IAttendanceService attendance,
+            ICoranDailyService coranDaily,
+            IClassCreationService classCreation,
+            Observability.ITelemetrySink telemetry,
+            Observability.IIncidentAlertService incidentAlerts,
             ILogger<AssistantToolbox> logger)
         {
+            _accessCodes = accessCodes;
+            _attendance = attendance;
+            _coranDaily = coranDaily;
+            _classCreation = classCreation;
+            _telemetry = telemetry;
+            _incidentAlerts = incidentAlerts;
             _db = db;
             _students = students;
             _cash = cash;
@@ -212,7 +240,7 @@ namespace Idara.API.Services.Assistant
                     ["student_ids"] = S(new { type = "array", items = new { type = "integer" }, minItems = 1, maxItems = 300 }),
                 },
                 "student_ids"),
-        };
+        }.Concat(SupportDefinitions()).ToList();
 
         // =====================================================================
         // Exécution d'un outil
@@ -222,10 +250,37 @@ namespace Idara.API.Services.Assistant
             AssistantCaller c, string name, IReadOnlyDictionary<string, JsonElement> input,
             int? turnId, CancellationToken ct)
         {
+            // 🔒 Deuxième verrou (§304) : le modèle ne voit que les outils de son
+            // rôle, mais un outil hors liste est REFUSÉ ici même s'il est appelé.
+            if (!AssistantPolicy.IsToolAllowed(c.Role, name))
+            {
+                _logger.LogWarning("[assistant] Outil {Tool} refusé pour le rôle {Role} (école {SchoolId}, user {UserId})",
+                    name, c.Role, c.SchoolId, c.UserId);
+                return Error("Cet outil n'est pas autorisé pour votre rôle.");
+            }
             try
             {
                 return name switch
                 {
+                    AssistantPolicy.ReportUnansweredTool => Ok(new
+                    {
+                        recorded = true,
+                        instruction = "Dis honnêtement que tu n'as pas cette information, sans rien inventer, et propose de transmettre au support (propose_contact_support).",
+                    }),
+                    "get_student_details" => await StudentDetailsAsync(c, input, ct),
+                    "get_attendance" => await AttendanceAsync(c, input, ct),
+                    "find_guardian" => await FindGuardianAsync(c, input, ct),
+                    "get_sms_history" => await SmsHistoryAsync(c, input, ct),
+                    "get_withdrawals" => await WithdrawalsAsync(c, input, ct),
+                    "get_subscription_status" => await SubscriptionStatusAsync(c, ct),
+                    "get_finance_summary" => await FinanceSummaryAsync(c, input, ct),
+                    "propose_reset_access_code" => await ProposeResetCodeAsync(c, input, turnId, ct),
+                    "propose_update_student" => await ProposeUpdateStudentAsync(c, input, turnId, ct),
+                    "propose_student_exit" => await ProposeStudentExitAsync(c, input, turnId, ct),
+                    "propose_create_class" => await ProposeCreateClassAsync(c, input, turnId, ct),
+                    "propose_record_attendance" => await ProposeAttendanceAsync(c, input, turnId, ct),
+                    "propose_coran_entry" => await ProposeCoranEntryAsync(c, input, turnId, ct),
+                    "propose_contact_support" => await ProposeContactSupportAsync(c, input, turnId, ct),
                     "get_app_guide" => AppGuide(c, input),
                     "search_students" => await SearchStudentsAsync(c, input, ct),
                     "list_classes" => await ListClassesAsync(c, ct),
@@ -301,7 +356,8 @@ namespace Idara.API.Services.Assistant
                     left_school = s.ExitDate != null,
                     guardian = s.Guardian?.FullName,
                     guardian_has_phone = !string.IsNullOrWhiteSpace(s.Guardian?.PhoneNumber),
-                    outstanding_fcfa = s.Due,
+                    // 🔒 L'argent : la direction seulement (§304).
+                    outstanding_fcfa = c.IsDirection ? s.Due : (long?)null,
                 }),
             });
         }
@@ -309,8 +365,7 @@ namespace Idara.API.Services.Assistant
         private async Task<ToolOutcome> ListClassesAsync(AssistantCaller c, CancellationToken ct)
         {
             var today = DateTime.UtcNow.Date;
-            var classes = await _db.Classes
-                .Where(k => k.SchoolId == c.SchoolId && !k.IsDeleted)
+            var classes = await ScopedClasses(c)
                 .OrderBy(k => k.Name)
                 .Select(k => new
                 {
@@ -337,13 +392,13 @@ namespace Idara.API.Services.Assistant
                 classes = classes.Select(k => new
                 {
                     class_id = k.Id, name = k.Name, level = k.Level, students = k.Students,
-                    monthly_fee_fcfa = k.Fee,
+                    monthly_fee_fcfa = c.IsDirection ? k.Fee : null,
                 }),
                 students_total = await ScopedStudents(c).CountAsync(s => s.ExitDate == null, ct),
                 students_without_class = await ScopedStudents(c).CountAsync(s => s.ExitDate == null && s.ClassId == null, ct),
-                default_monthly_fee_fcfa = settings?.GeneralMonthlyFeeFcfa,
-                default_registration_fee_fcfa = settings?.RegistrationFeeFcfa,
-                boarding_fees_fcfa = settings == null ? null : new
+                default_monthly_fee_fcfa = c.IsDirection ? settings?.GeneralMonthlyFeeFcfa : null,
+                default_registration_fee_fcfa = c.IsDirection ? settings?.RegistrationFeeFcfa : null,
+                boarding_fees_fcfa = settings == null || !c.IsDirection ? null : new
                 {
                     boarding = settings.BoardingMonthlyFeeFcfa,
                     half_boarding = settings.HalfBoardingMonthlyFeeFcfa,
@@ -850,6 +905,10 @@ namespace Idara.API.Services.Assistant
                 .FromSqlInterpolated($@"SELECT * FROM ""AssistantActions"" WHERE ""Id"" = {actionId} FOR UPDATE")
                 .FirstOrDefaultAsync(ct);
             if (action == null || action.SchoolId != c.SchoolId || action.UserId != c.UserId) return null;
+            // 🔒 Le rôle a pu changer depuis la proposition : on revérifie.
+            if (!AssistantPolicy.IsToolAllowed(c.Role, ToolFor(action.Kind)))
+                return new(false, T(c.Lang, "Cette action n'est pas autorisée pour votre rôle.",
+                    "هذا الإجراء غير مسموح لدوركم."), ToCard(action), new());
 
             if (action.Status != AssistantActionStatus.Pending)
                 return new(false, AlreadyMessage(c.Lang, action.Status), ToCard(action), new());
@@ -882,6 +941,13 @@ namespace Idara.API.Services.Assistant
                     AssistantActionKind.AddStudent => await ExecAddStudentAsync(c, action, credentials, ct),
                     AssistantActionKind.RecordPayment => await ExecRecordPaymentAsync(c, action, ct),
                     AssistantActionKind.SendReminders => await ExecRemindersAsync(c, action, ct),
+                    AssistantActionKind.ResetAccessCode => await ExecResetCodeAsync(c, action, credentials, ct),
+                    AssistantActionKind.UpdateStudent => await ExecUpdateStudentAsync(c, action, ct),
+                    AssistantActionKind.StudentExit => await ExecStudentExitAsync(c, action, ct),
+                    AssistantActionKind.CreateClass => await ExecCreateClassAsync(c, action, ct),
+                    AssistantActionKind.RecordAttendance => await ExecAttendanceAsync(c, action, ct),
+                    AssistantActionKind.CoranEntry => await ExecCoranEntryAsync(c, action, ct),
+                    AssistantActionKind.ContactSupport => await ExecContactSupportAsync(c, action, ct),
                     _ => (false, "Action inconnue.", (int?)null),
                 };
                 action.ResultEntityId = entityId;
@@ -1059,8 +1125,16 @@ namespace Idara.API.Services.Assistant
         // Utilitaires
         // =====================================================================
 
-        private IQueryable<Student> ScopedStudents(AssistantCaller c) =>
-            _db.Students.Where(s => s.SchoolId == c.SchoolId && !s.IsDeleted);
+        /// <summary>
+        /// Les élèves de l'école — et, pour un enseignant, SEULEMENT ceux de ses
+        /// classes (§150). Tout outil passe par ici : c'est le cloisonnement.
+        /// </summary>
+        private IQueryable<Student> ScopedStudents(AssistantCaller c)
+        {
+            var q = _db.Students.Where(s => s.SchoolId == c.SchoolId && !s.IsDeleted);
+            if (c.VisibleClassIds is { } ids) q = q.Where(s => s.ClassId != null && ids.Contains(s.ClassId.Value));
+            return q;
+        }
 
         private static string AlreadyMessage(string lang, AssistantActionStatus s) => s switch
         {

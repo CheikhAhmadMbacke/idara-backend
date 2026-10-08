@@ -21,10 +21,13 @@ namespace Idara.API.Controllers
 
         private readonly AppDbContext _context;
         private readonly INotificationService _notif;
-        public CoranController(AppDbContext context, INotificationService notif)
+        private readonly Services.ICoranDailyService _coranDaily;
+        public CoranController(AppDbContext context, INotificationService notif,
+            Services.ICoranDailyService coranDaily)
         {
             _context = context;
             _notif = notif;
+            _coranDaily = coranDaily;
         }
 
         // ----- Progress (1 par élève) -----
@@ -255,105 +258,12 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
-            if (!await CanAccessStudentAsync(User.GetRole(), userId.Value, schoolId.Value, dto.StudentId))
-                return BadRequest(ApiResponse<bool>.Fail("Élève introuvable ou hors de votre périmètre."));
 
-            // Garde d'ÉCRITURE : plus de suivi quotidien sur un élève sorti (D4).
-            // La consultation de ses cycles reste libre.
-            if (!await _context.IsEnrolledAsync(dto.StudentId))
-                return BadRequest(ApiResponse<bool>.Fail("Cet élève ne fait plus partie de l'effectif."));
-
-            var kinds = dto.Portions.Select(p => p.Kind).ToList();
-            if (kinds.Count != kinds.Distinct().Count())
-                return BadRequest(ApiResponse<bool>.Fail("Chaque type de portion ne peut apparaître qu'une fois."));
-
-            var date = dto.Date.ToUtcDay();
-            var cycleJustCompleted = false;
-
-            await using var tx = await _context.Database.BeginTransactionAsync();
-
-            var record = await _context.CoranDailyRecords
-                .Include(r => r.Portions)
-                .FirstOrDefaultAsync(r => r.StudentId == dto.StudentId && r.Date == date);
-
-            // Verrou 48 h (§151) : un enseignant ne peut plus REPRENDRE un suivi
-            // saisi il y a plus de 48 h. La création d'une journée ancienne
-            // reste permise — saisir en retard n'est pas modifier.
-            if (record != null && !EditWindow.CanEdit(User.GetRole(), record.CreatedAt))
-            {
-                return BadRequest(ApiResponse<bool>.Fail(EditWindow.RefusalMessage()));
-            }
-
-            if (record == null)
-            {
-                var cycle = await GetOrCreateOpenCycleAsync(dto.StudentId, schoolId.Value, date);
-                record = new CoranDailyRecord
-                {
-                    SchoolId = schoolId.Value,
-                    StudentId = dto.StudentId,
-                    CycleId = cycle.Id,
-                    Date = date,
-                    RecordedById = userId.Value,
-                    CreatedAt = DateTime.UtcNow
-                };
-                _context.CoranDailyRecords.Add(record);
-            }
-
-            record.Remarks = string.IsNullOrWhiteSpace(dto.Remarks) ? null : dto.Remarks.Trim();
-            record.UpdatedAt = DateTime.UtcNow;
-
-            // Remplacement intégral des portions (l'UI envoie l'état complet du jour).
-            if (record.Portions.Count > 0)
-                _context.CoranDailyPortions.RemoveRange(record.Portions);
-            foreach (var p in dto.Portions)
-            {
-                record.Portions.Add(new CoranDailyPortion
-                {
-                    Kind = p.Kind,
-                    FromSurah = p.FromSurah,
-                    FromAyah = p.FromAyah,
-                    FromWordIndex = p.FromWordIndex,
-                    FromWordText = TrimOrNull(p.FromWordText),
-                    ToSurah = p.ToSurah,
-                    ToAyah = p.ToAyah,
-                    ToWordIndex = p.ToWordIndex,
-                    ToWordText = TrimOrNull(p.ToWordText),
-                    Status = p.Status
-                });
-            }
-            await _context.SaveChangesAsync();
-
-            // Clôture du cycle au 22ᵉ jour (transition unique).
-            var cycleEntity = await _context.CoranCycles.FirstAsync(c => c.Id == record.CycleId);
-            if (!cycleEntity.IsComplete)
-            {
-                var count = await _context.CoranDailyRecords.CountAsync(r => r.CycleId == cycleEntity.Id);
-                if (count >= CycleLength)
-                {
-                    cycleEntity.IsComplete = true;
-                    cycleEntity.CompletedDate = await _context.CoranDailyRecords
-                        .Where(r => r.CycleId == cycleEntity.Id).MaxAsync(r => r.Date);
-                    await _context.SaveChangesAsync();
-                    cycleJustCompleted = true;
-                }
-            }
-
-            await tx.CommitAsync();
-
-            // Notif parents (push, best-effort, post-commit) une seule fois à la clôture.
-            if (cycleJustCompleted)
-            {
-                // !IsDeleted manquait ici (oubli préexistant corrigé le
-                // 2026-08-17) ; le sortant est déjà exclu en amont (garde
-                // d'écriture) et au centre (NotificationService).
-                var st = await _context.Students
-                    .Where(s => s.Id == dto.StudentId && !s.IsDeleted)
-                    .Select(s => new { s.FirstName, s.LastName }).FirstOrDefaultAsync();
-                var eleve = st == null ? string.Empty : $"{st.FirstName} {st.LastName}".Trim();
-                await _notif.NotifyGuardiansOfStudentAsync(
-                    dto.StudentId, NotificationTemplates.ChildCoranCycleReady(eleve),
-                    "CHILD_CORAN_CYCLE", $"/guardian/children/{dto.StudentId}", oncePerDay: false);
-            }
+            // Même chemin que l'assistant (§199) : périmètre, garde « sorti »,
+            // verrou 48 h, clôture du cycle et notification vivent dans le service.
+            var result = await _coranDaily.UpsertAsync(schoolId.Value, userId.Value, User.GetRole(), dto);
+            if (!result.Ok) return BadRequest(ApiResponse<bool>.Fail(result.Error!));
+            var record = new { Id = result.RecordId!.Value };
 
             var saved = await _context.CoranDailyRecords
                 .Include(r => r.Portions).Include(r => r.Cycle)
@@ -454,7 +364,7 @@ namespace Idara.API.Controllers
 
                 if (record == null)
                 {
-                    var cycle = await GetOrCreateOpenCycleAsync(
+                    var cycle = await _coranDaily.GetOrCreateOpenCycleAsync(
                         entry.StudentId, schoolId.Value, date);
                     record = new CoranDailyRecord
                     {
@@ -699,49 +609,6 @@ namespace Idara.API.Controllers
         };
 
         // ----- Helpers suivi quotidien -----
-
-        private async Task<CoranCycle> GetOrCreateOpenCycleAsync(int studentId, int schoolId, DateTime date)
-        {
-            var open = await _context.CoranCycles
-                .Where(c => c.StudentId == studentId && !c.IsComplete)
-                .OrderByDescending(c => c.Number)
-                .FirstOrDefaultAsync();
-            if (open != null) return open;
-
-            var maxNumber = await _context.CoranCycles
-                .Where(c => c.StudentId == studentId)
-                .Select(c => (int?)c.Number).MaxAsync() ?? 0;
-
-            var cycle = new CoranCycle
-            {
-                SchoolId = schoolId,
-                StudentId = studentId,
-                Number = maxNumber + 1,
-                StartDate = date,
-                IsComplete = false
-            };
-            _context.CoranCycles.Add(cycle);
-            try
-            {
-                await _context.SaveChangesAsync(); // besoin de l'Id pour la FK du record
-                return cycle;
-            }
-            catch (DbUpdateException ex) when (
-                ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505")
-            {
-                // Course entre deux UpsertDaily concurrents (même élève, pas de cycle
-                // ouvert) : l'index unique filtré (1 cycle ouvert/élève) a rejeté le
-                // 2ᵉ INSERT. On détache l'entité échouée et on relit le cycle ouvert
-                // créé par l'autre requête (idempotence, cf. pattern §50/§71).
-                _context.Entry(cycle).State = EntityState.Detached;
-                var existing = await _context.CoranCycles
-                    .Where(c => c.StudentId == studentId && !c.IsComplete)
-                    .OrderByDescending(c => c.Number)
-                    .FirstOrDefaultAsync();
-                if (existing != null) return existing;
-                throw; // cas improbable : conflit mais aucun cycle ouvert retrouvé
-            }
-        }
 
         /// <summary>
         /// Vrai si l'appelant peut accéder à cet élève. Délègue au socle partagé

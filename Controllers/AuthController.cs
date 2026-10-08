@@ -34,6 +34,7 @@ namespace Idara.API.Controllers
         private readonly Services.Alerts.IOpsAlertService _alerts;
         private readonly IMemoryCache _cache;
         private readonly UploadSettings _uploads;
+        private readonly IAccessCodeService _accessCodes;
         private readonly ILogger<AuthController> _logger;
 
         public AuthController(
@@ -49,8 +50,10 @@ namespace Idara.API.Controllers
             Services.Alerts.IOpsAlertService alerts,
             IMemoryCache cache,
             IOptions<UploadSettings> uploads,
+            IAccessCodeService accessCodes,
             ILogger<AuthController> logger)
         {
+            _accessCodes = accessCodes;
             _context = context;
             _otpService = otpService;
             _jwtService = jwtService;
@@ -1005,65 +1008,21 @@ namespace Idara.API.Controllers
         {
             var currentUserId = User.GetUserId();
             if (currentUserId == null) return Unauthorized();
-
-            var currentUser = await _context.Users.Include(u => u.School)
-                .FirstOrDefaultAsync(u => u.Id == currentUserId);
-            if (currentUser?.School == null || currentUser.SchoolId == null)
+            var schoolId = User.GetSchoolId();
+            if (schoolId == null)
                 return BadRequest(ApiResponse<UserCredentialDto>.Fail("École non trouvée pour cet utilisateur."));
-            if (currentUser.AccountStatus != AccountStatus.Active)
-                return BadRequest(ApiResponse<UserCredentialDto>.Fail("Votre compte doit être actif."));
 
-            var target = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
-            if (target == null)
-                return NotFound(ApiResponse<UserCredentialDto>.Fail("Utilisateur introuvable."));
+            // Même chemin que l'assistant (§199) : refus, cloisonnement et
+            // révocation des sessions vivent dans AccessCodeService.
+            var r = await _accessCodes.RegenerateAsync(schoolId.Value, currentUserId.Value, userId, HttpContext.RequestAborted);
+            if (!r.Ok)
+                return r.NotFound
+                    ? NotFound(ApiResponse<UserCredentialDto>.Fail(r.Error!))
+                    : BadRequest(ApiResponse<UserCredentialDto>.Fail(r.Error!));
 
-            // Seuls les comptes « identité par téléphone » ont un code à 6 chiffres.
-            if (target.Role == UserRoles.SuperAdmin || target.Role == UserRoles.SchoolAdmin)
-                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
-                    "Le code d'accès ne concerne que les parents, enseignants et personnel."));
-            if (string.IsNullOrWhiteSpace(target.PhoneNumber))
-                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
-                    "Ce compte n'a pas de numéro : aucun code à régénérer."));
-
-            // Scoping strict multi-tenant : la cible appartient à mon école.
-            // !Student.IsDeleted (oubli préexistant corrigé le 2026-08-17) ; un
-            // enfant SORTI suffit en revanche — son parent utilise encore l'app
-            // pour consulter et payer ce qu'il doit (D2).
-            var belongsToSchool = target.Role == UserRoles.Guardian
-                ? await _context.StudentGuardians.AnyAsync(
-                    sg => sg.GuardianId == userId
-                          && sg.Student.SchoolId == currentUser.SchoolId.Value
-                          && !sg.Student.IsDeleted)
-                : target.SchoolId == currentUser.SchoolId.Value;
-            if (!belongsToSchool)
-                return BadRequest(ApiResponse<UserCredentialDto>.Fail(
-                    "Cet utilisateur n'appartient pas à votre école."));
-
-            var code = SixDigitCode();
-            target.PasswordHash = BCrypt.Net.BCrypt.HashPassword(code);
-            await _context.SaveChangesAsync();
-
-            // L'ancien code / mot de passe ne doit plus donner accès.
-            await _context.RefreshTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync();
-
-            var phone = target.PhoneNumber!;
-            var fullName = target.FullName ?? string.Empty;
             // Message prêt à partager (modal récap). Aucun envoi automatique :
             // l'école choisit le canal dans le modal (WhatsApp / SMS / Copier).
-            var messageText = NotificationTemplates.CredentialShare(fullName, phone, code);
-
-            _logger.LogInformation(
-                "[auth] Code d'accès régénéré pour user {UserId} ({Role}) par {AdminId} (école {SchoolId})",
-                target.Id, target.Role, currentUserId, currentUser.SchoolId);
-
-            return Ok(ApiResponse<UserCredentialDto>.Ok(new UserCredentialDto
-            {
-                UserId = target.Id,
-                FullName = fullName,
-                Phone = phone,
-                Code = code,
-                Message = messageText,
-            }, "Nouveau code généré."));
+            return Ok(ApiResponse<UserCredentialDto>.Ok(r.Credential!, "Nouveau code généré."));
         }
 
         /// <summary>
@@ -1190,9 +1149,6 @@ namespace Idara.API.Controllers
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
         /// <summary>Code à 6 chiffres (mot de passe initial des comptes téléphone).</summary>
-        private static string SixDigitCode() =>
-            System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
-
         /// <summary>
         /// Change le mot de passe de l'utilisateur connecté (vérifie l'ancien).
         /// Sert notamment aux comptes téléphone pour remplacer leur code initial

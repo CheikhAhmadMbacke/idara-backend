@@ -19,7 +19,7 @@ namespace Idara.API.Controllers
     /// </summary>
     [ApiController]
     [Route("api/assistant")]
-    [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff}")]
+    [Authorize(Roles = $"{UserRoles.SchoolAdmin},{UserRoles.SchoolStaff},{UserRoles.Teacher}")]
     public class AssistantController : ControllerBase
     {
         private readonly AppDbContext _context;
@@ -114,20 +114,30 @@ namespace Idara.API.Controllers
             public int Commands { get; set; }
         }
 
-        private AssistantCaller? Caller(string? lang = null)
+        /// <summary>
+        /// 🔒 Qui parle, établi par le SERVEUR à partir du jeton (§304) :
+        /// école, rôle et — pour un enseignant — ses classes. Jamais rien du
+        /// modèle ni du corps de la requête. L'observateur (lecture seule) est
+        /// écarté explicitement : ses jetons portent des rôles SECONDAIRES de
+        /// direction, que l'attribut [Authorize] laisserait passer.
+        /// </summary>
+        private async Task<AssistantCaller?> CallerAsync(string? lang = null, CancellationToken ct = default)
         {
             var schoolId = User.GetSchoolId();
             var userId = User.GetUserId();
+            var role = User.GetRole();
             if (schoolId == null || userId == null) return null;
+            if (User.HasClaim("readonly", "true") || !AssistantPolicy.IsAllowedRole(role)) return null;
             var l = lang == "ar" ? "ar" : "fr";
-            return new AssistantCaller(schoolId.Value, userId.Value, User.GetRole() ?? "", l);
+            var visible = await _context.VisibleClassIdsAsync(role, userId.Value, schoolId.Value, ct);
+            return new AssistantCaller(schoolId.Value, userId.Value, role!, l, visible);
         }
 
         /// <summary>`GET /api/assistant/status` — solde, prix, disponibilité.</summary>
         [HttpGet("status")]
         public async Task<IActionResult> Status(CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var s = await _credits.DescribeAsync(c.SchoolId, c.UserId, _assistant.IsConfigured, ct);
             return Ok(ApiResponse<AssistantStatus>.Ok(s, "OK"));
@@ -137,7 +147,7 @@ namespace Idara.API.Controllers
         [HttpPost("chat")]
         public async Task<IActionResult> Chat([FromBody] ChatDto dto, CancellationToken ct)
         {
-            var c = Caller(dto.Lang);
+            var c = await CallerAsync(dto.Lang, ct);
             if (c == null) return Forbid();
 
             var history = dto.History
@@ -164,7 +174,7 @@ namespace Idara.API.Controllers
         [HttpGet("conversations")]
         public async Task<IActionResult> Conversations([FromQuery] int limit = 100, CancellationToken ct = default)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             limit = Math.Clamp(limit, 1, 200);
             var now = DateTime.UtcNow;
@@ -186,7 +196,7 @@ namespace Idara.API.Controllers
         [HttpGet("conversations/{id:int}")]
         public async Task<IActionResult> Conversation(int id, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
             if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
@@ -215,7 +225,7 @@ namespace Idara.API.Controllers
         [HttpPatch("conversations/{id:int}")]
         public async Task<IActionResult> RenameConversation(int id, [FromBody] RenameConversationDto dto, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
             if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
@@ -235,7 +245,7 @@ namespace Idara.API.Controllers
         [HttpDelete("conversations/{id:int}")]
         public async Task<IActionResult> DeleteConversation(int id, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var conv = await Mine(c).FirstOrDefaultAsync(x => x.Id == id, ct);
             if (conv == null) return NotFound(ApiResponse<bool>.Fail("Discussion introuvable."));
@@ -257,9 +267,9 @@ namespace Idara.API.Controllers
 
         /// <summary>`POST /api/assistant/voice-event` — journal des dictées (aucun contenu).</summary>
         [HttpPost("voice-event")]
-        public IActionResult VoiceEvent([FromBody] VoiceEventDto dto)
+        public async Task<IActionResult> VoiceEvent([FromBody] VoiceEventDto dto, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             _logger.LogInformation(
                 "[assistant/voice] {Outcome} école {SchoolId} : {Platform}/{Browser} langue={Lang} erreur={Error} "
@@ -272,7 +282,7 @@ namespace Idara.API.Controllers
         [HttpPost("actions/{id:int}/confirm")]
         public async Task<IActionResult> Confirm(int id, [FromQuery] string? lang, CancellationToken ct)
         {
-            var c = Caller(lang);
+            var c = await CallerAsync(lang, ct);
             if (c == null) return Forbid();
             var r = await _tools.ConfirmAsync(c, id, ct);
             if (r == null) return NotFound(ApiResponse<bool>.Fail("Proposition introuvable."));
@@ -283,7 +293,7 @@ namespace Idara.API.Controllers
         [HttpPost("actions/{id:int}/cancel")]
         public async Task<IActionResult> Cancel(int id, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var card = await _tools.CancelAsync(c, id, ct);
             if (card == null) return NotFound(ApiResponse<bool>.Fail("Proposition introuvable."));
@@ -298,8 +308,9 @@ namespace Idara.API.Controllers
         [HttpPost("purchase")]
         public async Task<IActionResult> Buy([FromBody] BuyCommandsDto dto, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
+            if (!c.IsDirection) return Forbid();
 
             var s = await _credits.DescribeAsync(c.SchoolId, null, _assistant.IsConfigured, ct);
             if (!s.PurchaseEnabled || s.BlockedReason is "disabled" or "kyc_not_validated")
@@ -370,7 +381,7 @@ namespace Idara.API.Controllers
         [HttpGet("purchase/{id:int}")]
         public async Task<IActionResult> PurchaseStatus(int id, CancellationToken ct)
         {
-            var c = Caller();
+            var c = await CallerAsync(ct: ct);
             if (c == null) return Forbid();
             var p = await _context.Payments.FirstOrDefaultAsync(
                 x => x.Id == id && x.SchoolId == c.SchoolId && x.Purpose == PaymentPurpose.AssistantCredits, ct);

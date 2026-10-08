@@ -18,32 +18,13 @@ namespace Idara.API.Controllers
     {
         private readonly AppDbContext _context;
         private readonly INotificationService _notif;
-        public AttendancesController(AppDbContext context, INotificationService notif)
+        private readonly Services.IAttendanceService _attendance;
+        public AttendancesController(AppDbContext context, INotificationService notif,
+            Services.IAttendanceService attendance)
         {
             _context = context;
             _notif = notif;
-        }
-
-        /// <summary>Notifie (push) les parents des élèves marqués absents. Best-effort
-        /// post-commit, 1 push/élève/jour. Clic → fiche de l'enfant.</summary>
-        private async Task NotifyAbsencesAsync(IReadOnlyCollection<int> absentStudentIds)
-        {
-            if (absentStudentIds.Count == 0) return;
-            // Enrolled() : !IsDeleted manquait (oubli préexistant corrigé le
-            // 2026-08-17) et un sortant ne notifie plus ses parents — double
-            // filet avec le point central de NotificationService.
-            var names = await _context.Students
-                .Where(s => absentStudentIds.Contains(s.Id))
-                .Enrolled()
-                .Select(s => new { s.Id, s.FirstName, s.LastName })
-                .ToListAsync();
-            foreach (var s in names)
-            {
-                var eleve = $"{s.FirstName} {s.LastName}".Trim();
-                await _notif.NotifyGuardiansOfStudentAsync(
-                    s.Id, NotificationTemplates.ChildAbsent(eleve),
-                    "CHILD_ABSENCE", $"/guardian/children/{s.Id}", oncePerDay: true);
-            }
+            _attendance = attendance;
         }
 
         [HttpGet]
@@ -93,71 +74,11 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
-            var date = dto.Date.ToUtcDay();
-            var studentIds = dto.Entries.Select(e => e.StudentId).ToList();
-
-            // Périmètre de l'appelant : un enseignant ne pointe que ses classes.
-            var visible = await _context.VisibleClassIdsAsync(
-                User.GetRole(), userId.Value, schoolId.Value);
-
-            // Sécurité multi-tenant : tous les élèves doivent appartenir à l'école.
-            // Les élèves hors école, hors périmètre OU SORTIS sont silencieusement
-            // ignorés (§16) : l'écran ne propose de toute façon que le périmètre
-            // autorisé, un identifiant en dehors ne peut venir que d'une requête
-            // forgée. Enrolled() = plus de pointage sur un élève parti (D4).
-            var validStudentIds = await _context.Students
-                .Where(s => studentIds.Contains(s.Id) && s.SchoolId == schoolId.Value)
-                .Enrolled()
-                .Where(s => visible == null
-                    || (s.ClassId != null && visible.Contains(s.ClassId.Value)))
-                .Select(s => s.Id).ToListAsync();
-
-            // On inclut volontairement les soft-deleted dans le lookup pour pouvoir les "ressusciter"
-            // (le user a re-pointe l'eleve apres une suppression manuelle, on remet IsDeleted=false).
-            var existing = await _context.Attendances
-                .Where(a => validStudentIds.Contains(a.StudentId) && a.Date == date)
-                .ToDictionaryAsync(a => a.StudentId);
-
-            var saved = 0;
-            var absentStudents = new HashSet<int>();
-            foreach (var entry in dto.Entries.Where(e => validStudentIds.Contains(e.StudentId)))
-            {
-                if (entry.Status == Enums.AttendanceStatus.Absent)
-                    absentStudents.Add(entry.StudentId);
-                if (existing.TryGetValue(entry.StudentId, out var rec))
-                {
-                    rec.Status = entry.Status;
-                    rec.Reason = entry.Reason;
-                    rec.RecordedById = userId.Value;
-                    rec.RecordedAt = DateTime.UtcNow;
-                    // Re-pointage explicite : reactiver si etait soft-deleted.
-                    if (rec.IsDeleted)
-                    {
-                        rec.IsDeleted = false;
-                        rec.DeletedAt = null;
-                        rec.DeletedById = null;
-                    }
-                }
-                else
-                {
-                    _context.Attendances.Add(new Attendance
-                    {
-                        SchoolId = schoolId.Value,
-                        StudentId = entry.StudentId,
-                        Date = date,
-                        Status = entry.Status,
-                        Reason = entry.Reason,
-                        RecordedById = userId.Value,
-                        RecordedAt = DateTime.UtcNow
-                    });
-                }
-                saved++;
-            }
-
-            await _context.SaveChangesAsync();
-
-            // Notif parents des absents (push, post-commit, best-effort, 1/élève/jour).
-            await NotifyAbsencesAsync(absentStudents);
+            // Même chemin que l'assistant (§199) : périmètre enseignant,
+            // élèves sortis ignorés, résurrection, notification des absents.
+            var saved = await _attendance.RecordBulkAsync(
+                schoolId.Value, userId.Value, User.GetRole(), dto.Date,
+                dto.Entries.Select(e => new Services.AttendanceEntryInput(e.StudentId, e.Status, e.Reason)).ToList());
 
             return Ok(ApiResponse<bool>.Ok(true, $"{saved} pointage(s) enregistré(s)."));
         }
