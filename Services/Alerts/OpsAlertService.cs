@@ -306,6 +306,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.WithdrawalStuck => true,
             OpsAlertKind.PayoutAnomaly => true,
             OpsAlertKind.AiCreditsExhausted => true,
+            OpsAlertKind.SubscriptionBillingGap => true,
             _ => false,
         };
 
@@ -320,6 +321,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.WithdrawalStuck => "Retrait — bloqué en vérification",
             OpsAlertKind.PayoutAnomaly => "Décaissement — anomalie comptable",
             OpsAlertKind.AiCreditsExhausted => "IA — crédits Anthropic épuisés",
+            OpsAlertKind.SubscriptionBillingGap => "Abonnement — période non facturée",
             _ => kind.ToString(),
         };
 

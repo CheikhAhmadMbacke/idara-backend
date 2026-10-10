@@ -95,5 +95,19 @@
         /// l'arrêt. Voir <c>AnthropicErrors</c>.
         /// </summary>
         AiCreditsExhausted = 50,
+
+        // ===== Abonnements plateforme =====
+
+        /// <summary>
+        /// Un abonnement payant a une période que personne ne paiera : sa
+        /// prochaine échéance tombe APRÈS le lendemain de sa dernière période
+        /// réglée. C'est de l'argent offert sans décision.
+        ///
+        /// <para>🔴 Motif vécu, le 2026-10-10 : le recalage sur le 8 avait
+        /// poussé l'Institut Cheikh Muhammadoul Bachir du 10/10 au 08/11 — un
+        /// mois de 12 000 F jamais prélevé, découvert par Cheikh en cherchant
+        /// l'argent dans les gains plateforme.</para>
+        /// </summary>
+        SubscriptionBillingGap = 60,
     }
 }

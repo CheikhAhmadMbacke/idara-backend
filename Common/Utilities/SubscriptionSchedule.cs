@@ -106,6 +106,11 @@ namespace Idara.API.Common.Utilities
         /// l'échéance en cours, donc aucune école n'est prélevée plus tôt que ce
         /// qui lui a été annoncé, et aucune ne perd un jour d'essai. Une école
         /// au 10/10 passe au 08/11, pas au 08/10.
+        /// <para>🔴 <b>Règle ABROGÉE le 2026-10-10</b> (Cheikh : « je n'offre
+        /// rien »). Appliquée à une école PAYANTE, elle a créé un mois jamais
+        /// prélevé (école 3, 10/10 → 08/11), corrigé à la main. Elle n'est plus
+        /// appelée que par la reprise déjà jouée ; ne pas la réutiliser pour un
+        /// abonnement payant — le garde-fou du cycle alerte désormais (§305).</para>
         /// </remarks>
         public static DateTime RealignExisting(DateTime currentNextBillingAt, int billingDay) =>
             FirstAnchorOnOrAfter(currentNextBillingAt, billingDay);

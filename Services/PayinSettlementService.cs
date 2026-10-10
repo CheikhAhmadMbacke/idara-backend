@@ -246,9 +246,12 @@ namespace Idara.API.Services
 
             // Le cycle repart du LENDEMAIN de la période réglée, pas de
             // maintenant : une école qui paie en retard ne gagne pas un mois.
+            // 🔴 Jamais `max(basis, now)` (corrigé le 2026-10-10) : régler le
+            // 08/10 un 10/11 aurait posé l'échéance au 08/12 et offert le mois
+            // du 08/11. Une échéance déjà passée est prélevée au cycle suivant
+            // — rien n'est offert sans décision (§305).
             var basis = invoice != null ? invoice.PeriodEnd.AddDays(1) : now;
-            sub.NextBillingAt = SubscriptionSchedule.FirstAnchorOnOrAfter(
-                basis > now ? basis : now, day);
+            sub.NextBillingAt = SubscriptionSchedule.FirstAnchorOnOrAfter(basis, day);
 
             sub.Status = SubscriptionStatus.Active;
             sub.ActivatedAt = now;

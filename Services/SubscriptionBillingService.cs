@@ -53,6 +53,7 @@ namespace Idara.API.Services
         private readonly IEmailService _email;
         private readonly Notifications.INotificationService _notif;
         private readonly ISubscriptionPaymentLinkService _links;
+        private readonly Alerts.IOpsAlertService _alerts;
         private readonly ILogger<SubscriptionBillingService> _logger;
 
         public SubscriptionBillingService(
@@ -61,6 +62,7 @@ namespace Idara.API.Services
             IEmailService email,
             Notifications.INotificationService notif,
             ISubscriptionPaymentLinkService links,
+            Alerts.IOpsAlertService alerts,
             ILogger<SubscriptionBillingService> logger)
         {
             _db = db;
@@ -68,6 +70,7 @@ namespace Idara.API.Services
             _email = email;
             _notif = notif;
             _links = links;
+            _alerts = alerts;
             _logger = logger;
         }
 
@@ -112,7 +115,85 @@ namespace Idara.API.Services
             _logger.LogInformation(
                 "[subscription-billing] Terminé. Vus={Considered} Prélevés={Charged} Insuffisants={Insufficient} Erreurs={Errors}",
                 report.Considered, report.Charged, report.Insufficient, report.Errors);
+
+            await AlertOnBillingGapsAsync(nowUtc, ct);
             return report;
+        }
+
+        /// <summary>
+        /// 🔴 Garde-fou : aucun abonnement payant ne doit avoir de période que
+        /// personne ne paiera. La prochaine échéance doit tomber au plus tard le
+        /// LENDEMAIN de la dernière période réglée ; au-delà, c'est un mois
+        /// offert sans décision — exactement ce que le recalage sur le 8 avait
+        /// fait à l'école 3 le 2026-09-19, découvert trois semaines plus tard
+        /// (§305).
+        /// </summary>
+        /// <remarks>
+        /// N'écrit RIEN : corriger une échéance déplace de l'argent, c'est une
+        /// décision. On alerte, une fois par jour et par abonnement, tant que
+        /// l'écart dure. L'essai gratuit est exclu (aucune période réglée), et
+        /// les échéances posées à plus d'un an (école de démonstration, hors
+        /// facturation exprès) aussi.
+        /// </remarks>
+        private async Task AlertOnBillingGapsAsync(DateTime nowUtc, CancellationToken ct)
+        {
+            try
+            {
+                var horizon = nowUtc.AddYears(1);
+                var rows = await _db.Subscriptions.AsNoTracking()
+                    .Where(s => s.Status != SubscriptionStatus.Trial && s.NextBillingAt <= horizon)
+                    .Select(s => new
+                    {
+                        s.Id,
+                        s.SchoolId,
+                        SchoolName = _db.Schools.Where(x => x.Id == s.SchoolId).Select(x => x.Name).FirstOrDefault(),
+                        s.NextBillingAt,
+                        s.AmountFcfa,
+                        LastPaidEnd = _db.SubscriptionInvoices
+                            .Where(i => i.SubscriptionId == s.Id && i.Status == SubscriptionInvoiceStatus.Paid)
+                            .Max(i => (DateTime?)i.PeriodEnd),
+                    })
+                    .ToListAsync(ct);
+
+                foreach (var r in rows)
+                {
+                    if (r.LastPaidEnd is not { } lastEnd) continue;
+                    var attendu = lastEnd.Date.AddDays(1);
+                    // Tolérance de 2 jours : le recalage du 2026-09-19 a laissé un
+                    // jour d'écart à une école (07/10 → 08/10), qui disparaît à son
+                    // prochain règlement. Le défaut visé, c'est un MOIS.
+                    if (r.NextBillingAt.Date <= attendu.AddDays(2)) continue;
+
+                    var jours = (r.NextBillingAt.Date - attendu).Days;
+                    _logger.LogError(
+                        "[subscription-billing] PÉRIODE NON FACTURÉE École {SchoolId} : réglé jusqu'au {LastEnd:yyyy-MM-dd}, prochaine échéance {Next:yyyy-MM-dd} ({Days} jours offerts).",
+                        r.SchoolId, lastEnd, r.NextBillingAt, jours);
+
+                    await _alerts.SendAsync(new Alerts.OpsAlertRequest(
+                        Kind: OpsAlertKind.SubscriptionBillingGap,
+                        GroupingKey: $"subscription-gap-{r.Id}-{nowUtc:yyyyMMdd}",
+                        Subject: $"Abonnement non preleve : {r.SchoolName} ({jours} jours)",
+                        Facts: new List<Alerts.AlertFact>
+                        {
+                            new("Ecole", $"#{r.SchoolId} {r.SchoolName}"),
+                            new("Regle jusqu'au", lastEnd.ToString("dd/MM/yyyy")),
+                            new("Prochaine echeance", r.NextBillingAt.ToString("dd/MM/yyyy")),
+                            new("Jours non factures", jours.ToString()),
+                            new("Montant mensuel", $"{r.AmountFcfa} FCFA"),
+                        },
+                        Advice: "Remettre l'echeance (Subscriptions.NextBillingAt) au lendemain de la "
+                                + "derniere periode reglee, ou au 8 qui la precede : le cycle suivant "
+                                + "preleve alors normalement.",
+                        SchoolId: r.SchoolId,
+                        RelatedId: r.Id,
+                        SmsHeadline: $"abonnement NON preleve #{r.SchoolId}, {jours} jours offerts"), ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Un garde-fou qui casse le cycle de prélèvement ferait pire que le mal.
+                _logger.LogError(ex, "[subscription-billing] Contrôle des périodes non facturées impossible.");
+            }
         }
 
         public async Task<BillingOutcome> RetryForSchoolAsync(int schoolId, DateTime nowUtc, CancellationToken ct)

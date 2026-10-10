@@ -44,6 +44,30 @@ namespace Idara.API.Services
                 "[subscription-billing] Démarré. Prochain tick à {Next:yyyy-MM-dd HH:mm} UTC",
                 NextFireUtc(DateTime.UtcNow));
 
+            // 🔁 RATTRAPAGE au démarrage (2026-10-10, §305) : si l'heure du jour
+            // est déjà passée, on rejoue le cycle tout de suite. Un service qui
+            // redémarre à 10:00 pile — un déploiement suffit — manquait le tick
+            // du jour, et une échéance corrigée à la main attendait le lendemain.
+            // Sans risque : un cycle rejoué ne débite pas deux fois (verrou du
+            // wallet + échéance avancée) et les SMS sont dédupliqués par cycle.
+            // Jamais AVANT l'heure : prélever à 2 h du matin est précisément ce
+            // que le passage à 10:00 a voulu éviter.
+            if (DateTime.UtcNow >= DateTime.UtcNow.Date + RunAtUtc)
+            {
+                try
+                {
+                    // Laisse la reprise de démarrage (DbInitializer) finir.
+                    await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                    _logger.LogInformation("[subscription-billing] Rattrapage du cycle du jour au démarrage.");
+                    await RunOnceAsync(DateTime.UtcNow, stoppingToken);
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[subscription-billing] Échec du rattrapage au démarrage");
+                }
+            }
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 var delay = NextFireUtc(DateTime.UtcNow) - DateTime.UtcNow;
