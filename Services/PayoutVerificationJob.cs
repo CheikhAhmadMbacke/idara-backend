@@ -1,4 +1,5 @@
-﻿using Idara.API.Constants;
+﻿using Idara.API.Common.Utilities;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
@@ -131,7 +132,11 @@ namespace Idara.API.Services
             try
             {
                 payout = string.IsNullOrWhiteSpace(stored)
-                    ? await wave.FindPayoutByClientReferenceAsync(withdrawalId.ToString(), ct)
+                    // Forme actuelle d'abord, puis l'ancienne (référence nue) : un
+                    // retrait parti avant le 2026-10-12 ne porte que celle-là. Un
+                    // « jamais créé » exige d'être introuvable sous les DEUX (§274).
+                    ? await wave.FindPayoutByClientReferenceAsync(WaveReference.ForWithdrawal(withdrawalId), ct)
+                      ?? await wave.FindPayoutByClientReferenceAsync(WaveReference.Legacy(withdrawalId), ct)
                     : await wave.GetPayoutAsync(stored, ct);
             }
             catch (WaveApiException ex)

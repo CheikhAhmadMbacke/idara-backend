@@ -1,4 +1,5 @@
-﻿using Idara.API.Constants;
+﻿using Idara.API.Common.Utilities;
+using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Wave;
 using Idara.API.Enums;
@@ -198,7 +199,10 @@ namespace Idara.API.Services
             try
             {
                 session = string.IsNullOrWhiteSpace(sessionId)
-                    ? await wave.FindCheckoutByClientReferenceAsync(paymentId.ToString(), ct)
+                    // Forme actuelle d'abord, puis l'ancienne (référence nue) : une
+                    // session ouverte avant le 2026-10-12 ne porte que celle-là.
+                    ? await wave.FindCheckoutByClientReferenceAsync(WaveReference.ForPayment(paymentId), ct)
+                      ?? await wave.FindCheckoutByClientReferenceAsync(WaveReference.Legacy(paymentId), ct)
                     : await wave.GetCheckoutSessionAsync(sessionId, ct);
             }
             catch (WaveApiException ex)

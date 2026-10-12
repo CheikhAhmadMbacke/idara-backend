@@ -501,7 +501,7 @@ namespace Idara.API.Controllers
                     Mobile = "+221" + recipientPhone,
                     ReceiveAmount = WaveClient.FormatAmount(dto.Amount),
                     Name = recipientName,
-                    ClientReference = withdrawal.Id.ToString(),
+                    ClientReference = WaveReference.ForWithdrawal(withdrawal.Id),
                     PaymentReason = PayoutReason.ForPlatformWithdrawal()
                 }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
             }

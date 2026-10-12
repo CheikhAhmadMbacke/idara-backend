@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.DTOs.Wave;
@@ -261,11 +262,17 @@ namespace Idara.API.Controllers
             if (data is null)
                 throw new InvalidOperationException("Événement checkout sans données");
 
-            // client_reference = notre Payment.Id, posé à la création de la session.
-            if (!int.TryParse(data.ClientReference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var paymentId))
+            // client_reference = notre Payment.Id, posé à la création de la session
+            // (« idara-paiement-397 », ou « 397 » avant le 2026-10-12). Le compte
+            // Wave est PARTAGÉ avec Àppal : une référence qui n'est pas à nous
+            // (« appal:… ») est l'opération d'un autre produit — on l'ignore, ce
+            // n'est pas un échec de traitement.
+            if (!WaveReference.TryParsePayment(data.ClientReference, out var paymentId))
             {
-                throw new InvalidOperationException(
-                    $"client_reference '{data.ClientReference}' non convertible en Payment.Id");
+                _logger.LogInformation(
+                    "[webhook/wave] session {Id} hors Idara (référence '{Ref}') — ignorée",
+                    data.Id, data.ClientReference);
+                return null;
             }
 
             var charged = WaveClient.ParseAmount(data.Amount);

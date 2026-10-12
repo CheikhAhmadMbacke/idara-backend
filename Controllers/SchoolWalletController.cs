@@ -402,7 +402,7 @@ namespace Idara.API.Controllers
                     // reçoit exactement ce qu'il a demandé, ni plus ni moins.
                     ReceiveAmount = WaveClient.FormatAmount(receiveAmount),
                     Name = recipientName,
-                    ClientReference = withdrawal.Id.ToString(),
+                    ClientReference = WaveReference.ForWithdrawal(withdrawal.Id),
                     // Imprimé sur le reçu du bénéficiaire, dans son application
                     // de paiement : c'est souvent la seule chose qu'un directeur
                     // lit quand l'argent arrive, des heures après l'avoir

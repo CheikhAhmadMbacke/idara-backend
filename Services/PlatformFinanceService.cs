@@ -697,7 +697,7 @@ namespace Idara.API.Services
             var withdrawals = await _db.Withdrawals
                 .Select(w => new { w.Id, w.Status, w.ProviderDisbursementId })
                 .ToListAsync(ct);
-            var byClientRef = withdrawals.ToDictionary(w => w.Id.ToString(), w => w);
+            var byId = withdrawals.ToDictionary(w => w.Id, w => w);
             var byProviderRef = withdrawals
                 .Where(w => !string.IsNullOrEmpty(w.ProviderDisbursementId))
                 .GroupBy(w => w.ProviderDisbursementId!)
@@ -714,7 +714,11 @@ namespace Idara.API.Services
                 {
                     // Sortie partie d'Idara → elle DOIT correspondre à un retrait.
                     var matched =
-                        (p.ClientReference != null && byClientRef.TryGetValue(p.ClientReference, out var w1)) ? w1
+                        // « idara-retrait-12 », ou « 12 » avant le 2026-10-12. Une
+                        // référence d'Àppal (« appal:… ») ne se lit pas : la sortie
+                        // reste orpheline pour Idara, ce qu'elle est.
+                        (WaveReference.TryParseWithdrawal(p.ClientReference, out var wid)
+                         && byId.TryGetValue(wid, out var w1)) ? w1
                         : (p.Reference != null && byProviderRef.TryGetValue(p.Reference, out var w2)) ? w2
                         : null;
 

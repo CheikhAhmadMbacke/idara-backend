@@ -16,11 +16,19 @@ namespace Idara.API.Common.Utilities
     /// est rejeté — on coupe donc, mais du côté du NOM (§243 : un nom se coupe,
     /// un libellé à nous se réduit), en gardant toujours le mot qui dit la
     /// nature de l'opération.</para>
+    ///
+    /// <para>🔑 <b>Tout motif commence par « Idara - »</b> (2026-10-12) : le
+    /// compte Wave est partagé avec Àppal, et c'est ce préfixe qui permet de
+    /// distinguer les deux produits dans l'application Wave — chez Pyranil comme
+    /// chez le bénéficiaire.</para>
     /// </summary>
     public static class PayoutReason
     {
         /// <summary>Limite imposée par Wave sur <c>payment_reason</c>.</summary>
         public const int MaxLength = 40;
+
+        /// <summary>Ce qui ouvre tout motif d'Idara — jamais rogné.</summary>
+        public const string Brand = "Idara - ";
 
         /// <summary>Retrait d'un établissement vers son propre numéro.</summary>
         public static string ForSchoolWithdrawal(string? schoolName) =>
@@ -34,23 +42,24 @@ namespace Idara.API.Common.Utilities
         public static string ForPlatformWithdrawal() => "Idara - gains plateforme";
 
         /// <summary>
-        /// « Retrait Ecole de demonstration ». Sans accent : le reçu d'un
+        /// « Idara - Retrait Ecole de demonstration ». Sans accent : le reçu d'un
         /// opérateur de paiement mobile n'est pas garanti de les rendre, et un
         /// « Ã© » au milieu d'un nom d'école inquiète plus qu'il n'informe.
         /// </summary>
         private static string Compose(string nature, string? schoolName)
         {
+            var tete = Brand + nature;
             var nom = Sanitize(schoolName);
-            if (string.IsNullOrWhiteSpace(nom)) return $"{nature} Idara";
+            if (string.IsNullOrWhiteSpace(nom)) return tete;
 
-            var motif = $"{nature} {nom}";
+            var motif = $"{tete} {nom}";
             if (motif.Length <= MaxLength) return motif;
 
-            // On rogne le NOM, jamais la nature de l'opération : « Retrait »
-            // doit rester lisible même pour une école au nom très long.
-            var place = MaxLength - nature.Length - 2;   // espace + point de suspension
-            if (place < 4) return nature;
-            return $"{nature} {nom[..place].TrimEnd()}.";
+            // On rogne le NOM, jamais la marque ni la nature de l'opération :
+            // « Idara - Retrait » doit rester lisible même pour un nom très long.
+            var place = MaxLength - tete.Length - 2;   // espace + point de suspension
+            if (place < 4) return tete;
+            return $"{tete} {nom[..place].TrimEnd()}.";
         }
 
         /// <summary>

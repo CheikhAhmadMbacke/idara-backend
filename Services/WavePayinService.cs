@@ -148,7 +148,9 @@ namespace Idara.API.Services
                 Currency = "XOF",
                 SuccessUrl = $"{resultBase}?status=success",
                 ErrorUrl = $"{resultBase}?status=cancel",
-                ClientReference = payment.Id.ToString(),
+                // « idara-paiement-397 » : le compte Wave est partagé avec Àppal,
+                // la référence doit dire d'où vient l'opération.
+                ClientReference = WaveReference.ForPayment(payment.Id),
                 // RestrictPayerMobile volontairement absent : voir le commentaire
                 // porté par le champ. Un tiers doit pouvoir régler.
             };
