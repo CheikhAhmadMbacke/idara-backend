@@ -180,8 +180,8 @@ namespace Idara.API.Controllers
             if (PayerMarkup.Effective(donationFeesPayer) == FeesPayer.Parent && !platform.Fees.IsConfigured)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Les dons en ligne sont momentanément indisponibles : les commissions "
-                    + "du prestataire ne sont pas renseignées."));
+                    "Les dons en ligne sont momentanément indisponibles : les frais de service "
+                    + "ne sont pas encore configurés."));
             }
             var amountToCharge = PayerMarkup.Effective(donationFeesPayer) == FeesPayer.Parent
                 ? PayerMarkup.ChargeFor(platform.Fees, FeesPayer.Parent, targetAmount)

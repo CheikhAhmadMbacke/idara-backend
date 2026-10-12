@@ -251,7 +251,7 @@ namespace Idara.API.Services
     <li><a href="#utilisateurs">Obligations des utilisateurs</a></li>
     <li><a href="#contenus">Contenus publiés</a></li>
     <li><a href="#paiement">Encaissement des paiements</a>
-        &middot; <a href="#frais">frais de transaction</a></li>
+        &middot; <a href="#frais">frais de service</a></li>
     <li><a href="#dons">Collectes de dons</a></li>
     <li><a href="#portefeuille">Portefeuille et retraits</a></li>
     <li><a href="#abonnement">Abonnement et facturation</a></li>
@@ -301,9 +301,9 @@ plateforme et peut demander la suppression de son compte.</p>
       exécute matériellement les opérations d'encaissement et de décaissement.
       Il peut être remplacé ; le nom en vigueur est toujours celui indiqué ici et
       rappelé sur chaque écran de paiement.</li>
-  <li><strong>Frais de transaction</strong> : la commission prélevée par le
-      prestataire sur chaque opération. Distincte de l'abonnement, elle
-      rémunère l'exécution du paiement, pas l'usage du logiciel.</li>
+  <li><strong>Frais de service</strong> : les frais appliqués par {{editor}} à
+      chaque paiement en ligne et à chaque retrait. Distincts de l'abonnement, ils
+      rémunèrent le traitement de ces opérations, pas l'usage du logiciel.</li>
   <li><strong>Portefeuille</strong> : le solde de l'établissement au sein de la plateforme,
       constitué des sommes encaissées pour son compte et non encore retirées.</li>
 </ul>
@@ -427,16 +427,17 @@ et aucune donnée de carte</strong>.</p>
       régler pour une famille. Le reçu est alors émis au nom de l'élève concerné.</li>
   <li>Un encaissement <strong>en espèces</strong> est saisi par l'établissement, sous
       sa seule responsabilité. Il ne transite pas par la plateforme, ne supporte
-      aucun frais de transaction, et n'alimente pas le portefeuille.</li>
+      aucun frais de service, et n'alimente pas le portefeuille.</li>
 </ul>
 
-<h3 id="frais">9.2 Frais de transaction</h3>
-<p>Chaque opération exécutée par {{provider}} donne lieu à une commission. Elle est
-<strong>distincte de l'abonnement</strong> : l'abonnement rémunère l'usage du
-logiciel, la commission rémunère l'exécution du paiement par le prestataire.</p>
+<h3 id="frais">9.2 Frais de service</h3>
+<p>Chaque paiement en ligne et chaque retrait donne lieu à des
+<strong>frais de service</strong>, fixés par {{editor}}. Ils sont
+<strong>distincts de l'abonnement</strong> : l'abonnement rémunère l'usage du
+logiciel, les frais de service le traitement de chaque opération en ligne.</p>
 <table>
   <thead>
-    <tr><th>Opération</th><th>Commission</th><th>Assise sur</th></tr>
+    <tr><th>Opération</th><th>Frais de service</th><th>Assise sur</th></tr>
   </thead>
   <tbody>
     <tr>
@@ -449,57 +450,56 @@ logiciel, la commission rémunère l'exécution du paiement par le prestataire.<
       <td><strong>Décaissement</strong><br><span class="muted">retrait de
           l'établissement vers un compte de paiement mobile</span></td>
       <td><strong>{{payoutRate}}</strong></td>
-      <td>le montant reçu par le bénéficiaire, la commission s'ajoutant à ce montant</td>
+      <td>le montant reçu par le bénéficiaire, les frais s'ajoutant à ce montant</td>
     </tr>
   </tbody>
 </table>
-<p class="muted">Les commissions sont arrondies au franc par le prestataire. Le
-montant exact, en francs, est affiché avant chaque opération : c'est lui qui fait
-foi, et non le pourcentage, qui n'en est que l'expression approchée.</p>
+<p class="muted">Les frais de service sont arrondis au franc. Leur montant exact,
+en francs, est affiché avant chaque opération : c'est lui qui fait foi, et non le
+pourcentage, qui n'en est que l'expression approchée.</p>
 
 <div class="box">
   <p><strong>C'est l'établissement qui décide qui supporte ces frais</strong>, et il
   peut en changer à tout moment depuis son espace :</p>
   <ul>
     <li><strong>L'établissement les supporte</strong> : la famille règle le montant
-        exact de sa dette, et le portefeuille est crédité de ce montant diminué de
-        la commission.</li>
-    <li><strong>Le payeur les supporte</strong> : le montant réclamé est majoré de
-        ce qu'il faut pour que l'établissement encaisse la somme due. La majoration
-        est alors <strong>annoncée au payeur avant qu'il ne paie</strong>, sur
+        exact de sa dette, et le portefeuille est crédité de ce montant diminué des
+        frais de service.</li>
+    <li><strong>Le payeur les supporte</strong> : les frais de service s'ajoutent
+        au montant réclamé, de sorte que l'établissement encaisse la somme due. Ils
+        sont alors <strong>annoncés au payeur avant qu'il ne paie</strong>, sur
         l'écran de paiement comme sur le reçu.</li>
   </ul>
   <p>Dans les deux cas, la facture de l'élève est soldée du <strong>montant dû</strong>,
   jamais d'un montant diminué des frais.</p>
-  <p><strong>Chaque commission est prélevée au moment de l'opération qu'elle
-  rémunère</strong> : celle d'encaissement à l'encaissement, celle de décaissement
-  au décaissement. Aucune n'est prélevée par avance.</p>
+  <p><strong>Les frais de service sont prélevés au moment de l'opération qu'ils
+  concernent</strong> : ceux d'un paiement au paiement, ceux d'un retrait au
+  retrait. Aucun n'est prélevé par avance.</p>
 </div>
 
 <div class="box">
-  <p><strong>Ce que cela change pour le retrait.</strong> La commission de
-  décaissement <em>s'ajoute</em> au montant envoyé : elle est supportée par
+  <p><strong>Ce que cela change pour le retrait.</strong> Les frais de service du
+  retrait <em>s'ajoutent</em> au montant envoyé : ils sont supportés par
   l'établissement qui retire, quel que soit le choix fait ci-dessus pour les
-  encaissements.</p>
+  paiements.</p>
   <p>Un portefeuille ne se retire donc pas « en entier » : envoyer une somme à un
   bénéficiaire en coûte un peu plus. L'écran de retrait affiche toujours les
   <strong>deux montants</strong> — ce que reçoit le bénéficiaire, et ce qui est
-  débité du portefeuille — ainsi que la commission qui les sépare, <strong>avant
-  toute confirmation</strong>.</p>
-  <p class="muted">Le montant en francs affiché avant l'opération fait foi. Si la
-  commission réellement prélevée par le prestataire diffère de cette estimation, la
-  différence est portée au portefeuille de l'établissement, dans un sens comme dans
-  l'autre.</p>
+  débité du portefeuille — ainsi que les frais de service qui les séparent,
+  <strong>avant toute confirmation</strong>.</p>
+  <p class="muted">Le montant en francs affiché avant l'opération fait foi. Si les
+  frais définitivement appliqués diffèrent de cette estimation, la différence est
+  portée au portefeuille de l'établissement, dans un sens comme dans l'autre.</p>
 </div>
 
 <h3>9.3 Évolution des frais et changement de prestataire</h3>
 <ul>
-  <li>Ces taux sont ceux appliqués par {{provider}} à la date de la présente version.
-      Ils <strong>peuvent évoluer</strong> : le prestataire peut modifier sa
-      tarification, et {{editor}} peut changer de prestataire.</li>
+  <li>Ces taux sont ceux en vigueur à la date de la présente version. Ils
+      <strong>peuvent évoluer</strong>, et {{editor}} peut changer de prestataire
+      de paiement.</li>
   <li>Toute évolution est <strong>annoncée à l'établissement avec un préavis
       raisonnable</strong>, par notification dans son espace et, le cas échéant, par
-      courriel — sauf lorsqu'une modification imposée par le prestataire, une
+      courriel — sauf lorsqu'une modification imposée par un tiers, une
       autorité ou la loi prend effet dans un délai plus court, auquel cas
       l'information est donnée sans délai.</li>
   <li>Le taux affiché dans la présente page et sur les écrans de paiement est
@@ -546,11 +546,11 @@ individualisées dans les écritures.</p>
       et dont il garantit l'exactitude.</li>
   <li>Un montant minimum de retrait s'applique ; il est affiché dans l'espace de
       l'établissement.</li>
-  <li><strong>Le bénéficiaire reçoit le montant exact demandé.</strong> La commission
-      de décaissement ({{payoutRate}}) s'ajoute à ce montant et est prélevée en sus :
-      un retrait de 10 000 FCFA fait donc sortir 10 000 FCFA vers le bénéficiaire, et
-      la commission par-dessus.</li>
-  <li>Les frais de décaissement sont indiqués <strong>avant validation</strong>, en
+  <li><strong>Le bénéficiaire reçoit le montant exact demandé.</strong> Les frais de
+      service du retrait ({{payoutRate}}) s'ajoutent à ce montant et sont prélevés en
+      sus : un retrait de 10 000 FCFA fait donc sortir 10 000 FCFA vers le
+      bénéficiaire, et les frais par-dessus.</li>
+  <li>Les frais de service sont indiqués <strong>avant validation</strong>, en
       francs.</li>
   <li>Les délais dépendent de {{provider}} et des opérateurs de paiement mobile ; ils
       ne sont pas garantis par {{editor}}.</li>

@@ -6,8 +6,12 @@
 # À lancer SUR LE SERVEUR (le déploiement ne copie pas Tools/ ; le script est
 # posé dans le dossier personnel) :
 #     scp Idara.API/Tools/email-setup-secrets.sh idara@178.105.202.80:~/
-#     ssh idara@178.105.202.80
-#     bash ~/email-setup-secrets.sh
+#     ssh -t idara@178.105.202.80 "bash ~/email-setup-secrets.sh"
+#
+# 🔴 Le `-t` n'est pas décoratif : sans pseudo-terminal, `sudo` ne peut pas
+# demander le mot de passe et le script meurt sur « a terminal is required »,
+# dès la sauvegarde — avant d'avoir rien fait. Le script le vérifie lui-même
+# ci-dessous, parce que l'erreur de sudo ne dit pas quoi corriger.
 #
 # Pourquoi un script plutôt qu'un `nano` : le mot de passe d'application ne
 # doit apparaître ni à l'écran, ni dans l'historique du shell, ni dans un
@@ -51,6 +55,17 @@ fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   rouge "python3 est absent : la vérification d'envoi réel serait impossible."
+  exit 1
+fi
+
+# Sans terminal, sudo ne peut pas demander son mot de passe et toute la suite
+# échoue en accusant la sauvegarde. Autant le dire ici, avec la commande juste.
+if [ ! -t 0 ]; then
+  rouge "Aucun terminal : sudo ne pourra pas demander ton mot de passe,"
+  rouge "et la saisie invisible du secret ne marcherait pas non plus."
+  echo
+  jaune "Relance avec l'option -t :"
+  jaune "    ssh -t idara@178.105.202.80 \"bash ~/email-setup-secrets.sh\""
   exit 1
 fi
 

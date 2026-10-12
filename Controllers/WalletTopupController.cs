@@ -93,8 +93,8 @@ namespace Idara.API.Controllers
             if (!platform.Fees.IsConfigured)
             {
                 return BadRequest(ApiResponse<InitiatePaymentResponseDto>.Fail(
-                    "Recharge indisponible : les commissions du prestataire ne sont pas "
-                    + "renseignées. SuperAdmin → Réglages plateforme → Frais."));
+                    "Recharge indisponible : les frais de service ne sont pas encore "
+                    + "configurés. Réessayez plus tard."));
             }
             // Recharger son propre solde : l'école se paie à elle-même, et c'est
             // elle qui porte les frais. Le montant débité est donc RÉSOLU pour

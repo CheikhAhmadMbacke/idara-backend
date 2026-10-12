@@ -2,8 +2,10 @@
 # =============================================================================
 # email-check.sh — re-vérifier la messagerie SANS rien ressaisir.
 #
-#     ssh idara@178.105.202.80
-#     bash ~/email-check.sh                  # envoie a l'adresse demandee
+#     ssh -t idara@178.105.202.80 "bash ~/email-check.sh"
+#
+# Le `-t` est indispensable : sans pseudo-terminal, sudo ne peut pas lire le
+# fichier de secrets et `read </dev/tty` echoue.
 #
 # Pendant de email-setup-secrets.sh : celui-ci POSE la configuration, celui-là
 # se contente de la RELIRE et de prouver qu'elle marche encore. On ne veut pas

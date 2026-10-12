@@ -412,7 +412,7 @@ namespace Idara.API.Services
                         ? payment.AmountFcfa - payment.TargetAmountFcfa
                         : payment.AmountFcfa - (long)Math.Round(payment.AmountFcfa / 1.08m);
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6)
-                        .Text("  dont frais transaction").FontSize(9).FontColor(TextSecondary);
+                        .Text("  dont frais de service").FontSize(9).FontColor(TextSecondary);
                     table.Cell().BorderBottom(1).BorderColor(Border).PaddingVertical(4).PaddingHorizontal(6).AlignRight()
                         .Text($"~{approxFees:N0} FCFA").FontSize(9).FontColor(TextSecondary);
                 }
