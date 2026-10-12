@@ -75,21 +75,23 @@ namespace Idara.API.Services
 
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var wave = scope.ServiceProvider.GetRequiredService<IWaveClient>();
+            var reserveService = scope.ServiceProvider.GetRequiredService<IIdaraReserveService>();
             var settlement = scope.ServiceProvider.GetRequiredService<IPayoutSettlementService>();
 
             // Σ(Available + Pending) dû aux écoles.
             var owedToSchools = await db.SchoolWallets
                 .SumAsync(w => w.AvailableBalance + w.PendingBalance, ct);
 
+            // La part d'IDARA, pas le portefeuille entier : il est partagé avec
+            // Àppal (§307), dont l'argent couvrirait sinon une dette d'Idara.
             long reserve;
             try
             {
-                reserve = await wave.GetBalanceFcfaAsync(ct);
+                reserve = (await reserveService.ComputeAsync(ct)).IdaraFcfa;
             }
-            catch (WaveApiException ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "[payout-reconcile] Solde du compte marchand indisponible — invariant non vérifié ce tick");
+                _logger.LogError(ex, "[payout-reconcile] Part d'Idara indisponible — invariant non vérifié ce tick");
                 return;
             }
 

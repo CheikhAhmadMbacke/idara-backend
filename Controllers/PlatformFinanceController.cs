@@ -33,6 +33,7 @@ namespace Idara.API.Controllers
         private readonly IPlatformFinanceService _finance;
         private readonly AppDbContext _context;
         private readonly IWaveClient _wave;
+        private readonly IIdaraReserveService _reserve;
         private readonly IPaymentAvailabilityService _availability;
         private readonly IPayoutSettlementService _settlement;
         private readonly INotificationService _notif;
@@ -50,8 +51,10 @@ namespace Idara.API.Controllers
             IPayoutSettlementService settlement,
             INotificationService notif, IInvestorReportPdfService investorPdf,
             IOptions<WaveSettings> waveSettings, IMemoryCache cache,
+            IIdaraReserveService reserve,
             ILogger<PlatformFinanceController> logger)
         {
+            _reserve = reserve;
             _finance = finance;
             _context = context;
             _wave = wave;
@@ -435,16 +438,17 @@ namespace Idara.API.Controllers
                 ? platform.Fees.PayoutFeesFor(dto.Amount)
                 : 0L;
 
-            // Solde du compte marchand (live) AVANT le verrou : valeur externe,
-            // indépendante de nos écritures.
+            // La part d'IDARA dans le portefeuille (§307), AVANT le verrou : valeur
+            // externe, indépendante de nos écritures. Jamais le solde entier — il
+            // contient l'argent d'Àppal, que ce retrait emporterait.
             long reserve;
             try
             {
-                reserve = await _wave.GetBalanceFcfaAsync(ct);
+                reserve = (await _reserve.ComputeAsync(ct)).IdaraFcfa;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[platform-withdraw] solde Wave injoignable");
+                _logger.LogError(ex, "[platform-withdraw] part d'Idara dans le portefeuille incalculable");
                 return StatusCode(503, ApiResponse<WithdrawalDto>.Fail(
                     "Solde du compte marchand injoignable, réessaie plus tard."));
             }

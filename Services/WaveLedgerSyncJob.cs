@@ -26,6 +26,10 @@ namespace Idara.API.Services
         private const int PageSize = 200;
         private const int MaxPagesPerDay = 50;   // garde-fou : 10 000 lignes/jour
 
+        // La tâche horaire et un calcul de réserve peuvent recopier en même
+        // temps : un seul à la fois, sinon le second bute sur l'index unique.
+        private static readonly SemaphoreSlim Gate = new(1, 1);
+
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<WaveLedgerSyncJob> _logger;
 
@@ -65,6 +69,13 @@ namespace Idara.API.Services
 
         /// <summary>Public pour un rejeu depuis un endpoint admin. Renvoie le nombre de lignes ajoutées.</summary>
         public async Task<int> SyncAsync(CancellationToken ct)
+        {
+            await Gate.WaitAsync(ct);
+            try { return await SyncCoreAsync(ct); }
+            finally { Gate.Release(); }
+        }
+
+        private async Task<int> SyncCoreAsync(CancellationToken ct)
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

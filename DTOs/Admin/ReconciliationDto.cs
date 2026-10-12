@@ -6,8 +6,24 @@ namespace Idara.API.DTOs.Admin
     /// </summary>
     public class ReconciliationDto
     {
-        /// <summary>R — solde marchand Idara chez SenePay (live).</summary>
+        /// <summary>
+        /// R — la part d'IDARA dans le portefeuille Wave (§307), pas son solde
+        /// entier : le portefeuille est partagé avec Àppal. Nom de champ gardé
+        /// pour les applications déjà installées.
+        /// </summary>
         public long ReserveSenePayFcfa { get; set; }
+
+        /// <summary>Solde du portefeuille Wave ENTIER, tous produits confondus.</summary>
+        public long WalletTotalFcfa { get; set; }
+
+        /// <summary>Part des autres produits du portefeuille (Àppal) — exclue de R.</summary>
+        public long OtherProductsFcfa { get; set; }
+
+        /// <summary>Lignes que rien ne rattache à Idara depuis le partage — exclues de R.</summary>
+        public long UnattributedFcfa { get; set; }
+
+        /// <summary>Nombre de ces lignes.</summary>
+        public int UnattributedCount { get; set; }
 
         /// <summary>Indique si <see cref="ReserveSenePayFcfa"/> vient d'un appel
         /// SenePay réussi (false = SenePay injoignable, valeur non fiable).</summary>

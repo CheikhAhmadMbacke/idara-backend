@@ -291,6 +291,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliati
 // Recopie horaire du registre Wave (lecture seule) : le portefeuille est partagé
 // avec Àppal, la part d'Idara se reconstitue ligne à ligne (§307).
 builder.Services.AddSingleton<WaveLedgerSyncJob>();
+builder.Services.AddScoped<IIdaraReserveService, IdaraReserveService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WaveLedgerSyncJob>());
 
 // Vérifie en continu (~3min) les payins restés Pending via GET /{token}/status

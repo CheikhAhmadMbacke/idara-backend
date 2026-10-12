@@ -28,11 +28,15 @@ namespace Idara.API.Services
         /// <summary>Tolérance sur l'écart de réconciliation (arrondis du prestataire).</summary>
         private const long EpsilonFcfa = 50;
 
+        private readonly IIdaraReserveService _reserve;
+
         public PlatformFinanceService(
-            AppDbContext db, IWaveClient wave, ILogger<PlatformFinanceService> logger)
+            AppDbContext db, IWaveClient wave, IIdaraReserveService reserve,
+            ILogger<PlatformFinanceService> logger)
         {
             _db = db;
             _wave = wave;
+            _reserve = reserve;
             _logger = logger;
         }
 
@@ -153,10 +157,21 @@ namespace Idara.API.Services
             // Sorties SOUSTRAITES de P : ajustements manuels dashboard + contrepartie
             // d'un CRÉDIT manuel de wallet école (la plateforme finance le crédit sur
             // ses gains). On EXCLUT les types ADDITIFS (CapitalInjection, SchoolDebitReturn).
-            var manualOutflows = await _db.PlatformOutflows
+            //
+            // 🔴 Portefeuille PARTAGÉ avec Àppal (§307) : une sortie enregistrée
+            // sur une ligne de registre d'un AUTRE produit n'a jamais quitté la
+            // réserve d'Idara — elle ne compte pas. C'est le cas de la sortie
+            // #22 (505 F, 2026-10-02), enregistrée par le scan avant qu'il ne
+            // sache reconnaître Àppal. Rien n'est effacé : elle reste au
+            // registre des sorties, on cesse seulement de la soustraire.
+            var foreignTx = await _reserve.ForeignTransactionIdsAsync(ct);
+            var manualOutflows = (await _db.PlatformOutflows
                 .Where(o => o.Type != PlatformOutflowType.CapitalInjection
                             && o.Type != PlatformOutflowType.SchoolDebitReturn)
-                .SumAsync(o => o.AmountFcfa, ct);
+                .Select(o => new { o.AmountFcfa, o.ProviderReference })
+                .ToListAsync(ct))
+                .Where(o => o.ProviderReference == null || !foreignTx.Contains(o.ProviderReference))
+                .Sum(o => o.AmountFcfa);
             var platformWithdrawalCost = await _db.Withdrawals
                 .Where(w => w.IsPlatform && w.Status != WithdrawalStatus.Failed)
                 .SumAsync(w => w.AmountFcfa + w.FeesFcfa, ct);
@@ -197,23 +212,31 @@ namespace Idara.API.Services
             var (owedToSchools, platform) = await ComputeDebtAndPlatformAsync(ct);
             var platformTotal = platform.TotalFcfa;
 
-            // --- R : solde du compte marchand Wave (live) ---
+            // --- R : la part d'Idara dans le portefeuille Wave (§307) ---
+            // Le portefeuille est partagé avec Àppal : son solde entier n'est PAS
+            // la réserve d'Idara, et ne sert jamais de repli.
             long reserve = 0;
             var reserveLive = false;
+            IdaraReserve? share = null;
             try
             {
-                reserve = await _wave.GetBalanceFcfaAsync(ct);
+                share = await _reserve.ComputeAsync(ct);
+                reserve = share.IdaraFcfa;
                 reserveLive = true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[finance] Solde du compte marchand injoignable pour la réconciliation");
+                _logger.LogError(ex, "[finance] Part d'Idara dans le portefeuille Wave incalculable pour la réconciliation");
             }
 
             var dto = new ReconciliationDto
             {
                 ReserveSenePayFcfa = reserve,
                 ReserveLive = reserveLive,
+                WalletTotalFcfa = share?.WalletTotalFcfa ?? 0,
+                OtherProductsFcfa = share?.OtherProductsFcfa ?? 0,
+                UnattributedFcfa = share?.UnattributedFcfa ?? 0,
+                UnattributedCount = share?.UnattributedCount ?? 0,
                 OwedToSchoolsFcfa = owedToSchools,
                 Platform = platform,
                 // 🔑 Plus de marge de sécurité depuis le 2026-10-08 (décision de
@@ -937,6 +960,19 @@ namespace Idara.API.Services
             {
                 msg += $" Surplus inexpliqué de {Fmt(d.DiscrepancyFcfa)} FCFA (réserve > dette + gains) : "
                     + "un crédit récent pas encore reflété, ou un ajustement manuel de trop.";
+            }
+
+            // Le portefeuille est partagé (§307) : dire ce qui a été retranché,
+            // sans quoi « réserve » et solde de l'application Wave ne se
+            // reconnaissent pas.
+            if (d.WalletTotalFcfa != d.ReserveSenePayFcfa)
+            {
+                msg += $" Portefeuille Wave entier : {Fmt(d.WalletTotalFcfa)} FCFA, dont "
+                    + $"{Fmt(d.OtherProductsFcfa)} FCFA à Àppal";
+                msg += d.UnattributedCount > 0
+                    ? $" et {Fmt(d.UnattributedFcfa)} FCFA sur {d.UnattributedCount} mouvement(s) que rien ne "
+                      + "rattache à Idara (non comptés : vérifier dans l'application Wave)."
+                    : ".";
             }
 
             return msg;
