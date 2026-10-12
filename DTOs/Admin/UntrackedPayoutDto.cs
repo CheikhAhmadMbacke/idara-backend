@@ -42,6 +42,12 @@ namespace Idara.API.DTOs.Admin
         /// <summary>Nombre total de payouts SenePay `completed` examinés.</summary>
         public int ScannedCount { get; set; }
 
+        /// <summary>
+        /// Sorties portant la référence d'un AUTRE produit du portefeuille partagé
+        /// (Àppal, « appal:… ») — ni comptées ni proposées à l'enregistrement (§307).
+        /// </summary>
+        public int ForeignCount { get; set; }
+
         /// <summary>false si SenePay injoignable (résultat non fiable).</summary>
         public bool SenePayReachable { get; set; }
     }

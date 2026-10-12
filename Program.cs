@@ -288,6 +288,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutVerification
 builder.Services.AddSingleton<PayoutReconciliationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliationJob>());
 
+// Recopie horaire du registre Wave (lecture seule) : le portefeuille est partagé
+// avec Àppal, la part d'Idara se reconstitue ligne à ligne (§307).
+builder.Services.AddSingleton<WaveLedgerSyncJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WaveLedgerSyncJob>());
+
 // Vérifie en continu (~3min) les payins restés Pending via GET /{token}/status
 // autoritatif : résout les paiements abandonnés (parent revenu sans confirmer)
 // ET récupère un webhook manqué (Completed). Ne marque terminal QUE sur statut

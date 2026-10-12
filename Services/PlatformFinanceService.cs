@@ -742,7 +742,18 @@ namespace Idara.API.Services
                         }
                         continue;
                     }
-                    // Sortie portant une référence inconnue de nous : anormale,
+                    // 🔴 Le portefeuille est PARTAGÉ avec Àppal (§307) : une
+                    // référence qui n'est pas de la forme d'Idara (« appal:… »)
+                    // est la sortie d'un autre produit. L'enregistrer ici la
+                    // retrancherait des gains d'Idara — c'est arrivé le
+                    // 2026-10-02 (sortie #22, 505 F).
+                    if (!WaveReference.TryParseWithdrawal(p.ClientReference, out _))
+                    {
+                        result.ForeignCount++;
+                        continue;
+                    }
+
+                    // Référence d'Idara qu'aucun retrait ne porte : anormale,
                     // traitée comme orpheline par prudence.
                 }
 
@@ -765,8 +776,10 @@ namespace Idara.API.Services
             }
 
             _logger.LogInformation(
-                "[finance] Scan payouts : {Scanned} completed, {Untracked} hors Idara ({ToRecord} à enregistrer), {Anomalies} anomalies",
-                result.ScannedCount, result.Untracked.Count, result.TotalToRecordFcfa, result.Anomalies.Count);
+                "[finance] Scan payouts : {Scanned} completed, {Untracked} hors Idara ({ToRecord} à enregistrer), "
+                + "{Foreign} d'un autre produit (ignorées), {Anomalies} anomalies",
+                result.ScannedCount, result.Untracked.Count, result.TotalToRecordFcfa, result.ForeignCount,
+                result.Anomalies.Count);
             return result;
         }
 

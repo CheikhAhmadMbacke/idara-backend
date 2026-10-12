@@ -63,6 +63,7 @@ namespace Idara.API.Data
         public DbSet<PlatformSettings> PlatformSettings { get; set; }
         public DbSet<PayoutAlert> PayoutAlerts { get; set; }
         public DbSet<PlatformOutflow> PlatformOutflows { get; set; }
+        public DbSet<WaveLedgerEntry> WaveLedgerEntries { get; set; }
         public DbSet<CashLedgerEntry> CashLedgerEntries { get; set; }
         public DbSet<CashCategory> CashCategories { get; set; }
 
@@ -1397,6 +1398,17 @@ namespace Idara.API.Data
                 .HasIndex(o => o.ProviderReference)
                 .IsUnique()
                 .HasFilter("\"ProviderReference\" IS NOT NULL");
+
+            // ===== Registre Wave recopié (portefeuille partagé avec Àppal, §307) =====
+            // Une ligne de registre ne s'enregistre qu'une fois : c'est la clé
+            // d'idempotence de la recopie horaire.
+            modelBuilder.Entity<WaveLedgerEntry>()
+                .HasIndex(e => e.TransactionId)
+                .IsUnique();
+            modelBuilder.Entity<WaveLedgerEntry>()
+                .HasIndex(e => e.Timestamp);
+            modelBuilder.Entity<WaveLedgerEntry>()
+                .HasIndex(e => e.CheckoutSessionId);
 
             // ===== Livre de caisse (gestion financière daara, F1/F2) =====
             modelBuilder.Entity<CashLedgerEntry>()

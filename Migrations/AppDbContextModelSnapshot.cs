@@ -4163,6 +4163,66 @@ namespace Idara.API.Migrations
                     b.ToTable("WalletTransactions");
                 });
 
+            modelBuilder.Entity("Idara.API.Models.WaveLedgerEntry", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("AmountFcfa")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("BalanceFcfa")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("CheckoutSessionId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientReference")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CounterpartyMobile")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CounterpartyName")
+                        .HasColumnType("text");
+
+                    b.Property<long>("FeeFcfa")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("IsReversal")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PaymentReason")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("SyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TransactionId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TransactionType")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CheckoutSessionId");
+
+                    b.HasIndex("Timestamp");
+
+                    b.HasIndex("TransactionId")
+                        .IsUnique();
+
+                    b.ToTable("WaveLedgerEntries");
+                });
+
             modelBuilder.Entity("Idara.API.Models.WebhookEvent", b =>
                 {
                     b.Property<int>("Id")
