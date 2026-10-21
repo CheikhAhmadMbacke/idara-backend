@@ -292,6 +292,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PayoutReconciliati
 // avec Àppal, la part d'Idara se reconstitue ligne à ligne (§307).
 builder.Services.AddSingleton<WaveLedgerSyncJob>();
 builder.Services.AddScoped<IIdaraReserveService, IdaraReserveService>();
+builder.Services.AddScoped<PayinLedgerAuditService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WaveLedgerSyncJob>());
 
 // Vérifie en continu (~3min) les payins restés Pending via GET /{token}/status

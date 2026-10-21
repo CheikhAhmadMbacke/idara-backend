@@ -72,6 +72,7 @@ namespace Idara.API.Common.Utilities
             OpsAlertKind.WithdrawalStuck => true,
             OpsAlertKind.PayoutAnomaly => true,
             OpsAlertKind.PayinProviderRejected => true,
+            OpsAlertKind.PayinLedgerMismatch => true,
             // --- Les services d'IA sont à l'arrêt, pour toutes les écoles ---
             OpsAlertKind.AiCreditsExhausted => true,
             // --- Un abonnement ne sera pas prélevé : de l'argent qui ne rentre pas ---

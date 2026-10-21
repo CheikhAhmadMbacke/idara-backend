@@ -72,6 +72,11 @@
         /// </summary>
         PayinProviderRejected = 30,
 
+        // Le registre Wave et les paiements d'Idara ne disent pas la même chose
+        // (paiement 469, 2026-10-21, §308) : encaissé chez Wave sans être réussi
+        // chez nous — rattrapé seul puis signalé —, ou l'inverse.
+        PayinLedgerMismatch = 31,
+
         // ===== Arrivées sur la plateforme =====
         // Ni une panne ni un coût : une nouvelle qui se périme. Un directeur qui
         // vient d'ouvrir un compte se rappelle le jour même ; une semaine plus

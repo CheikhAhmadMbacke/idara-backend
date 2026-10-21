@@ -307,6 +307,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.PayoutAnomaly => true,
             OpsAlertKind.AiCreditsExhausted => true,
             OpsAlertKind.SubscriptionBillingGap => true,
+            OpsAlertKind.PayinLedgerMismatch => true,
             _ => false,
         };
 
@@ -322,6 +323,7 @@ namespace Idara.API.Services.Alerts
             OpsAlertKind.PayoutAnomaly => "Décaissement — anomalie comptable",
             OpsAlertKind.AiCreditsExhausted => "IA — crédits Anthropic épuisés",
             OpsAlertKind.SubscriptionBillingGap => "Abonnement — période non facturée",
+            OpsAlertKind.PayinLedgerMismatch => "Encaissement — registre Wave et Idara en désaccord",
             _ => kind.ToString(),
         };
 

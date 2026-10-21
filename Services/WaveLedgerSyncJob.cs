@@ -52,6 +52,12 @@ namespace Idara.API.Services
                 try
                 {
                     await SyncAsync(stoppingToken);
+
+                    // Le registre vient d'être recopié : on le confronte aux
+                    // paiements tant qu'il est frais (§308).
+                    using var scope = _scopeFactory.CreateScope();
+                    await scope.ServiceProvider.GetRequiredService<PayinLedgerAuditService>()
+                        .RunAsync(stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
