@@ -61,6 +61,22 @@ namespace Idara.API.Common.Utilities
         /// exactement un 8 est prélevée ce 8-là, pas le mois suivant — elle a eu
         /// ses 30 jours pleins, la promesse est tenue.
         /// </remarks>
+        /// <summary>
+        /// Le jour d'ancrage qui ouvre le cycle EN COURS à <paramref name="nowUtc"/>
+        /// (le 8 de ce mois s'il est passé, sinon celui du mois précédent).
+        /// </summary>
+        public static DateTime LastAnchorOnOrBefore(DateTime nowUtc, int billingDay) =>
+            FirstAnchorOnOrAfter(nowUtc.Date.AddMonths(-1).AddDays(1), billingDay);
+
+        /// <summary>
+        /// 🔑 Décision de Cheikh (2026-10-21) : une école qui repaie après une
+        /// suspension paie le MOIS EN COURS et repart du prochain ancrage ; les
+        /// mois où elle était bloquée ne sont pas réclamés. S'applique quand la
+        /// période due est ENTIÈREMENT passée (plus d'un cycle de retard).
+        /// </summary>
+        public static bool PeriodFullyElapsed(DateTime periodEnd, DateTime nowUtc) =>
+            periodEnd.Date < nowUtc.Date;
+
         public static DateTime FirstAnchorOnOrAfter(DateTime from, int billingDay)
         {
             var day = Normalize(billingDay);

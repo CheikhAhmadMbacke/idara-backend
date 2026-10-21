@@ -60,6 +60,9 @@ namespace Idara.API.DTOs.Payment
         [StringLength(200)]
         public string? Note { get; set; }
 
+        /// <summary>Mot de passe du directeur : exigé à l'enregistrement (§308). Jamais stocké.</summary>
+        public string? Password { get; set; }
+
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
             if (PhoneConfirm != null && PhoneConfirm.Trim() != Phone.Trim())

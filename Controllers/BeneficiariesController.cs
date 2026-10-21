@@ -23,12 +23,46 @@ namespace Idara.API.Controllers
     public class BeneficiariesController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache _cache;
         private readonly ILogger<BeneficiariesController> _logger;
 
-        public BeneficiariesController(AppDbContext context, ILogger<BeneficiariesController> logger)
+        public BeneficiariesController(
+            AppDbContext context,
+            Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
+            ILogger<BeneficiariesController> logger)
         {
             _context = context;
+            _cache = cache;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// 🔒 Le numéro d'un bénéficiaire décide où partiront les prochains
+        /// virements : l'enregistrer exige le mot de passe, comme un retrait
+        /// (revue du 2026-10-21, §308). Même limite que les autres gestes
+        /// d'argent (clé partagée, 5 essais / 15 min). Null = accepté.
+        /// </summary>
+        private async Task<ActionResult?> CheckPasswordAsync(string? password, CancellationToken ct)
+        {
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+            if (string.IsNullOrEmpty(password))
+                return BadRequest(ApiResponse<TransferBeneficiaryDto>.Fail(
+                    "Mot de passe requis. Mettez à jour l'application si ce champ n'apparaît pas."));
+            var hash = await _context.Users.Where(u => u.Id == userId && !u.IsDeleted)
+                .Select(u => u.PasswordHash).FirstOrDefaultAsync(ct);
+            if (hash == null) return Unauthorized();
+
+            var rlKey = $"pwdreauth:{userId.Value}";
+            if (Microsoft.Extensions.Caching.Memory.CacheExtensions.TryGetValue(_cache, rlKey, out int attempts) && attempts >= 5)
+                return StatusCode(429, ApiResponse<TransferBeneficiaryDto>.Fail("Trop de tentatives. Réessayez dans quelques minutes."));
+            if (!BCrypt.Net.BCrypt.Verify(password, hash))
+            {
+                Microsoft.Extensions.Caching.Memory.CacheExtensions.Set(_cache, rlKey, attempts + 1, TimeSpan.FromMinutes(15));
+                return BadRequest(ApiResponse<TransferBeneficiaryDto>.Fail("Mot de passe incorrect."));
+            }
+            _cache.Remove(rlKey);
+            return null;
         }
 
         /// <summary>Liste le carnet. Par défaut masque les archivés (includeArchived=true pour tout).</summary>
@@ -62,6 +96,7 @@ namespace Idara.API.Controllers
 
             if (!TryParseOperator(dto.Operator, out var op))
                 return BadRequest(ApiResponse<TransferBeneficiaryDto>.Fail("Opérateur non supporté (wave ou orange)."));
+            if (await CheckPasswordAsync(dto.Password, ct) is { } refused) return refused;
 
             var entity = new TransferBeneficiary
             {
@@ -98,6 +133,7 @@ namespace Idara.API.Controllers
 
             if (!TryParseOperator(dto.Operator, out var op))
                 return BadRequest(ApiResponse<TransferBeneficiaryDto>.Fail("Opérateur non supporté (wave ou orange)."));
+            if (await CheckPasswordAsync(dto.Password, ct) is { } refused) return refused;
 
             var entity = await _context.TransferBeneficiaries
                 .FirstOrDefaultAsync(b => b.Id == id && b.SchoolId == schoolId.Value, ct);
@@ -142,7 +178,9 @@ namespace Idara.API.Controllers
             switch (op?.ToLowerInvariant())
             {
                 case "wave": parsed = PaymentOperator.Wave; return true;
-                case "orange": parsed = PaymentOperator.Orange; return true;
+                // Wave est le seul canal de décaissement (§274) : un bénéficiaire
+                // « orange » est payé sur son compte Wave, on l'enregistre tel quel.
+                case "orange": parsed = PaymentOperator.Wave; return true;
                 default: parsed = default; return false;
             }
         }

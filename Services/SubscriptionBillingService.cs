@@ -1,4 +1,5 @@
 using Idara.API.Common.Extensions;
+using Idara.API.Common.Utilities;
 using Idara.API.Constants;
 using Idara.API.Data;
 using Idara.API.Enums;
@@ -391,6 +392,27 @@ namespace Idara.API.Services
                 _db.WalletTransactions.Add(walletTx);
 
                 var periodStart = sub.NextBillingAt;
+
+                // 🔑 Retour après suspension (décision de Cheikh, 2026-10-21) :
+                // la période due est entièrement passée — le solde paie le MOIS
+                // EN COURS, les mois bloqués ne sont pas réclamés.
+                if (inArrears && SubscriptionSchedule.PeriodFullyElapsed(
+                        AdvanceCycle(periodStart, sub.BillingCycle).AddDays(-1), nowUtc))
+                {
+                    var billingDay = SubscriptionSchedule.Normalize(
+                        (await _db.GetPlatformSettingsAsync(ct)).SubscriptionBillingDay);
+                    var currentStart = SubscriptionSchedule.LastAnchorOnOrBefore(nowUtc, billingDay);
+                    foreach (var old in await _db.SubscriptionInvoices
+                                 .Where(i => i.SubscriptionId == sub.Id
+                                             && i.Status == SubscriptionInvoiceStatus.Pending
+                                             && i.PeriodStart < currentStart)
+                                 .ToListAsync(ct))
+                        old.Status = SubscriptionInvoiceStatus.Cancelled;
+                    _logger.LogInformation(
+                        "[subscription-billing] École {SchoolId} : retour après suspension, cycle repris au {New:yyyy-MM-dd} (échéance due {Old:yyyy-MM-dd})",
+                        sub.SchoolId, currentStart, periodStart);
+                    periodStart = currentStart;
+                }
                 var periodEnd = AdvanceCycle(periodStart, sub.BillingCycle).AddDays(-1);
 
                 var invoice = await GetOrCreateInvoiceAsync(sub, periodStart, periodEnd, amount, nowUtc, ct);

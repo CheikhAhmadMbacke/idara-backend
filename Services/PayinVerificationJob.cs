@@ -56,6 +56,9 @@ namespace Idara.API.Services
         // On ne vérifie pas un Pending trop jeune : laisse le webhook (rapide pour
         // Wave) faire son travail d'abord. Évite de marteler l'API SenePay.
         private static readonly TimeSpan MinAge = TimeSpan.FromMinutes(2);
+
+        /// <summary>Un paiement sans aucune session Wave après ce délai n'a jamais pu être payé.</summary>
+        private static readonly TimeSpan NeverOpenedAfter = TimeSpan.FromHours(24);
         private const int BatchSize = 100;
 
         public PayinVerificationJob(
@@ -217,6 +220,20 @@ namespace Idara.API.Services
             // transition terminale (§78).
             if (session is null)
             {
+                // Sauf, pour un ENCAISSEMENT, après 24 h sans aucune session sous
+                // nos deux références (paiement 426, resté « en attente » 18 jours
+                // après une ouverture coupée par le réseau, revue du 2026-10-21) :
+                // aucune session = aucun payeur n'a pu payer. Sans risque, à
+                // l'inverse d'un retrait : si de l'argent apparaissait quand même au
+                // registre, le contrôle horaire le rattraperait (Expired → Completed).
+                if (string.IsNullOrWhiteSpace(sessionId) && now - initiatedAt > NeverOpenedAfter)
+                {
+                    _logger.LogInformation(
+                        "[payin-verify] Payment {Id} : aucune session Wave en {Hours} h — expiré", paymentId, NeverOpenedAfter.TotalHours);
+                    await settlement.SettleAsync(paymentId, PaymentStatus.Expired, 0, 0, null, now,
+                        "session Wave jamais ouverte", "poll", ct);
+                    return;
+                }
                 _logger.LogDebug(
                     "[payin-verify] Payment {Id} : session inconnue de Wave — laissé en attente", paymentId);
                 return;

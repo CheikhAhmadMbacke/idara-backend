@@ -349,6 +349,27 @@ namespace Idara.API.Services
             var settings = await _context.GetPlatformSettingsAsync(ct);
             var day = SubscriptionSchedule.Normalize(settings.SubscriptionBillingDay);
 
+            // 🔑 Retour après suspension (décision de Cheikh, 2026-10-21) : la
+            // période réclamée est entièrement passée — l'école n'y avait pas
+            // accès. Le paiement règle le MOIS EN COURS ; les mois bloqués ne
+            // sont pas réclamés, leurs factures en attente sont annulées. Aucun
+            // « trou » n'apparaît entre la période payée et l'échéance (§305).
+            if (SubscriptionSchedule.PeriodFullyElapsed(invoice.PeriodEnd, now))
+            {
+                var currentStart = SubscriptionSchedule.LastAnchorOnOrBefore(now, day);
+                var stale = await _context.SubscriptionInvoices
+                    .Where(i => i.SubscriptionId == sub.Id && i.Id != invoice.Id
+                                && i.Status == SubscriptionInvoiceStatus.Pending
+                                && i.PeriodStart <= currentStart)
+                    .ToListAsync(ct);
+                foreach (var old in stale) old.Status = SubscriptionInvoiceStatus.Cancelled;
+                _logger.LogInformation(
+                    "[payin-settle] École {SchoolId} : retour après suspension, facture {InvoiceId} reportée du {Old:yyyy-MM-dd} au cycle en cours {New:yyyy-MM-dd}",
+                    payment.SchoolId, invoice.Id, invoice.PeriodStart, currentStart);
+                invoice.PeriodStart = currentStart;
+                invoice.PeriodEnd = SubscriptionSchedule.FirstAnchorOnOrAfter(currentStart.AddDays(1), day).AddDays(-1);
+            }
+
             // Le cycle repart du LENDEMAIN de la période réglée, pas de
             // maintenant : une école qui paie en retard ne gagne pas un mois.
             // 🔴 Jamais `max(basis, now)` (corrigé le 2026-10-10) : régler le

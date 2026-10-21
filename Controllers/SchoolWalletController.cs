@@ -191,13 +191,16 @@ namespace Idara.API.Controllers
 
                 recipientName = beneficiary.Name;
                 recipientPhone = beneficiary.Phone;
-                operatorEnum = beneficiary.Operator;
+                // Tout décaissement part par Wave depuis le 2026-09-17 (§274) :
+                // un ancien bénéficiaire « Orange » est payé sur son compte Wave,
+                // et le reçu doit le dire (revue du 2026-10-21, §308).
+                operatorEnum = PaymentOperator.Wave;
                 beneficiaryId = beneficiary.Id;
             }
             else
             {
                 // Saisie manuelle — champs garantis non-null/valides par le DTO.
-                operatorEnum = ParseOperator(dto.Operator!);
+                operatorEnum = PaymentOperator.Wave; // seul canal réel (§274, §308)
                 recipientName = dto.RecipientName!.Trim();
                 recipientPhone = dto.RecipientPhone!;
             }
@@ -736,13 +739,6 @@ namespace Idara.API.Controllers
             CreatedAt = w.CreatedAt,
             CompletedAt = w.CompletedAt,
             FailedAt = w.FailedAt
-        };
-
-        private static PaymentOperator ParseOperator(string op) => op.ToLowerInvariant() switch
-        {
-            "wave" => PaymentOperator.Wave,
-            "orange" => PaymentOperator.Orange,
-            _ => throw new ArgumentOutOfRangeException(nameof(op), $"Opérateur non supporté : {op}")
         };
 
         /// <summary>"771234567" → "77*****67".</summary>
