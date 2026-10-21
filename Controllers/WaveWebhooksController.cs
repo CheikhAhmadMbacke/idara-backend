@@ -217,6 +217,20 @@ namespace Idara.API.Controllers
                     return await SettleCheckoutAsync(data, PaymentStatus.Completed);
 
                 case "checkout.session.payment_failed":
+                    // 🔴 Une TENTATIVE échouée n'est pas une session échouée
+                    // (2026-10-21, paiement 469) : solde insuffisant, le payeur
+                    // recharge et réessaie dans la MÊME session, qui reste
+                    // `open`. Conclure ici faisait ignorer le `completed` arrivé
+                    // 46 s plus tard — 12 000 F encaissés, invisibles. Seule une
+                    // session fermée tranche ; sinon le poll ou l'expiration le
+                    // feront (§308).
+                    if (string.Equals(data?.CheckoutStatus, "open", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation(
+                            "[webhook/wave] tentative échouée sur session encore ouverte {Id} ({Code}) — paiement laissé en attente",
+                            data?.Id, data?.LastPaymentError?.Code);
+                        return null;
+                    }
                     await SettleCheckoutAsync(data, PaymentStatus.Failed);
                     return null;
 

@@ -91,7 +91,20 @@ namespace Idara.API.Services
             await _context.Entry(payment).ReloadAsync(ct);
 
             // Idempotence : déjà tranché par un webhook/poll concurrent → no-op.
-            if (payment.Status != PaymentStatus.Pending)
+            // 🔴 Sauf un ÉCHEC que Wave contredit par une réussite : l'argent
+            // est entré, le prestataire fait foi (§308). L'inverse — un échec
+            // sur un paiement réussi — reste ignoré.
+            var completesAFailure = terminalStatus == PaymentStatus.Completed
+                && payment.Status is PaymentStatus.Failed or PaymentStatus.Cancelled or PaymentStatus.Expired;
+            if (completesAFailure)
+            {
+                _logger.LogWarning(
+                    "[payin-settle] Payment.Id={Id} était {Status} ({Reason}) et Wave le dit RÉUSSI (source={Source}) — on le complète",
+                    payment.Id, payment.Status, payment.FailureReason, source);
+                payment.FailedAt = null;
+                payment.FailureReason = null;
+            }
+            else if (payment.Status != PaymentStatus.Pending)
             {
                 await tx.CommitAsync(ct);
                 _logger.LogInformation(

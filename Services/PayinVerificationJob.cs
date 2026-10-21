@@ -266,6 +266,9 @@ namespace Idara.API.Services
                 }
 
                 case "cancelled":
+                    // Session encore ouverte : le payeur peut réessayer (§308).
+                    if (string.Equals(session.CheckoutStatus, "open", StringComparison.OrdinalIgnoreCase))
+                        break;
                     await settlement.SettleAsync(
                         paymentId, PaymentStatus.Cancelled, 0, 0, reference, now,
                         session.LastPaymentError?.Code ?? session.LastPaymentError?.Message ?? "cancelled",
