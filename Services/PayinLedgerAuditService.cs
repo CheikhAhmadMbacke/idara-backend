@@ -133,6 +133,41 @@ namespace Idara.API.Services
                     schoolId, paymentId, ct);
             }
 
+            // ---- Remboursement fait dans Wave, pas encore enregistré (§308) ----
+            // Wave ne rembourse pas par l'API : le geste se fait dans son
+            // application, puis s'ENREGISTRE dans Idara. Sans cela, le solde de
+            // l'école garde un argent rendu, et R = D + P devient faux.
+            var reversals = (await _db.WaveLedgerEntries.AsNoTracking()
+                    .Where(e => (e.IsReversal || (e.AmountFcfa < 0 && e.CheckoutSessionId != null))
+                                && e.Timestamp >= since
+                                && e.Timestamp <= now - SettleGrace)
+                    .ToListAsync(ct))
+                .Where(l => !IdaraReserveService.IsForeignReference(l.ClientReference))
+                .ToList();
+            var reversalAlerts = 0;
+            foreach (var r in reversals)
+            {
+                var pid = r.CheckoutSessionId != null
+                    ? await _db.Payments.Where(x => x.ProviderTransactionId == r.CheckoutSessionId)
+                        .Select(x => (int?)x.Id).FirstOrDefaultAsync(ct)
+                    : null;
+                if (pid == null && WaveReference.TryParsePayment(r.ClientReference, out var refPid)) pid = refPid;
+                if (pid == null) continue; // pas un encaissement d'Idara : la réserve le classe
+
+                var refunded = await _db.Payments.AnyAsync(x => x.Id == pid && x.RefundedAt != null, ct);
+                if (refunded) continue;
+
+                reversalAlerts++;
+                await AlertOnceAsync(
+                    $"payin-ledger-refund:{r.TransactionId}",
+                    $"Remboursement Wave du paiement {pid} à enregistrer dans Idara",
+                    $"remboursement Wave du paiement {pid} ({Fcfa(Math.Abs(r.AmountFcfa))}) a enregistrer dans Idara",
+                    LineFacts(r, pid),
+                    "Le remboursement a été fait dans l'application Wave. L'enregistrer : SuperAdmin → Finances → "
+                    + "« Rembourser un paiement », avec ce numéro. Sans cela, le solde de l'école et les gains restent faux.",
+                    null, pid, ct);
+            }
+
             // ---- Sens inverse : réussi chez nous, absent du registre ----
             var ledgerFloor = await _db.WaveLedgerEntries.MinAsync(e => (DateTime?)e.Timestamp, ct);
             var ghostFrom = ledgerFloor is DateTime f && f > since ? f : since;
@@ -165,8 +200,8 @@ namespace Idara.API.Services
             }
 
             _logger.LogInformation(
-                "[payin-audit] {Lines} encaissement(s) Wave confrontés · {Repaired} rattrapé(s) · {Ghosts} absent(s) du registre",
-                lines.Count, repaired, ghosts.Count);
+                "[payin-audit] {Lines} encaissement(s) Wave confrontés · {Repaired} rattrapé(s) · {Ghosts} absent(s) du registre · {Refunds} remboursement(s) à enregistrer",
+                lines.Count, repaired, ghosts.Count, reversalAlerts);
         }
 
         private async Task AlertOnceAsync(

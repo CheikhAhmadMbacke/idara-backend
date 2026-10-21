@@ -2056,6 +2056,24 @@ namespace Idara.API.Migrations
                     b.Property<string>("ReceiptPdfPath")
                         .HasColumnType("text");
 
+                    b.Property<string>("RefundProviderReference")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefundReason")
+                        .HasColumnType("text");
+
+                    b.Property<long>("RefundWalletDebitedFcfa")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("RefundedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("RefundedById")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("RefundedFcfa")
+                        .HasColumnType("bigint");
+
                     b.Property<int>("SchoolId")
                         .HasColumnType("integer");
 

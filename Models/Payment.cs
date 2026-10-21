@@ -255,5 +255,27 @@ namespace Idara.API.Models
         /// un anonymat total.
         /// </summary>
         public bool DonorAnonymous { get; set; }
+
+        // ===== Remboursement (2026-10-21, §308) =====
+        // Wave ne rembourse pas par l'API : Cheikh le fait depuis l'application
+        // Wave, puis ENREGISTRE le fait ici. Le paiement reste « Completed » —
+        // il a bien eu lieu — et ces colonnes disent ce qui en est reparti.
+        // Append-only (§55) : un remboursement ne s'efface pas.
+
+        /// <summary>Date d'enregistrement du remboursement ; null = jamais remboursé.</summary>
+        public DateTime? RefundedAt { get; set; }
+
+        /// <summary>Montant rendu au payeur (le brut qu'il avait payé).</summary>
+        public long RefundedFcfa { get; set; }
+
+        /// <summary>Part reprise sur le solde de l'école (0 si l'argent n'y était jamais allé).</summary>
+        public long RefundWalletDebitedFcfa { get; set; }
+
+        public string? RefundReason { get; set; }
+
+        /// <summary>Identifiant de l'opération de remboursement chez Wave, si connu.</summary>
+        public string? RefundProviderReference { get; set; }
+
+        public int? RefundedById { get; set; }
     }
 }

@@ -106,6 +106,32 @@ namespace Idara.API.Services
                 .SumAsync(p => p.AmountFcfa - p.NetCreditedFcfa, ct);
             subscriptionRevenue -= subscriptionLinkFees;
 
+            // 🔴 Abonnement payé par Wave SANS régler de facture en propre
+            // (2026-10-21, §308) : double paiement, plan déjà couvert, facture
+            // déjà prélevée sur le solde. L'argent est en réserve, mais aucune
+            // facture ne le compte : sans ce terme, R dépassait D + P de son
+            // montant, sans explication. Un remboursement (plus bas) le reprend.
+            var unappliedSubscription = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Completed
+                            && p.Purpose == PaymentPurpose.Subscription
+                            && p.Operator != PaymentOperator.Cash
+                            && (p.SubscriptionInvoiceId == null
+                                || _db.SubscriptionInvoices.Any(i => i.Id == p.SubscriptionInvoiceId
+                                                                     && (i.WalletTransactionId != null || i.Status != SubscriptionInvoiceStatus.Paid))
+                                || _db.Payments.Any(o => o.Id < p.Id
+                                                         && o.SubscriptionInvoiceId == p.SubscriptionInvoiceId
+                                                         && o.Purpose == PaymentPurpose.Subscription
+                                                         && o.Status == PaymentStatus.Completed)))
+                .SumAsync(p => p.AmountFcfa, ct);
+            subscriptionRevenue += unappliedSubscription;
+
+            // 💸 Remboursements enregistrés (§308) : la réserve a rendu le brut au
+            // payeur ; l'école n'en a rendu que ce qui lui avait été versé. La
+            // différence (frais Wave perdus, part plateforme) sort des gains.
+            var refunds = await _db.Payments
+                .Where(p => p.RefundedAt != null && p.Operator != PaymentOperator.Cash)
+                .SumAsync(p => p.RefundedFcfa - p.RefundWalletDebitedFcfa, ct);
+
             // Pages de lecture de cahier achetées par les écoles.
             //
             // 🔴 Le NET, et sa TOTALITÉ. C'est la seule recette entrante dont
@@ -199,9 +225,10 @@ namespace Idara.API.Services
                 PlatformOutflowsFcfa = platformOutflows,
                 CapitalInjectionsFcfa = capitalInjections,
                 SchoolDebitReturnsFcfa = schoolDebitReturns,
+                RefundsFcfa = refunds,
                 TotalFcfa = surplus8 + subscriptionRevenue + ocrPageRevenue
                     + capitalInjections + schoolDebitReturns
-                    - payoutFeesAbsorbed - platformOutflows
+                    - payoutFeesAbsorbed - platformOutflows - refunds
             };
 
             return (owedToSchools, platform);
