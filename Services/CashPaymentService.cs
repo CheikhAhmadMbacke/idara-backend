@@ -1,3 +1,4 @@
+using Idara.API.Common.Extensions;
 using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
@@ -103,6 +104,17 @@ namespace Idara.API.Services
                 .FirstOrDefaultAsync(ct);
 
             await using var tx = await _context.Database.BeginTransactionAsync(ct);
+
+            // Même verrou que le règlement Wave (§69) : sans lui, un paiement en
+            // ligne confirmé au même instant sur cette facture était ÉCRASÉ par
+            // notre écriture (revue du 2026-10-21, §308). Puis on RE-LIT la
+            // facture sous le verrou et on revérifie le reste dû.
+            await _context.LockWalletAsync(schoolId, ct);
+            await _context.Entry(invoice).ReloadAsync(ct);
+            if (invoice.Status == InvoiceStatus.Cancelled)
+                return new(false, "Cette facture est annulée.", null);
+            if (amountFcfa > invoice.AmountDueFcfa - invoice.AmountPaidFcfa)
+                return new(false, "Cette facture vient d'être réglée en partie ou en totalité. Rechargez-la.", null);
 
             var payment = new Payment
             {

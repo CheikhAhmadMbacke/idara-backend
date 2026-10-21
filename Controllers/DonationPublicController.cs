@@ -237,9 +237,10 @@ namespace Idara.API.Controllers
                     return Conflict(new
                     {
                         status = "pending",
-                        message = "Un don est déjà en cours pour ce numéro. Terminez-le ou patientez avant de recommencer.",
-                        pendingPaymentId = pending.Id,
-                        pendingResultUrl = ResultUrl(pending)
+                        // Ni identifiant ni adresse du reçu : le numéro est saisi
+                        // librement, n'importe qui pourrait lire le don d'un tiers
+                        // (revue du 2026-10-21, §308). La page affiche le message.
+                        message = "Un don est déjà en cours pour ce numéro. Terminez-le ou patientez avant de recommencer."
                     });
                 }
 

@@ -412,7 +412,7 @@ namespace Idara.API.Controllers
                     PaymentReason = beneficiaryId != null
                         ? PayoutReason.ForBeneficiaryTransfer(schoolName)
                         : PayoutReason.ForSchoolWithdrawal(schoolName)
-                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
+                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), CancellationToken.None); // l'argent part : on ne coupe pas (§308)
             }
             catch (WaveApiException ex)
             {
@@ -426,7 +426,7 @@ namespace Idara.API.Controllers
                     // sorti, on restitue la réservation.
                     var reason = ex.Code ?? ex.Message;
                     await _settlement.SettleFailedAsync(
-                        withdrawal.Id, reason, null, null, "sync-init", ct);
+                        withdrawal.Id, reason, null, null, "sync-init", CancellationToken.None);
                     _logger.LogWarning(ex,
                         "[withdraw] Wave {Status}/{Code} (rejet pré-exécution) Withdrawal {Id} — réservation restituée",
                         ex.StatusCode, ex.Code, withdrawal.Id);
@@ -441,7 +441,7 @@ namespace Idara.API.Controllers
                 // GET /v1/payout/{id} — ou retrouvera l'opération par notre
                 // référence si l'identifiant ne nous est jamais parvenu.
                 await _settlement.MarkUnderVerificationAsync(
-                    withdrawal.Id, null, ex.Message, "sync-init", ct);
+                    withdrawal.Id, null, ex.Message, "sync-init", CancellationToken.None);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogWarning(ex,
                     "[withdraw] Wave indéterminé (status={Status}) Withdrawal {Id} — statut={WStatus}",
@@ -462,7 +462,7 @@ namespace Idara.API.Controllers
             {
                 var err = resp.PayoutError?.Code ?? resp.PayoutError?.Message ?? statusLower;
                 await _settlement.SettleFailedAsync(
-                    withdrawal.Id, err, resp.Id, null, "sync-init", ct);
+                    withdrawal.Id, err, resp.Id, null, "sync-init", CancellationToken.None);
                 _logger.LogWarning(
                     "[withdraw] Wave a rejeté le décaissement Withdrawal {Id} ({Err}) — réservation restituée",
                     withdrawal.Id, err);
@@ -480,7 +480,7 @@ namespace Idara.API.Controllers
                 var fees = WaveClient.ParseAmount(resp.Fee);
                 var net = WaveClient.ParseAmount(resp.ReceiveAmount);
                 await _settlement.SettleCompletedAsync(
-                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", ct);
+                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", CancellationToken.None);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogInformation(
                     "[withdraw] Withdrawal {Id} complété SYNCHRONE (School {SchoolId}, {Amount} FCFA)",
@@ -493,7 +493,7 @@ namespace Idara.API.Controllers
             // INDÉTERMINÉ. On garde les fonds réservés et on poll. C'est désormais
             // le chemin nominal (submitted = opérateur a accepté, confirmation à venir).
             await _settlement.MarkUnderVerificationAsync(
-                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", ct);
+                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", CancellationToken.None);
             await _context.Entry(withdrawal).ReloadAsync(ct);
 
             _logger.LogInformation(

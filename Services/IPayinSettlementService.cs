@@ -8,7 +8,12 @@ namespace Idara.API.Services
         /// <summary>Le Payment était Pending et vient de transiter (Completed/Failed/…).</summary>
         Transitioned,
         /// <summary>Le Payment était déjà non-Pending (webhook/job concurrent) — no-op idempotent.</summary>
-        AlreadySettled
+        AlreadySettled,
+        /// <summary>
+        /// Refusé et signalé : la confirmation ne correspond pas au paiement
+        /// (autre session Wave, autre montant). Rien n'est crédité (§308).
+        /// </summary>
+        Rejected
     }
 
     public readonly record struct PayinSettlementResult(

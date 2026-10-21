@@ -202,6 +202,8 @@ namespace Idara.API.Services
                         else
                         {
                             wallet.AvailableBalance += delta;
+                            // La poche « Don » ne peut pas dépasser le disponible (§308).
+                            wallet.DonationBalanceFcfa = Math.Min(wallet.DonationBalanceFcfa, Math.Max(0, wallet.AvailableBalance));
                             withdrawal.WalletDebitedFcfa = actualDebit;
                             // ⚠️ La poche « Don » garde la part réservée : la
                             // rectifier de quelques francs n'a pas d'effet sur
@@ -510,7 +512,7 @@ namespace Idara.API.Services
                 case WithdrawalStatus.UnderVerification:
                     withdrawal.Status = WithdrawalStatus.Completed;
                     withdrawal.CompletedAt = completedAt;
-                    withdrawal.FeesFcfa = feesFcfa;
+                    if (feesFcfa > 0) withdrawal.FeesFcfa = feesFcfa; // jamais écrasé à 0 (§308)
                     withdrawal.NetReceivedFcfa = netReceivedFcfa;
                     withdrawal.LastCheckedAt = DateTime.UtcNow;
                     await _context.SaveChangesAsync(ct);
@@ -534,7 +536,7 @@ namespace Idara.API.Services
                     withdrawal.CompletedAt = completedAt;
                     withdrawal.FailedAt = null;
                     withdrawal.FailureReason = null;
-                    withdrawal.FeesFcfa = feesFcfa;
+                    if (feesFcfa > 0) withdrawal.FeesFcfa = feesFcfa; // jamais écrasé à 0 (§308)
                     withdrawal.NetReceivedFcfa = netReceivedFcfa;
                     withdrawal.LastCheckedAt = DateTime.UtcNow;
                     AddAlertEntity(

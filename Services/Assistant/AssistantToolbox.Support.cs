@@ -772,6 +772,8 @@ namespace Idara.API.Services.Assistant
                 MonthlyFeeFcfa = Long(input, "monthly_fee_fcfa"),
             };
             if (p.MonthlyFeeFcfa is < 0 or > 100_000_000) throw new ToolInputException("Mensualité invalide.");
+            if (p.MonthlyFeeFcfa.HasValue && c.Role != Constants.UserRoles.SchoolAdmin)
+                throw new ToolInputException("Seul le directeur peut fixer une mensualité."); // §308
 
             var L = new Lines(c.Lang);
             L.Add("Élève", "التلميذ", $"{s.FirstName} {s.LastName}".Trim());
@@ -886,6 +888,8 @@ namespace Idara.API.Services.Assistant
             if (dup) throw new ToolInputException("Une classe avec ce nom existe déjà.");
             var fee = Long(input, "monthly_fee_fcfa");
             if (fee is < 0 or > 100_000_000) throw new ToolInputException("Mensualité invalide.");
+            if (fee is > 0 && c.Role != Constants.UserRoles.SchoolAdmin)
+                throw new ToolInputException("Seul le directeur peut fixer une mensualité."); // §308
 
             var p = new CreateClassPayload { Name = name, Level = Clean(Str(input, "level"), 50), MonthlyFeeFcfa = fee is > 0 ? fee : null };
             var L = new Lines(c.Lang);

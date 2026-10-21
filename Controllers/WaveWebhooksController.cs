@@ -46,6 +46,7 @@ namespace Idara.API.Controllers
         private readonly AppDbContext _context;
         private readonly WaveSettings _wave;
         private readonly IPayinSettlementService _payinSettlement;
+        private readonly Services.Alerts.IOpsAlertService _alerts;
         private readonly ILogger<WaveWebhooksController> _logger;
 
         private const string ProviderName = PaymentProviders.Wave;
@@ -54,8 +55,10 @@ namespace Idara.API.Controllers
             AppDbContext context,
             IOptions<WaveSettings> wave,
             IPayinSettlementService payinSettlement,
+            Services.Alerts.IOpsAlertService alerts,
             ILogger<WaveWebhooksController> logger)
         {
+            _alerts = alerts;
             _context = context;
             _wave = wave.Value;
             _payinSettlement = payinSettlement;
@@ -171,6 +174,23 @@ namespace Idara.API.Controllers
                 _logger.LogError(ex,
                     "[webhook/wave] ÉCHEC du traitement event={EventId} type={Type}",
                     envelope.Id, envelope.Type);
+                // Wave ne rejouera pas (on répond 200) : une RÉUSSITE dont le
+                // traitement échoue doit sonner, pas seulement s'écrire.
+                if (string.Equals(envelope.Type, "checkout.session.completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    _alerts.Queue(new Services.Alerts.OpsAlertRequest(
+                        OpsAlertKind.PayinLedgerMismatch,
+                        $"webhook-failed:{envelope.Id}",
+                        "Paiement Wave réussi dont le traitement a échoué",
+                        new[]
+                        {
+                            new Services.Alerts.AlertFact("Session", envelope.Data?.Id ?? "-"),
+                            new Services.Alerts.AlertFact("Reference", envelope.Data?.ClientReference ?? "-"),
+                            new Services.Alerts.AlertFact("Erreur", processingError.Length > 300 ? processingError[..300] : processingError),
+                        },
+                        "Le contrôle horaire du registre tentera de le rattraper. Vérifier le journal à cette heure.",
+                        SmsHeadline: $"paiement Wave reussi non traite ({envelope.Data?.ClientReference ?? envelope.Data?.Id})"));
+                }
                 try
                 {
                     await _context.WebhookEvents
@@ -224,7 +244,9 @@ namespace Idara.API.Controllers
                     // 46 s plus tard — 12 000 F encaissés, invisibles. Seule une
                     // session fermée tranche ; sinon le poll ou l'expiration le
                     // feront (§308).
-                    if (string.Equals(data?.CheckoutStatus, "open", StringComparison.OrdinalIgnoreCase))
+                    // Seul un statut FERMÉ explicite tranche : absent, nul ou
+                    // inattendu laisse le paiement en attente (revue §308).
+                    if (!WaveSessionClosed(data?.CheckoutStatus))
                     {
                         _logger.LogInformation(
                             "[webhook/wave] tentative échouée sur session encore ouverte {Id} ({Code}) — paiement laissé en attente",
@@ -271,10 +293,21 @@ namespace Idara.API.Controllers
             }
         }
 
+        /// <summary>Une session Wave est close quand elle est payée ou expirée — rien d'autre.</summary>
+        internal static bool WaveSessionClosed(string? checkoutStatus) =>
+            string.Equals(checkoutStatus, "complete", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(checkoutStatus, "expired", StringComparison.OrdinalIgnoreCase);
+
         private async Task<int?> SettleCheckoutAsync(WaveWebhookData? data, PaymentStatus terminalStatus)
         {
             if (data is null)
                 throw new InvalidOperationException("Événement checkout sans données");
+
+            // Tout est en francs CFA : une autre devise ne se règle pas, elle se
+            // signale (le traitement passe en échec, donc en alerte).
+            if (!string.IsNullOrWhiteSpace(data.Currency)
+                && !string.Equals(data.Currency, "XOF", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Devise inattendue {data.Currency} pour la session {data.Id}");
 
             // client_reference = notre Payment.Id, posé à la création de la session
             // (« idara-paiement-397 », ou « 397 » avant le 2026-10-12). Le compte

@@ -5,6 +5,7 @@ using Idara.API.Data;
 using Idara.API.Enums;
 using Idara.API.Models;
 using Idara.API.Options;
+using Idara.API.Services.Alerts;
 using Idara.API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -19,6 +20,7 @@ namespace Idara.API.Services
         private readonly INotificationService _notif;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly WaveSettings _waveSettings;
+        private readonly IOpsAlertService _alerts;
         private readonly ILogger<PayinSettlementService> _logger;
 
         public PayinSettlementService(
@@ -27,6 +29,7 @@ namespace Idara.API.Services
             INotificationService notif,
             IServiceScopeFactory scopeFactory,
             IOptions<WaveSettings> waveSettings,
+            IOpsAlertService alerts,
             ILogger<PayinSettlementService> logger)
         {
             _context = context;
@@ -34,6 +37,7 @@ namespace Idara.API.Services
             _notif = notif;
             _scopeFactory = scopeFactory;
             _waveSettings = waveSettings.Value;
+            _alerts = alerts;
             _logger = logger;
         }
 
@@ -89,6 +93,37 @@ namespace Idara.API.Services
             // jamais arriver) ; on tolère pour le chemin échec (pas de crédit).
             var wallet = await _context.LockWalletAsync(payment.SchoolId, ct);
             await _context.Entry(payment).ReloadAsync(ct);
+            _deferredAlerts.Clear();
+
+            // 🔴 Une confirmation de réussite doit porter sur CE paiement : même
+            // session Wave, même montant (revue du 2026-10-21, §308). Le compte
+            // est partagé avec Àppal et les anciennes références sont de simples
+            // nombres : sans ce contrôle, une session étrangère ou d'un autre
+            // montant créditerait une école. On refuse et on le DIT.
+            if (terminalStatus == PaymentStatus.Completed)
+            {
+                var mismatch =
+                    !string.IsNullOrWhiteSpace(payment.ProviderTransactionId)
+                    && !string.IsNullOrWhiteSpace(senePayTransactionId)
+                    && !string.Equals(payment.ProviderTransactionId, senePayTransactionId, StringComparison.Ordinal)
+                        ? $"session {senePayTransactionId} au lieu de {payment.ProviderTransactionId}"
+                    : payment.AmountFcfa > 0 && feesFcfa + netCreditedFcfa != payment.AmountFcfa
+                        ? $"montant {feesFcfa + netCreditedFcfa} F au lieu de {payment.AmountFcfa} F"
+                    : null;
+                if (mismatch != null)
+                {
+                    await tx.RollbackAsync(ct);
+                    _logger.LogError(
+                        "[payin-settle] Payment.Id={Id} : confirmation REFUSÉE ({Mismatch}, source={Source})",
+                        payment.Id, mismatch, source);
+                    _alerts.Queue(MoneyAlert(payment, $"payin-mismatch:{payment.Id}:{senePayTransactionId}",
+                        $"Confirmation de paiement refusée — {mismatch}",
+                        $"paiement {payment.Id} : confirmation refusee ({mismatch})",
+                        "Wave annonce une réussite qui ne correspond pas à ce paiement. Rien n'a été crédité. "
+                        + "Vérifier la session dans le portail Wave avant toute correction."));
+                    return new PayinSettlementResult(PayinSettlementOutcome.Rejected, payment.Status);
+                }
+            }
 
             // Idempotence : déjà tranché par un webhook/poll concurrent → no-op.
             // 🔴 Sauf un ÉCHEC que Wave contredit par une réussite : l'argent
@@ -101,6 +136,11 @@ namespace Idara.API.Services
                 _logger.LogWarning(
                     "[payin-settle] Payment.Id={Id} était {Status} ({Reason}) et Wave le dit RÉUSSI (source={Source}) — on le complète",
                     payment.Id, payment.Status, payment.FailureReason, source);
+                _deferredAlerts.Add(MoneyAlert(payment, $"payin-failed-completed:{payment.Id}",
+                    $"Paiement {payment.Id} marqué {payment.Status} puis confirmé réussi par Wave",
+                    $"paiement {payment.Id} etait {payment.Status}, Wave le dit reussi : rattrape",
+                    "Le paiement a été complété et son effet appliqué. Vérifier qu'aucun autre paiement "
+                    + "n'a réglé la même chose entre-temps (double paiement à rembourser)."));
                 payment.FailedAt = null;
                 payment.FailureReason = null;
             }
@@ -154,6 +194,11 @@ namespace Idara.API.Services
             await _context.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
 
+            // Les alertes ne partent qu'une fois l'écriture ACQUISE : une
+            // transaction annulée ne doit pas sonner.
+            foreach (var alert in _deferredAlerts) _alerts.Queue(alert);
+            _deferredAlerts.Clear();
+
             _logger.LogInformation(
                 "[payin-settle] Payment.Id={Id} → {Status} (source={Source}, fees={Fees}, net={Net})",
                 payment.Id, terminalStatus, source, feesFcfa, netCreditedFcfa);
@@ -192,6 +237,7 @@ namespace Idara.API.Services
                 _logger.LogError(
                     "[payin-settle] Abonnement introuvable pour l'école {SchoolId} — Payment {Id} encaissé sans contrepartie",
                     payment.SchoolId, payment.Id);
+                AlertUnappliedSubscription(payment, "aucun abonnement pour cette école");
                 return;
             }
 
@@ -212,6 +258,17 @@ namespace Idara.API.Services
                     _logger.LogError(
                         "[payin-settle] Plan {PlanId} introuvable pour le passage immédiat (Payment {Id}) — à régulariser à la main",
                         planId, payment.Id);
+                    AlertUnappliedSubscription(payment, $"plan {planId} introuvable");
+                    return;
+                }
+                // Le plan visé doit encore être une MONTÉE : si l'école est déjà
+                // active sur ce plan ou au-dessus (autre paiement passé avant,
+                // par Wave ou par le solde), l'appliquer la ferait payer deux
+                // fois — voire la rétrograderait (revue du 2026-10-21, §308).
+                if (sub.Status == SubscriptionStatus.Active && plan.MonthlyPriceFcfa <= sub.AmountFcfa)
+                {
+                    AlertUnappliedSubscription(payment,
+                        $"passage au plan {plan.Name} deja couvert (plan actuel {Fcfa(sub.AmountFcfa)}) : DOUBLE PAIEMENT");
                     return;
                 }
                 var cfg = await _context.GetPlatformSettingsAsync(ct);
@@ -236,19 +293,54 @@ namespace Idara.API.Services
                     .OrderBy(i => i.PeriodStart)
                     .FirstOrDefaultAsync(ct);
 
-            if (invoice != null && invoice.Status == SubscriptionInvoiceStatus.Paid)
+            // 🔴 Une facture déjà soldée n'est PAS forcément un rejeu (2026-10-21,
+            // paiements 469 et 470) : le rejeu d'un webhook ne passe jamais ici
+            // — `SettleAsync` l'arrête sur le statut du paiement. Arriver ici,
+            // c'est qu'un AUTRE règlement (autre paiement, prélèvement du solde,
+            // correction manuelle) a soldé la facture entre le lancement et la
+            // confirmation : l'école a payé DEUX fois. On ne décide rien
+            // (rembourser ou reporter, c'est à Cheikh), mais on le DIT (§308).
+            // Même chose sans facture du tout : de l'argent sans contrepartie.
+            if (invoice == null || invoice.Status != SubscriptionInvoiceStatus.Pending)
             {
-                _logger.LogInformation(
-                    "[payin-settle] Facture d'abonnement {InvoiceId} déjà soldée — rejeu ignoré (Payment {Id})",
-                    invoice.Id, payment.Id);
+                _logger.LogWarning(
+                    "[payin-settle] Payment {Id} : facture d'abonnement {InvoiceId} {State} — encaissé sans rien régler",
+                    payment.Id, invoice?.Id, invoice == null ? "introuvable" : $"en {invoice.Status}");
+                AlertUnappliedSubscription(payment, invoice == null
+                    ? "aucune facture d'abonnement en attente"
+                    : $"facture {invoice.Id} deja {(invoice.Status == SubscriptionInvoiceStatus.Paid ? "payee" : invoice.Status.ToString())} : DOUBLE PAIEMENT");
                 return;
             }
 
             var now = DateTime.UtcNow;
-            if (invoice != null)
             {
                 invoice.Status = SubscriptionInvoiceStatus.Paid;
                 invoice.PaidAt = now;
+
+                if (payment.AmountFcfa != invoice.AmountFcfa)
+                {
+                    AlertUnappliedSubscription(payment,
+                        $"encaisse {Fcfa(payment.AmountFcfa)} pour une facture de {Fcfa(invoice.AmountFcfa)} (facture soldee quand meme, a verifier)");
+                }
+
+                // Les SMS refacturés comptés dans cette facture sont désormais
+                // PAYÉS : sans ce marquage, le prélèvement suivant les comptait
+                // une seconde fois (seul le chemin par le solde les marquait).
+                if (invoice.SmsRefactureCount > 0)
+                {
+                    var smsIds = await _context.NotificationLogs
+                        .Where(l => l.SchoolId == payment.SchoolId
+                                    && l.BilledOnSubscriptionInvoiceId == null
+                                    && l.CostCentimes > 0
+                                    && SubscriptionBillingService.RefacturableTemplates.Contains(l.TemplateCode))
+                        .OrderBy(l => l.Id)
+                        .Take(invoice.SmsRefactureCount)
+                        .Select(l => l.Id)
+                        .ToListAsync(ct);
+                    await _context.NotificationLogs
+                        .Where(l => smsIds.Contains(l.Id))
+                        .ExecuteUpdateAsync(u => u.SetProperty(l => l.BilledOnSubscriptionInvoiceId, invoice.Id), ct);
+                }
                 // WalletTransactionId reste NULL : rien n'a transité par le
                 // wallet. C'est ce qui distingue, dans l'historique, un
                 // prélèvement automatique d'un règlement par lien.
@@ -263,7 +355,7 @@ namespace Idara.API.Services
             // 08/10 un 10/11 aurait posé l'échéance au 08/12 et offert le mois
             // du 08/11. Une échéance déjà passée est prélevée au cycle suivant
             // — rien n'est offert sans décision (§305).
-            var basis = invoice != null ? invoice.PeriodEnd.AddDays(1) : now;
+            var basis = invoice.PeriodEnd.AddDays(1);
             sub.NextBillingAt = SubscriptionSchedule.FirstAnchorOnOrAfter(basis, day);
 
             sub.Status = SubscriptionStatus.Active;
@@ -401,6 +493,7 @@ namespace Idara.API.Services
             // Invoice(s) : TOUJOURS créditée(s) du montant CIBLE (dette de la
             // famille), dans les 2 modes FeesPayer. NE JAMAIS créditer du net
             // (sinon facture ZOMBIE jamais soldée en mode School). Cf. §106.
+            long overpaid = 0;
             if (payment.InvoiceAllocations.Count > 0)
             {
                 // Paiement CONSOLIDÉ : chaque facture reçoit son allocation figée
@@ -409,29 +502,46 @@ namespace Idara.API.Services
                 var allocIds = payment.InvoiceAllocations.Select(a => a.InvoiceId).ToList();
                 var invoices = _context.Invoices.Where(i => allocIds.Contains(i.Id)).ToList();
                 foreach (var alloc in payment.InvoiceAllocations)
-                {
-                    var invoice = invoices.FirstOrDefault(i => i.Id == alloc.InvoiceId);
-                    if (invoice == null) continue;
-                    invoice.AmountPaidFcfa += alloc.AmountFcfa;
-                    invoice.UpdatedAt = DateTime.UtcNow;
-                    if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
-                        invoice.Status = InvoiceStatus.Paid;
-                }
+                    overpaid += ApplyToInvoice(invoices.FirstOrDefault(i => i.Id == alloc.InvoiceId), alloc.AmountFcfa);
             }
             else if (payment.InvoiceId is int invoiceId)
             {
-                var invoice = _context.Invoices.FirstOrDefault(i => i.Id == invoiceId);
-                if (invoice != null)
-                {
-                    var creditedToInvoice = payment.TargetAmountFcfa > 0
-                        ? payment.TargetAmountFcfa
-                        : netAmount;
-                    invoice.AmountPaidFcfa += creditedToInvoice;
-                    invoice.UpdatedAt = DateTime.UtcNow;
-                    if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
-                        invoice.Status = InvoiceStatus.Paid;
-                }
+                var creditedToInvoice = payment.TargetAmountFcfa > 0
+                    ? payment.TargetAmountFcfa
+                    : netAmount;
+                overpaid += ApplyToInvoice(
+                    _context.Invoices.FirstOrDefault(i => i.Id == invoiceId), creditedToInvoice);
             }
+
+            // 🔴 Trop-perçu (revue du 2026-10-21, §308) : la facture était déjà
+            // soldée — par un autre paiement en ligne, au guichet, ou annulée
+            // entre-temps. L'argent est sur le solde de l'école (c'est le sien,
+            // à rendre à la famille), mais personne ne le saurait sans le dire.
+            if (overpaid > 0)
+            {
+                _deferredAlerts.Add(MoneyAlert(payment, $"invoice-overpaid:{payment.Id}",
+                    $"Trop-perçu de {Fcfa(overpaid)} sur le paiement {payment.Id} (facture déjà soldée ou annulée)",
+                    $"trop-percu {Fcfa(overpaid)} paiement {payment.Id} ecole {payment.SchoolId}",
+                    "La famille a payé une facture déjà réglée ou annulée. Le montant est sur le solde de "
+                    + "l'école : prévenir le directeur pour qu'il le rende ou l'impute au mois suivant."));
+            }
+        }
+
+        /// <summary>
+        /// Crédite une facture sans jamais dépasser son reste dû ni toucher une
+        /// facture annulée. Renvoie la part qui n'a rien pu régler.
+        /// </summary>
+        private static long ApplyToInvoice(Invoice? invoice, long amount)
+        {
+            if (invoice == null || amount <= 0) return Math.Max(0, amount);
+            if (invoice.Status == InvoiceStatus.Cancelled) return amount;
+
+            var applied = Math.Min(amount, Math.Max(0, invoice.AmountDueFcfa - invoice.AmountPaidFcfa));
+            invoice.AmountPaidFcfa += applied;
+            invoice.UpdatedAt = DateTime.UtcNow;
+            if (invoice.AmountPaidFcfa >= invoice.AmountDueFcfa)
+                invoice.Status = InvoiceStatus.Paid;
+            return amount - applied;
         }
 
         /// <summary>
@@ -528,6 +638,49 @@ namespace Idara.API.Services
                 "[payin-settle] {Commands} commande(s) d'assistant octroyées à l'école {SchoolId} "
                 + "(paiement {Id}, {Amount} FCFA)",
                 commands, payment.SchoolId, payment.Id, payment.AmountFcfa);
+        }
+
+        /// <summary>
+        /// Un abonnement encaissé par Wave qui ne règle rien : l'argent est entré,
+        /// il faut décider (rembourser ou reporter au mois suivant). Alerte SMS.
+        /// </summary>
+        /// <summary>Alertes levées pendant le règlement, envoyées après le commit.</summary>
+        private readonly List<OpsAlertRequest> _deferredAlerts = new();
+
+        private static string Fcfa(long amount) =>
+            amount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", " ") + " F";
+
+        private static OpsAlertRequest MoneyAlert(
+            Payment payment, string key, string subject, string smsHeadline, string advice) =>
+            new(OpsAlertKind.PayinLedgerMismatch, key, subject,
+                new[]
+                {
+                    new AlertFact("Paiement", payment.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new AlertFact("Ecole", payment.SchoolId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new AlertFact("Montant", Fcfa(payment.AmountFcfa)),
+                    new AlertFact("Session Wave", payment.ProviderTransactionId ?? "-"),
+                },
+                advice, payment.SchoolId, payment.Id, smsHeadline);
+
+        private void AlertUnappliedSubscription(Payment payment, string why)
+        {
+            var amount = Fcfa(payment.AmountFcfa);
+            _deferredAlerts.Add(new OpsAlertRequest(
+                OpsAlertKind.PayinLedgerMismatch,
+                GroupingKey: $"subscription-unapplied:{payment.Id}",
+                Subject: $"Abonnement payé sans rien régler — paiement {payment.Id}, école {payment.SchoolId}",
+                Facts: new[]
+                {
+                    new AlertFact("Paiement", payment.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new AlertFact("Ecole", payment.SchoolId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new AlertFact("Montant", amount),
+                    new AlertFact("Motif", why),
+                },
+                Advice: "L'argent est bien entré chez Wave mais n'a réglé aucun mois. Appeler l'école : "
+                      + "rembourser depuis l'application Wave, ou reporter sur le mois suivant.",
+                SchoolId: payment.SchoolId,
+                RelatedId: payment.Id,
+                SmsHeadline: $"abonnement ecole {payment.SchoolId} paye ({amount}, paiement {payment.Id}) sans rien regler - {why}"));
         }
 
         public async Task RunPostCompletionEffectsAsync(int paymentId, string source, CancellationToken ct = default)

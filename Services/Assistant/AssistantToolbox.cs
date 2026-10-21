@@ -610,6 +610,8 @@ namespace Idara.API.Services.Assistant
             if (Long(input, "monthly_fee_fcfa") is long monthly)
             {
                 if (monthly is <= 0 or > 100_000_000) throw new ToolInputException("Mensualité invalide.");
+                if (monthly != resolved && c.Role != Constants.UserRoles.SchoolAdmin)
+                    throw new ToolInputException("Seul le directeur peut fixer une mensualité."); // §308
                 if (monthly != resolved) p.MonthlyFeeOverrideFcfa = monthly;
             }
 

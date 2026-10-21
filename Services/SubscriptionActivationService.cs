@@ -80,6 +80,16 @@ namespace Idara.API.Services
                 .FirstOrDefaultAsync(p => p.Id == planId && p.IsActive && !p.IsCustom, ct);
             if (plan == null) return (null, "plan_unavailable", "Ce plan n'est pas disponible.");
 
+            // Un paiement Wave d'abonnement déjà en cours : un second ferait
+            // payer deux fois le même passage (revue du 2026-10-21, §308).
+            var pendingSince = DateTime.UtcNow - SubscriptionBillingService.PendingWavePaymentWindow;
+            if (await _db.Payments.AnyAsync(p => p.SchoolId == schoolId
+                    && p.Purpose == PaymentPurpose.Subscription
+                    && p.Status == PaymentStatus.Pending
+                    && p.InitiatedAt >= pendingSince, ct))
+                return (plan, "pending",
+                    "Un paiement d'abonnement est déjà en cours. Attendez sa confirmation avant de réessayer.");
+
             if (sub.Status is not (SubscriptionStatus.Trial or SubscriptionStatus.Active))
                 return (plan, "arrears",
                     "Votre abonnement a une facture en attente : réglez-la d'abord, depuis le lien de paiement de votre abonnement.");
@@ -221,6 +231,21 @@ namespace Idara.API.Services
                 CreatedAt = nowUtc,
             };
             db.SubscriptionInvoices.Add(invoice);
+
+            // 🔴 Une facture restée EN ATTENTE sur la période désormais couverte
+            // (paiement lancé pendant l'essai, réglé après le passage en lecture
+            // seule) serait encore réclamée par le lien : l'école repaierait le
+            // même mois. Elle est annulée — ce mois-là est payé par celle-ci
+            // (revue du 2026-10-21, §308). Le tracker local couvre l'appel
+            // depuis le solde comme depuis Wave.
+            foreach (var stale in db.SubscriptionInvoices
+                         .Where(i => i.SubscriptionId == sub.Id
+                                     && i.Status == SubscriptionInvoiceStatus.Pending
+                                     && i.PeriodStart < end)
+                         .ToList())
+            {
+                stale.Status = SubscriptionInvoiceStatus.Cancelled;
+            }
             return invoice;
         }
     }

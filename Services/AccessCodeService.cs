@@ -65,7 +65,17 @@ namespace Idara.API.Services
             if (!await BelongsToSchoolAsync(target.Id, target.Role, target.SchoolId, schoolId, ct))
                 return AccessCodeResult.Fail("Cet utilisateur n'appartient pas à votre école.");
 
-            var code = System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+            // 🔴 Un parent est un compte GLOBAL : il suffisait à une école de lui
+            // rattacher un élève (même fictif) pour obtenir son code en clair et
+            // lire les enfants, notes et paiements d'une AUTRE école (revue du
+            // 2026-10-21, §308). Rattaché ailleurs ⇒ c'est au support de le faire.
+            if (target.Role == UserRoles.Guardian
+                && await _db.StudentGuardians.AnyAsync(sg => sg.GuardianId == target.Id
+                        && sg.Student.SchoolId != schoolId && !sg.Student.IsDeleted, ct))
+                return AccessCodeResult.Fail(
+                    "Ce parent a aussi des enfants dans une autre école : son code ne peut être renouvelé que par le support Idara.");
+
+            var code =System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
             target.PasswordHash = BCrypt.Net.BCrypt.HashPassword(code);
             await _db.SaveChangesAsync(ct);
 

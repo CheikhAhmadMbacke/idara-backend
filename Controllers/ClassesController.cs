@@ -159,6 +159,10 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
+            // Poser une mensualité = geste de direction (revue du 2026-10-21, §308).
+            if (dto.MonthlyFeeFcfa is > 0 && User.GetRole() != UserRoles.SchoolAdmin)
+                return StatusCode(403, ApiResponse<bool>.Fail("Seul le directeur peut modifier une mensualité."));
+
             // Même chemin que l'assistant (§199).
             var created = await _classCreation.CreateAsync(schoolId.Value, userId.Value, dto, HttpContext.RequestAborted);
             if (!created.Ok) return BadRequest(ApiResponse<bool>.Fail(created.Error!));
@@ -213,6 +217,12 @@ namespace Idara.API.Controllers
             var currentFees = await CurrentClassFeesAsync(schoolId.Value, new[] { entity.Id });
             var currentFee = currentFees.TryGetValue(entity.Id, out var cf) ? (long?)cf : null;
             var feeChanged = dto.MonthlyFeeFcfa is > 0 && dto.MonthlyFeeFcfa != currentFee;
+
+            // La mensualité re-tarife les factures impayées : c'est un geste de
+            // direction, réservé au SchoolAdmin comme POST /api/fees/classes
+            // (revue du 2026-10-21, §308). Renvoyer le montant inchangé reste permis.
+            if (feeChanged && User.GetRole() != UserRoles.SchoolAdmin)
+                return StatusCode(403, ApiResponse<bool>.Fail("Seul le directeur peut modifier une mensualité."));
 
             if (feeChanged)
             {

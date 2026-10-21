@@ -68,6 +68,10 @@ namespace Idara.API.Controllers
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
 
+            // Tarif personnalisé = geste de direction (revue du 2026-10-21, §308).
+            if (dto.MonthlyFeeFcfa is > 0 && User.GetRole() != UserRoles.SchoolAdmin)
+                return StatusCode(403, ApiResponse<bool>.Fail("Seul le directeur peut modifier une mensualité."));
+
             var student = await _studentService.CreateStudentAsync(schoolId.Value, userId.Value, dto);
             return CreatedAtAction(nameof(GetStudent), new { id = student.Id }, student);
         }
@@ -82,6 +86,18 @@ namespace Idara.API.Controllers
             var schoolId = User.GetSchoolId();
             var userId = User.GetUserId();
             if (schoolId == null || userId == null) return Unauthorized();
+
+            // Tarif personnalisé = geste de direction (revue du 2026-10-21, §308).
+            // Le formulaire renvoie le montant actuel : seul un CHANGEMENT est refusé.
+            if (dto.MonthlyFeeFcfa.HasValue && User.GetRole() != UserRoles.SchoolAdmin)
+            {
+                var current = await _context.StudentFeeOverrides
+                    .Where(o => o.StudentId == id && o.Student.SchoolId == schoolId.Value)
+                    .Select(o => (long?)o.AmountFcfa).FirstOrDefaultAsync();
+                var asked = dto.MonthlyFeeFcfa.Value > 0 ? (long?)dto.MonthlyFeeFcfa.Value : null;
+                if (asked != current)
+                    return StatusCode(403, ApiResponse<bool>.Fail("Seul le directeur peut modifier une mensualité."));
+            }
 
             var updated = await _studentService.UpdateStudentAsync(schoolId.Value, userId.Value, dto);
             return updated == null ? NotFound() : Ok(updated);

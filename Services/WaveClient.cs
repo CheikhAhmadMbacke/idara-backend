@@ -33,10 +33,12 @@ namespace Idara.API.Services
         /// <summary>
         /// Rejet AVANT exécution : Wave a refusé la requête sans rien créer, on
         /// peut clore en échec sans risque. Un 5xx, un 408 ou un timeout sont
-        /// au contraire indéterminés — jamais de conclusion (§78).
+        /// au contraire indéterminés — jamais de conclusion (§78). Un 409
+        /// (idempotency-mismatch) dit qu'une opération EXISTE déjà sous cette clé :
+        /// indéterminé lui aussi (§308).
         /// </summary>
         public bool IsDefinitiveRejection =>
-            StatusCode is >= 400 and < 500 && StatusCode != 408 && StatusCode != 429;
+            StatusCode is >= 400 and < 500 && StatusCode != 408 && StatusCode != 409 && StatusCode != 429;
     }
 
     /// <inheritdoc cref="IWaveClient"/>

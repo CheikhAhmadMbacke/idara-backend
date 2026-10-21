@@ -72,6 +72,9 @@ namespace Idara.API.Services
         /// Traite tous les retraits UnderVerification échus. Public pour rejeu
         /// manuel (endpoint admin / job de réconciliation backstop).
         /// </summary>
+        /// <summary>Délai avant de conclure qu'un décaissement sans identifiant n'a jamais été créé.</summary>
+        private static readonly TimeSpan NeverCreatedAfter = TimeSpan.FromMinutes(30);
+
         public async Task<int> RunOnceAsync(CancellationToken ct)
         {
             using var scope = _scopeFactory.CreateScope();
@@ -80,6 +83,25 @@ namespace Idara.API.Services
             var settlement = scope.ServiceProvider.GetRequiredService<IPayoutSettlementService>();
 
             var now = DateTime.UtcNow;
+
+            // 🔴 Un retrait resté « Initiated » (service redémarré, ou exception
+            // entre l'appel à Wave et son enregistrement) n'était JAMAIS relu :
+            // fonds gelés, issue inconnue (revue du 2026-10-21, §308). Passé
+            // 5 minutes, on le confie à la vérification, qui le retrouvera par
+            // notre référence — ou conclura « jamais créé » après 30 minutes.
+            var stuckBefore = now - TimeSpan.FromMinutes(5);
+            var stuck = await db.Withdrawals
+                .Where(w => w.Status == WithdrawalStatus.Initiated
+                            && w.Provider == PaymentProviders.Wave
+                            && w.CreatedAt < stuckBefore)
+                .Select(w => w.Id)
+                .Take(BatchSize)
+                .ToListAsync(ct);
+            foreach (var id in stuck)
+            {
+                _logger.LogWarning("[payout-verify] Withdrawal {Id} resté Initiated — confié à la vérification", id);
+                await settlement.MarkUnderVerificationAsync(id, null, "resté Initiated", "poll", ct);
+            }
 
             var due = await db.Withdrawals
                 .Where(w => w.Status == WithdrawalStatus.UnderVerification
@@ -148,9 +170,41 @@ namespace Idara.API.Services
                 return;
             }
 
-            // Introuvable des DEUX façons : ni par identifiant, ni par notre
-            // référence. Wave n'a donc jamais rien créé — aucun franc n'est
-            // sorti, la restitution est sûre.
+            // 🔴 Un identifiant Wave CONNU et un 404 ne prouvent rien (revue du
+            // 2026-10-21, §308) : Wave nous l'avait rendu, donc le décaissement
+            // a existé. On cherche aussi par notre référence ; s'il reste
+            // introuvable, on ne restitue JAMAIS — l'argent est peut-être parti,
+            // et une restitution permettrait de le retirer une seconde fois.
+            if (payout is null && !string.IsNullOrWhiteSpace(stored))
+            {
+                try
+                {
+                    payout = await wave.FindPayoutByClientReferenceAsync(WaveReference.ForWithdrawal(withdrawalId), ct)
+                             ?? await wave.FindPayoutByClientReferenceAsync(WaveReference.Legacy(withdrawalId), ct);
+                }
+                catch (WaveApiException) { payout = null; }
+                if (payout is null)
+                {
+                    _logger.LogWarning(
+                        "[payout-verify] Withdrawal {Id} : identifiant Wave {Stored} introuvable — reste en vérification",
+                        withdrawalId, stored);
+                    await BumpBackoffAsync(db, withdrawalId, startedAt, settlement, ct);
+                    return;
+                }
+            }
+
+            // Sans identifiant, une recherche vide juste après l'appel ne prouve
+            // pas l'absence (requête encore en vol chez Wave) : on attend
+            // 30 minutes avant de conclure.
+            if (payout is null && startedAt is DateTime since && DateTime.UtcNow - since < NeverCreatedAfter)
+            {
+                await BumpBackoffAsync(db, withdrawalId, startedAt, settlement, ct);
+                return;
+            }
+
+            // Introuvable des DEUX façons, sans identifiant, depuis plus de
+            // 30 minutes : Wave n'a jamais rien créé — aucun franc n'est sorti,
+            // la restitution est sûre.
             if (payout is null)
             {
                 _logger.LogInformation(

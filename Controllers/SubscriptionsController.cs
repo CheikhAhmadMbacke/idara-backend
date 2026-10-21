@@ -429,6 +429,13 @@ namespace Idara.API.Controllers
                 .FirstOrDefaultAsync(p => p.Id == dto.PlanId && p.IsActive && !p.IsCustom, ct);
             if (plan == null) return NotFound(ApiResponse<SubscriptionDto>.Fail("Plan indisponible."));
 
+            // Pendant un impayé, la facture en attente porterait le nouveau prix
+            // sur l'ancienne période (un an facturé pour un mois couvert) :
+            // régler d'abord, changer ensuite (revue du 2026-10-21, §308).
+            if (sub.Status is not (SubscriptionStatus.Trial or SubscriptionStatus.Active))
+                return BadRequest(ApiResponse<SubscriptionDto>.Fail(
+                    "Votre abonnement a une facture en attente : réglez-la d'abord, puis changez de plan."));
+
             // Garde-fou palier (décision produit 2026-06-11) : une école ne peut pas
             // choisir elle-même un plan dont le plafond d'élèves est dépassé par son
             // effectif réel (anti-downgrade abusif). Le SuperAdmin, lui, reste libre

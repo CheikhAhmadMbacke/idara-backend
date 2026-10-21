@@ -478,6 +478,17 @@ namespace Idara.API.Controllers
             await using (var tx = await _context.Database.BeginTransactionAsync(ct))
             {
                 await _context.LockPlatformAsync(ct);
+
+                // Un seul retrait de gains à la fois : un double clic, ou deux
+                // requêtes lisant la même réserve, en feraient sortir deux
+                // (revue du 2026-10-21, §308).
+                if (await _context.Withdrawals.AnyAsync(w => w.IsPlatform
+                        && (w.Status == WithdrawalStatus.Initiated || w.Status == WithdrawalStatus.UnderVerification), ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return BadRequest(ApiResponse<WithdrawalDto>.Fail(
+                        "Un retrait des gains est déjà en cours. Attendez sa confirmation."));
+                }
                 var (owed, p) = await _finance.ComputeDebtAndPlatformAsync(ct);
                 // min(P, réserve − dette) : on ne retire jamais l'argent des écoles.
                 // (Plus de marge de sécurité depuis le 2026-10-08 : voir PlatformFinanceService.)
@@ -507,20 +518,20 @@ namespace Idara.API.Controllers
                     Name = recipientName,
                     ClientReference = WaveReference.ForWithdrawal(withdrawal.Id),
                     PaymentReason = PayoutReason.ForPlatformWithdrawal()
-                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), ct);
+                }, PayoutIdempotency.ForWithdrawal(withdrawal.Id), CancellationToken.None); // l'argent part : on ne coupe pas (§308)
             }
             catch (WaveApiException ex)
             {
                 if (ex.IsDefinitiveRejection)
                 {
                     await _settlement.SettleFailedAsync(
-                        withdrawal.Id, ex.Code ?? ex.Message, null, null, "sync-init", ct);
+                        withdrawal.Id, ex.Code ?? ex.Message, null, null, "sync-init", CancellationToken.None);
                     _logger.LogWarning(ex,
                         "[platform-withdraw] Wave {Status}/{Code} (rejet) Withdrawal {Id}",
                         ex.StatusCode, ex.Code, withdrawal.Id);
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(PayoutUnavailableMsg));
                 }
-                await _settlement.MarkUnderVerificationAsync(withdrawal.Id, null, ex.Message, "sync-init", ct);
+                await _settlement.MarkUnderVerificationAsync(withdrawal.Id, null, ex.Message, "sync-init", CancellationToken.None);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 if (withdrawal.Status == WithdrawalStatus.Failed)
                     return BadRequest(ApiResponse<WithdrawalDto>.Fail(PayoutUnavailableMsg));
@@ -534,7 +545,7 @@ namespace Idara.API.Controllers
                 await _settlement.SettleFailedAsync(
                     withdrawal.Id,
                     resp.PayoutError?.Code ?? resp.PayoutError?.Message ?? statusLower,
-                    resp.Id, null, "sync-init", ct);
+                    resp.Id, null, "sync-init", CancellationToken.None);
                 return BadRequest(ApiResponse<WithdrawalDto>.Fail(
                     "Le retrait a été refusé par l'opérateur."));
             }
@@ -543,7 +554,7 @@ namespace Idara.API.Controllers
                 var fees = WaveClient.ParseAmount(resp.Fee);
                 var net = WaveClient.ParseAmount(resp.ReceiveAmount);
                 await _settlement.SettleCompletedAsync(
-                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", ct);
+                    withdrawal.Id, resp.Id, fees, net, null, "sync-init", CancellationToken.None);
                 await _context.Entry(withdrawal).ReloadAsync(ct);
                 _logger.LogInformation(
                     "[platform-withdraw] Withdrawal {Id} complété SYNCHRONE ({Amount} FCFA)",
@@ -552,7 +563,7 @@ namespace Idara.API.Controllers
             }
 
             await _settlement.MarkUnderVerificationAsync(
-                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", ct);
+                withdrawal.Id, resp.Id, $"status={resp.Status}", "sync-init", CancellationToken.None);
             await _context.Entry(withdrawal).ReloadAsync(ct);
             _logger.LogInformation(
                 "[platform-withdraw] Withdrawal {Id} en vérification ({Amount} FCFA, payout={PayoutId}, status={Status})",

@@ -196,6 +196,9 @@ namespace Idara.API.Services
             }
         }
 
+        /// <summary>Fenêtre pendant laquelle un paiement Wave Pending bloque le prélèvement (= celle du lien).</summary>
+        internal static readonly TimeSpan PendingWavePaymentWindow = TimeSpan.FromHours(6);
+
         public async Task<BillingOutcome> RetryForSchoolAsync(int schoolId, DateTime nowUtc, CancellationToken ct)
         {
             var sub = await _db.Subscriptions
@@ -236,6 +239,24 @@ namespace Idara.API.Services
             {
                 await tx.RollbackAsync(ct);
                 return BillingOutcome.NoAction; // déjà à jour / pas encore échu
+            }
+
+            // 🔴 Un paiement Wave d'abonnement est EN COURS (lien public ou
+            // passage à un plan) : ne rien prélever, ne rien réécrire. Sinon le
+            // solde paie la facture pendant que Wave la paie aussi — l'école
+            // paie deux fois (revue du 2026-10-21, §308). Même fenêtre que le
+            // lien : une session Wave vit 30 min, le poll tranche ensuite.
+            var pendingSince = nowUtc - PendingWavePaymentWindow;
+            if (await _db.Payments.AnyAsync(p => p.SchoolId == sub.SchoolId
+                    && p.Purpose == PaymentPurpose.Subscription
+                    && p.Status == PaymentStatus.Pending
+                    && p.InitiatedAt >= pendingSince, ct))
+            {
+                await tx.RollbackAsync(ct);
+                _logger.LogInformation(
+                    "[subscription-billing] École {SchoolId} : paiement Wave d'abonnement en cours — prélèvement différé",
+                    sub.SchoolId);
+                return BillingOutcome.NoAction;
             }
 
             // ----- Re-snapshot du prix/quota au RENOUVELLEMENT -----
@@ -761,7 +782,7 @@ namespace Idara.API.Services
         /// elle-même. Toute addition ici fait payer les daara — elle se décide,
         /// elle ne se glisse pas.
         /// </summary>
-        private static readonly string[] RefacturableTemplates =
+        internal static readonly string[] RefacturableTemplates =
         {
             "SCHOOL_PAYMENT_RECEIVED_SMS",
         };
