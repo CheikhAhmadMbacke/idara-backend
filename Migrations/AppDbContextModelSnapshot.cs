@@ -4235,7 +4235,7 @@ namespace Idara.API.Migrations
 
                     b.HasIndex("Timestamp");
 
-                    b.HasIndex("TransactionId")
+                    b.HasIndex("TransactionId", "TransactionType", "IsReversal")
                         .IsUnique();
 
                     b.ToTable("WaveLedgerEntries");

@@ -119,7 +119,7 @@ namespace Idara.API.Services
             }
 
             payment.RefundedAt = now;
-            payment.RefundedFcfa = payment.AmountFcfa;
+            payment.RefundedFcfa = await ReserveOutflowAsync(payment, ct);
             payment.RefundWalletDebitedFcfa = debit;
             payment.RefundReason = reason.Trim();
             payment.RefundProviderReference = string.IsNullOrWhiteSpace(providerReference) ? null : providerReference.Trim();
@@ -192,7 +192,7 @@ namespace Idara.API.Services
 
             if (blocked == null)
             {
-                var loss = payment.AmountFcfa - debit;
+                var loss = await ReserveOutflowAsync(payment, ct) - debit;
                 effects.Add(loss > 0
                     ? $"Gains plateforme : −{Fcfa(loss)} (frais Wave perdus et part non versée à l'école)."
                     : "Gains plateforme : inchangés.");
@@ -217,6 +217,23 @@ namespace Idara.API.Services
                 && p.SubscriptionInvoiceId == invId
                 && p.Status == PaymentStatus.Completed
                 && p.RefundedAt == null, ct);
+        }
+
+        /// <summary>
+        /// Ce que le remboursement retire de la réserve : la ligne de
+        /// remboursement du registre Wave si elle est déjà recopiée, sinon le
+        /// net encaissé — Wave restitue sa commission en remboursant (§308).
+        /// </summary>
+        private async Task<long> ReserveOutflowAsync(Payment payment, CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(payment.ProviderTransactionId))
+            {
+                var line = await _db.WaveLedgerEntries.AsNoTracking()
+                    .Where(e => e.IsReversal && e.CheckoutSessionId == payment.ProviderTransactionId)
+                    .Select(e => (long?)e.AmountFcfa).FirstOrDefaultAsync(ct);
+                if (line is long amount && amount != 0) return Math.Abs(amount);
+            }
+            return payment.NetCreditedFcfa > 0 ? payment.NetCreditedFcfa : payment.AmountFcfa;
         }
 
         private static IEnumerable<int> InvoiceIdsOf(Payment payment) =>

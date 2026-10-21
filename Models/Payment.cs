@@ -265,7 +265,12 @@ namespace Idara.API.Models
         /// <summary>Date d'enregistrement du remboursement ; null = jamais remboursé.</summary>
         public DateTime? RefundedAt { get; set; }
 
-        /// <summary>Montant rendu au payeur (le brut qu'il avait payé).</summary>
+        /// <summary>
+        /// Ce que le remboursement a fait SORTIR de la réserve. Pas le brut rendu
+        /// au payeur : Wave lui rend tout, mais restitue aussi sa commission —
+        /// constaté le 2026-10-21 sur le paiement 469 (12 000 F rendus, 11 880 F
+        /// débités du portefeuille). C'est ce montant que lit R = D + P.
+        /// </summary>
         public long RefundedFcfa { get; set; }
 
         /// <summary>Part reprise sur le solde de l'école (0 si l'argent n'y était jamais allé).</summary>

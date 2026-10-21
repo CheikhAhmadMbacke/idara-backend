@@ -127,10 +127,14 @@ namespace Idara.API.Services
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .Select(id => id!)
                 .ToList();
+            // Clé = (transaction, remboursement ?) : un remboursement reprend
+            // l'identifiant du paiement qu'il annule (§308).
             var known = (await db.WaveLedgerEntries
                 .Where(e => ids.Contains(e.TransactionId))
-                .Select(e => e.TransactionId)
-                .ToListAsync(ct)).ToHashSet();
+                .Select(e => new { e.TransactionId, e.TransactionType, e.IsReversal })
+                .ToListAsync(ct))
+                .Select(e => (e.TransactionId, e.TransactionType, e.IsReversal))
+                .ToHashSet();
 
             var now = DateTime.UtcNow;
             var added = 0;
@@ -141,7 +145,7 @@ namespace Idara.API.Services
                     _logger.LogWarning("[wave-ledger] Ligne sans transaction_id le {Day:yyyy-MM-dd} — ignorée", day);
                     continue;
                 }
-                if (!known.Add(t.TransactionId!)) continue;
+                if (!known.Add((t.TransactionId!, t.TransactionType, t.IsReversal == true))) continue;
 
                 db.WaveLedgerEntries.Add(new WaveLedgerEntry
                 {

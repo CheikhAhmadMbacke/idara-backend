@@ -1403,7 +1403,11 @@ namespace Idara.API.Data
             // Une ligne de registre ne s'enregistre qu'une fois : c'est la clé
             // d'idempotence de la recopie horaire.
             modelBuilder.Entity<WaveLedgerEntry>()
-                .HasIndex(e => e.TransactionId)
+                // 🔴 Un remboursement Wave porte le MÊME transaction_id que le
+                // paiement d'origine, avec is_reversal (2026-10-21, §308) :
+                // l'unicité porte aussi sur le type et le drapeau, sinon il n'est
+                // jamais recopié.
+                .HasIndex(e => new { e.TransactionId, e.TransactionType, e.IsReversal })
                 .IsUnique();
             modelBuilder.Entity<WaveLedgerEntry>()
                 .HasIndex(e => e.Timestamp);
